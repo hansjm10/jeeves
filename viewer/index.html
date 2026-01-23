@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ralph Viewer</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --border-active: #58a6ff;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --accent-purple: #a371f7;
+            --accent-orange: #db6d28;
+            --phase-design: #a371f7;
+            --phase-implement: #d29922;
+            --phase-review: #db6d28;
+            --phase-coverage: #f85149;
+            --phase-sonar: #3fb950;
+            --phase-complete: #58a6ff;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header-content {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .brand-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+        
+        .brand-text {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        
+        .connection-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 20px;
+            font-size: 12px;
+        }
+        
+        .connection-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: background 0.3s;
+        }
+        
+        .connection-dot.connected {
+            background: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .status-badge.running {
+            background: rgba(63, 185, 80, 0.15);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+        
+        .status-badge.complete {
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--accent-blue);
+            border: 1px solid var(--accent-blue);
+        }
+        
+        .status-badge.idle {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        
+        /* Main Layout */
+        .main {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 24px;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 24px;
+            min-height: calc(100vh - 60px);
+        }
+        
+        @media (max-width: 1000px) {
+            .main {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        
+        .card-body {
+            padding: 16px;
+        }
+        
+        /* Phase Timeline */
+        .phase-timeline {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+        
+        .phase-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 0;
+            position: relative;
+        }
+        
+        .phase-item:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            left: 11px;
+            top: 36px;
+            bottom: -12px;
+            width: 2px;
+            background: var(--border-color);
+        }
+        
+        .phase-item.active::after {
+            background: var(--accent-blue);
+        }
+        
+        .phase-item.complete::after {
+            background: var(--accent-green);
+        }
+        
+        .phase-dot {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        
+        .phase-item.complete .phase-dot {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            color: white;
+        }
+        
+        .phase-item.active .phase-dot {
+            border-color: var(--accent-blue);
+            background: var(--accent-blue);
+            color: white;
+            animation: phase-pulse 1.5s infinite;
+        }
+        
+        @keyframes phase-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(88, 166, 255, 0); }
+        }
+        
+        .phase-content {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .phase-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .phase-item.active .phase-name,
+        .phase-item.complete .phase-name {
+            color: var(--text-primary);
+        }
+        
+        .phase-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        
+        /* Info Grid */
+        .info-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+        }
+        
+        .info-label {
+            color: var(--text-secondary);
+        }
+        
+        .info-value {
+            font-weight: 500;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        
+        .info-value a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        
+        .info-value a:hover {
+            text-decoration: underline;
+        }
+        
+        /* Progress Bar */
+        .progress-section {
+            margin-top: 16px;
+        }
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+            border-radius: 4px;
+            transition: width 0.5s ease-out;
+        }
+        
+        /* Status Checks */
+        .status-checks {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        
+        .status-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            font-size: 12px;
+        }
+        
+        .check-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .check-icon.pass {
+            background: var(--accent-green);
+        }
+        
+        .check-icon.fail {
+            background: var(--bg-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .check-icon.pending {
+            background: var(--bg-primary);
+            border: 2px solid var(--accent-yellow);
+        }
+        
+        /* Log Panel */
+        .log-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            height: calc(100vh - 108px);
+        }
+        
+        .log-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .log-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .log-count {
+            background: var(--bg-primary);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        .log-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .log-btn {
+            padding: 6px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .log-btn:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--text-muted);
+        }
+        
+        .log-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+        
+        .log-body {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .log-content {
+            flex: 1;
+            overflow: auto;
+            padding: 16px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            background: var(--bg-primary);
+        }
+        
+        .log-content::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        
+        .log-content::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        
+        .log-content::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 5px;
+            border: 2px solid var(--bg-primary);
+        }
+        
+        .log-content::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+        
+        .log-line {
+            padding: 2px 8px;
+            margin: 1px 0;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .log-line:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+        
+        .log-line.error {
+            color: var(--accent-red);
+            background: rgba(248, 81, 73, 0.1);
+        }
+        
+        .log-line.warn {
+            color: var(--accent-yellow);
+        }
+        
+        .log-line.success {
+            color: var(--accent-green);
+        }
+        
+        .log-line.info {
+            color: var(--accent-blue);
+        }
+        
+        .log-line.debug {
+            color: var(--text-muted);
+        }
+        
+        .log-line.iteration {
+            color: var(--accent-purple);
+            font-weight: 600;
+            background: rgba(163, 113, 247, 0.1);
+            margin: 8px 0;
+            padding: 8px 12px;
+        }
+
+        /* Codex sections */
+        .log-line.section {
+            color: var(--text-secondary);
+            background: rgba(139, 148, 158, 0.08);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .log-line.command {
+            color: var(--accent-blue);
+        }
+
+        /* Diff styling (GitHub-ish) */
+        .log-line.diff-header,
+        .log-line.diff-meta,
+        .log-line.diff-file,
+        .log-line.diff-hunk,
+        .log-line.diff-add,
+        .log-line.diff-del,
+        .log-line.diff-context {
+            white-space: pre;
+            word-break: normal;
+        }
+
+        .log-line.diff-header {
+            color: var(--text-secondary);
+            background: rgba(139, 148, 158, 0.06);
+            font-weight: 600;
+            margin-top: 6px;
+        }
+
+        .log-line.diff-meta {
+            color: var(--text-muted);
+        }
+
+        .log-line.diff-file {
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        .log-line.diff-hunk {
+            color: var(--accent-purple);
+            background: rgba(163, 113, 247, 0.06);
+        }
+
+        .log-line.diff-add {
+            color: var(--accent-green);
+            background: rgba(63, 185, 80, 0.12);
+        }
+
+        .log-line.diff-del {
+            color: var(--accent-red);
+            background: rgba(248, 81, 73, 0.12);
+        }
+
+        .log-line.diff-context {
+            color: var(--text-primary);
+        }
+        
+        .log-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: var(--text-muted);
+        }
+        
+        .log-empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        
+        /* Search */
+        .search-container {
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        
+        .search-input:focus {
+            border-color: var(--accent-blue);
+        }
+        
+        .search-input::placeholder {
+            color: var(--text-muted);
+        }
+        
+        /* Iteration indicator */
+        .iteration-badge {
+            background: var(--bg-tertiary);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .iteration-badge .number {
+            font-weight: 700;
+            font-size: 20px;
+            color: var(--accent-purple);
+        }
+        
+        .iteration-badge .label {
+            color: var(--text-secondary);
+        }
+        
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 24px;
+            text-align: center;
+        }
+        
+        .empty-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        
+        .empty-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .empty-desc {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        
+        /* Keyboard hint */
+        .keyboard-hint {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        .keyboard-hint kbd {
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            font-family: inherit;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="brand">
+                <div class="brand-icon">R</div>
+                <span class="brand-text">Ralph Viewer</span>
+            </div>
+            <div class="header-status">
+                <div class="iteration-badge" id="iterationBadge" style="display: none;">
+                    <span class="number" id="iterationNumber">1</span>
+                    <span class="label">of <span id="iterationMax">10</span></span>
+                </div>
+                <div class="connection-indicator">
+                    <span class="connection-dot" id="connectionDot"></span>
+                    <span id="connectionText">Connecting...</span>
+                </div>
+                <span class="status-badge idle" id="statusBadge">Idle</span>
+            </div>
+        </div>
+    </header>
+    
+    <main class="main">
+        <aside class="sidebar">
+            <!-- Phase Progress -->
+            <div class="card">
+                <div class="card-header">Workflow Progress</div>
+                <div class="card-body">
+                    <div class="phase-timeline" id="phaseTimeline">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status Info -->
+            <div class="card">
+                <div class="card-header">Details</div>
+                <div class="card-body">
+                    <div class="info-grid" id="infoGrid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status Checks -->
+            <div class="card" id="checksCard">
+                <div class="card-header">Status Checks</div>
+                <div class="card-body">
+                    <div class="status-checks" id="statusChecks">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </aside>
+        
+        <section class="card log-panel">
+            <div class="log-header">
+                <span class="log-title">
+                    Live Output
+                    <span class="log-count" id="logCount">0 lines</span>
+                </span>
+                <div class="log-controls">
+                    <button class="log-btn" id="btnClear">Clear</button>
+                    <button class="log-btn active" id="btnAutoScroll">Auto-scroll</button>
+                </div>
+            </div>
+            <div class="search-container">
+                <input type="text" class="search-input" id="searchInput" placeholder="Filter logs... (Ctrl+F)">
+            </div>
+            <div class="log-body">
+                <div class="log-content" id="logContent">
+                    <div class="log-empty">
+                        <div class="log-empty-icon">&#128196;</div>
+                        <div>Waiting for logs...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <div class="keyboard-hint">
+        <kbd>Ctrl</kbd>+<kbd>F</kbd> Filter &nbsp; <kbd>Esc</kbd> Clear filter &nbsp; <kbd>End</kbd> Jump to bottom
+    </div>
+
+    <script>
+        // State
+        let eventSource = null;
+        let currentState = null;
+        let allLogs = [];
+        let autoScroll = true;
+        let searchFilter = '';
+        let reconnectAttempts = 0;
+        let lastPhase = null;
+        let notificationsEnabled = false;
+        let renderScheduled = false;
+        const MAX_LOGS = 5000;
+
+        async function resyncLogs() {
+            try {
+                const response = await fetch('/api/logs', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (data && Array.isArray(data.logs)) {
+                    allLogs = data.logs.slice(-MAX_LOGS);
+                    scheduleRender();
+                }
+            } catch (e) {
+                console.warn('Failed to resync logs:', e);
+            }
+        }
+
+        function scheduleRender() {
+            if (renderScheduled) return;
+            renderScheduled = true;
+            requestAnimationFrame(() => {
+                renderScheduled = false;
+                renderLogs();
+            });
+        }
+        
+        // Request notification permission on load
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().then(perm => {
+                notificationsEnabled = perm === 'granted';
+            });
+        } else if ('Notification' in window) {
+            notificationsEnabled = Notification.permission === 'granted';
+        }
+        
+        // Audio notification (simple beep using Web Audio API)
+        function playNotificationSound() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                
+                // Pleasant notification sound
+                oscillator.frequency.value = 800;
+                oscillator.type = 'sine';
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.5);
+                
+                // Second tone for completion
+                setTimeout(() => {
+                    const osc2 = audioCtx.createOscillator();
+                    const gain2 = audioCtx.createGain();
+                    osc2.connect(gain2);
+                    gain2.connect(audioCtx.destination);
+                    osc2.frequency.value = 1000;
+                    osc2.type = 'sine';
+                    gain2.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gain2.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    osc2.start(audioCtx.currentTime);
+                    osc2.stop(audioCtx.currentTime + 0.5);
+                }, 200);
+            } catch (e) {
+                console.log('Audio notification not available');
+            }
+        }
+        
+        function showNotification(title, body) {
+            // Play sound
+            playNotificationSound();
+            
+            // Browser notification
+            if (notificationsEnabled) {
+                new Notification(title, {
+                    body: body,
+                    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">R</text></svg>'
+                });
+            }
+        }
+        
+        // DOM elements
+        const logContent = document.getElementById('logContent');
+        const logCount = document.getElementById('logCount');
+        const searchInput = document.getElementById('searchInput');
+        const btnAutoScroll = document.getElementById('btnAutoScroll');
+        const btnClear = document.getElementById('btnClear');
+        const connectionDot = document.getElementById('connectionDot');
+        const connectionText = document.getElementById('connectionText');
+        const statusBadge = document.getElementById('statusBadge');
+        const iterationBadge = document.getElementById('iterationBadge');
+        const iterationNumber = document.getElementById('iterationNumber');
+        const iterationMax = document.getElementById('iterationMax');
+        const phaseTimeline = document.getElementById('phaseTimeline');
+        const infoGrid = document.getElementById('infoGrid');
+        const statusChecks = document.getElementById('statusChecks');
+        const checksCard = document.getElementById('checksCard');
+        
+        // Phase definitions
+        const phases = [
+            { id: 'design', name: 'Design', desc: 'Create design document' },
+            { id: 'implement', name: 'Implement', desc: 'Build and create PR' },
+            { id: 'review', name: 'Review', desc: 'Address PR feedback' },
+            { id: 'coverage', name: 'Coverage', desc: 'Add test coverage' },
+            { id: 'sonar', name: 'Sonar', desc: 'Fix code quality' },
+            { id: 'complete', name: 'Complete', desc: 'All checks passed' }
+        ];
+        
+        const phaseOrder = ['design', 'implement', 'review', 'coverage-fix', 'coverage', 'sonar', 'complete'];
+        
+        function getPhaseIndex(phase) {
+            // Normalize coverage-fix to coverage
+            if (phase === 'coverage-fix') phase = 'coverage';
+            return phaseOrder.indexOf(phase);
+        }
+        
+        // Connection handling
+        function connect() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource('/api/stream');
+            
+            eventSource.onopen = () => {
+                updateConnectionStatus(true);
+                if (reconnectAttempts > 0) {
+                    resyncLogs();
+                }
+                reconnectAttempts = 0;
+            };
+            
+            eventSource.addEventListener('state', (event) => {
+                try {
+                    const state = JSON.parse(event.data);
+                    updateState(state);
+                } catch (e) {
+                    console.error('Failed to parse state:', e);
+                }
+            });
+            
+            eventSource.addEventListener('logs', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.lines && data.lines.length > 0) {
+                        appendLogs(data.lines);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse logs:', e);
+                }
+            });
+            
+            eventSource.addEventListener('heartbeat', () => {
+                // Keep-alive received
+            });
+            
+            eventSource.onerror = () => {
+                updateConnectionStatus(false);
+                reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                setTimeout(connect, delay);
+            };
+        }
+        
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                connectionDot.classList.add('connected');
+                connectionText.textContent = 'Live';
+            } else {
+                connectionDot.classList.remove('connected');
+                connectionText.textContent = 'Reconnecting...';
+            }
+        }
+        
+        function updateState(state) {
+            currentState = state;
+            
+            const mode = state.mode;
+            const status = state.status || {};
+            const config = state.config || {};
+            
+            // Update iteration
+            if (state.iteration) {
+                iterationBadge.style.display = 'flex';
+                iterationNumber.textContent = state.iteration.current;
+                iterationMax.textContent = state.iteration.max;
+            } else {
+                iterationBadge.style.display = 'none';
+            }
+            
+            // Update status badge
+            if (mode === 'unknown') {
+                setStatusBadge('idle', 'Idle');
+            } else if (status.phase === 'complete') {
+                setStatusBadge('complete', 'Complete');
+                // Notify on completion (only once)
+                if (lastPhase && lastPhase !== 'complete') {
+                    showNotification('Ralph Complete!', 'All workflow phases have finished successfully.');
+                }
+            } else {
+                setStatusBadge('running', 'Running');
+            }
+            
+            // Track phase changes for notifications
+            lastPhase = status.phase;
+            
+            // Update phase timeline
+            if (mode === 'issue') {
+                updatePhaseTimeline(status.phase || 'design');
+                checksCard.style.display = 'block';
+                updateStatusChecks(status);
+            } else if (mode === 'prd') {
+                updatePRDProgress(status);
+                checksCard.style.display = 'none';
+            } else {
+                phaseTimeline.innerHTML = '<div class="empty-state"><div class="empty-title">No active workflow</div></div>';
+                checksCard.style.display = 'none';
+            }
+            
+            // Update info grid
+            updateInfoGrid(mode, status, config);
+            
+            // Update logs from initial state
+            if (state.recent_logs && state.recent_logs.length > 0 && allLogs.length === 0) {
+                appendLogs(state.recent_logs);
+            }
+        }
+        
+        function setStatusBadge(type, text) {
+            statusBadge.className = 'status-badge ' + type;
+            statusBadge.textContent = text;
+        }
+        
+        function updatePhaseTimeline(currentPhase) {
+            const currentIndex = getPhaseIndex(currentPhase);
+            
+            phaseTimeline.innerHTML = phases.map((phase, index) => {
+                const phaseIdx = getPhaseIndex(phase.id);
+                let stateClass = '';
+                let icon = '';
+                
+                if (phaseIdx < currentIndex || currentPhase === 'complete') {
+                    stateClass = 'complete';
+                    icon = '&#10003;';
+                } else if (phase.id === currentPhase || (currentPhase === 'coverage-fix' && phase.id === 'coverage')) {
+                    stateClass = 'active';
+                    icon = '&#9679;';
+                }
+                
+                return `
+                    <div class="phase-item ${stateClass}">
+                        <div class="phase-dot">${icon}</div>
+                        <div class="phase-content">
+                            <div class="phase-name">${phase.name}</div>
+                            <div class="phase-desc">${currentPhase === 'coverage-fix' && phase.id === 'coverage' ? 'Fixing test failures' : phase.desc}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function updatePRDProgress(status) {
+            const total = status.total_stories || 0;
+            const passing = status.passing_stories || 0;
+            const percent = total > 0 ? Math.round((passing / total) * 100) : 0;
+            
+            phaseTimeline.innerHTML = `
+                <div class="progress-section">
+                    <div class="progress-header">
+                        <span>Stories Progress</span>
+                        <span>${passing} / ${total} (${percent}%)</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${percent}%"></div>
+                    </div>
+                </div>
+                ${status.stories ? `
+                    <div style="margin-top: 16px;">
+                        ${status.stories.map(s => `
+                            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border-color);">
+                                <span style="color: ${s.passes ? 'var(--accent-green)' : 'var(--text-muted)'};">${s.passes ? '&#10003;' : '&#9675;'}</span>
+                                <span style="font-size: 13px;">${escapeHtml(s.title)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
+            `;
+        }
+        
+        function updateInfoGrid(mode, status, config) {
+            let items = [];
+            
+            items.push({ label: 'Mode', value: mode.charAt(0).toUpperCase() + mode.slice(1) });
+            
+            if (mode === 'issue') {
+                if (status.issue_number) {
+                    const url = status.issue_url || `#${status.issue_number}`;
+                    items.push({ 
+                        label: 'Issue', 
+                        value: `<a href="${escapeHtml(status.issue_url || '#')}" target="_blank">#${status.issue_number}</a>`
+                    });
+                }
+                
+                if (status.pr_number) {
+                    items.push({ 
+                        label: 'Pull Request', 
+                        value: `<a href="${escapeHtml(status.pr_url || '#')}" target="_blank">#${status.pr_number}</a>`
+                    });
+                }
+                
+                if (status.branch_name) {
+                    items.push({ label: 'Branch', value: escapeHtml(status.branch_name) });
+                }
+                
+                if (status.design_doc) {
+                    items.push({ label: 'Design Doc', value: escapeHtml(status.design_doc.split('/').pop()) });
+                }
+                
+                items.push({ label: 'Phase', value: formatPhase(status.phase) });
+            } else if (mode === 'prd') {
+                items.push({ label: 'Stories', value: `${status.passing_stories || 0} / ${status.total_stories || 0}` });
+            }
+            
+            infoGrid.innerHTML = items.map(item => `
+                <div class="info-row">
+                    <span class="info-label">${item.label}</span>
+                    <span class="info-value">${item.value}</span>
+                </div>
+            `).join('');
+        }
+        
+        function formatPhase(phase) {
+            const names = {
+                'design': 'Design',
+                'implement': 'Implement',
+                'review': 'Review',
+                'coverage': 'Coverage',
+                'coverage-fix': 'Fix Coverage',
+                'sonar': 'Sonar',
+                'complete': 'Complete'
+            };
+            return names[phase] || phase;
+        }
+        
+        function updateStatusChecks(status) {
+            const checks = [
+                { label: 'Implemented', value: status.implemented },
+                { label: 'PR Created', value: status.pr_created },
+                { label: 'PR Ready', value: status.pr_description_ready },
+                { label: 'Review Clean', value: status.review_clean },
+                { label: 'Coverage', value: status.coverage_clean },
+                { label: 'Sonar', value: status.sonar_clean }
+            ];
+            
+            statusChecks.innerHTML = checks.map(check => `
+                <div class="status-check">
+                    <div class="check-icon ${check.value ? 'pass' : 'fail'}">
+                        ${check.value ? '&#10003;' : ''}
+                    </div>
+                    <span>${check.label}</span>
+                </div>
+            `).join('');
+        }
+        
+        // Log handling
+        const diffState = { inDiff: false };
+
+        function updateLogCount(count) {
+            logCount.textContent = `${count} lines`;
+        }
+
+        function isDiffStartLine(line) {
+            return line.startsWith('diff --git ') || line.startsWith('--- a/') || line.startsWith('+++ b/');
+        }
+
+        function isDiffMetaLine(line) {
+            return (
+                line.startsWith('diff --git ') ||
+                line.startsWith('index ') ||
+                line.startsWith('--- ') ||
+                line.startsWith('+++ ') ||
+                line.startsWith('@@ ') ||
+                line.startsWith('new file mode ') ||
+                line.startsWith('deleted file mode ') ||
+                line.startsWith('similarity index ') ||
+                line.startsWith('rename from ') ||
+                line.startsWith('rename to ') ||
+                line.startsWith('copy from ') ||
+                line.startsWith('copy to ') ||
+                line.startsWith('Binary files ') ||
+                line.startsWith('\\ No newline at end of file')
+            );
+        }
+
+        function isDiffContentLine(line) {
+            return line.startsWith('+') || line.startsWith('-') || line.startsWith(' ') || line.startsWith('\\');
+        }
+
+        function getLogClassForLine(line) {
+            if (line === '') {
+                diffState.inDiff = false;
+                return '';
+            }
+
+            if (isDiffStartLine(line)) {
+                diffState.inDiff = true;
+                if (line.startsWith('diff --git ')) return 'diff-header';
+                return 'diff-file';
+            }
+
+            if (diffState.inDiff) {
+                if (!(isDiffMetaLine(line) || isDiffContentLine(line))) {
+                    diffState.inDiff = false;
+                }
+            }
+
+            if (diffState.inDiff) {
+                if (line.startsWith('@@ ')) return 'diff-hunk';
+                if (line.startsWith('index ')) return 'diff-meta';
+                if (line.startsWith('--- ') || line.startsWith('+++ ')) return 'diff-file';
+                if (line.startsWith('+') && !line.startsWith('+++ ')) return 'diff-add';
+                if (line.startsWith('-') && !line.startsWith('--- ')) return 'diff-del';
+                if (line.startsWith(' ')) return 'diff-context';
+                return 'diff-meta';
+            }
+
+            if (line === 'thinking' || line === 'exec') return 'section';
+            if (/^file update:?$/i.test(line)) return 'section';
+            if (line.startsWith('Plan update')) return 'section';
+            if (line.startsWith('/bin/bash -lc ')) return 'command';
+            if (/^apply_patch\(/.test(line)) return 'command';
+
+            if (/\[ERROR\]|Error:|error:/i.test(line)) return 'error';
+            if (/\[WARN\]|Warning:|warn:/i.test(line)) return 'warn';
+            if (/\[INFO\]/i.test(line)) return 'info';
+            if (/\[DEBUG\]/i.test(line)) return 'debug';
+            if (/Ralph Iteration \d+ of \d+/i.test(line)) return 'iteration';
+            if (/completed|success|passed|✓|✔/i.test(line)) return 'success';
+            return '';
+        }
+
+        function ensureLogContainerReady() {
+            if (logContent.dataset.empty === '1') {
+                logContent.innerHTML = '';
+                logContent.dataset.empty = '0';
+            }
+        }
+
+        function appendLogLinesToDom(lines) {
+            ensureLogContainerReady();
+
+            const fragment = document.createDocumentFragment();
+            for (const line of lines) {
+                const className = getLogClassForLine(line);
+                const div = document.createElement('div');
+                div.className = `log-line ${className}`;
+                div.textContent = line;
+                fragment.appendChild(div);
+            }
+            logContent.appendChild(fragment);
+
+            while (logContent.childElementCount > MAX_LOGS) {
+                logContent.removeChild(logContent.firstElementChild);
+            }
+
+            updateLogCount(allLogs.length);
+            if (autoScroll) {
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        }
+
+        function appendLogs(lines) {
+            const newLines = [];
+            for (const line of lines) {
+                if (allLogs.length >= MAX_LOGS) {
+                    allLogs.shift();
+                }
+                allLogs.push(line);
+                newLines.push(line);
+            }
+
+            if (!searchFilter) {
+                appendLogLinesToDom(newLines);
+                return;
+            }
+
+            scheduleRender();
+        }
+
+        function renderLogs() {
+            const filterLower = searchFilter ? searchFilter.toLowerCase() : '';
+
+            diffState.inDiff = false;
+            const rendered = [];
+            for (const line of allLogs) {
+                const className = getLogClassForLine(line);
+                if (!filterLower || line.toLowerCase().includes(filterLower)) {
+                    rendered.push({ line, className });
+                }
+            }
+
+            updateLogCount(rendered.length);
+
+            if (rendered.length === 0) {
+                logContent.innerHTML = `
+                    <div class="log-empty">
+                        <div class="log-empty-icon">&#128196;</div>
+                        <div>${searchFilter ? 'No matching logs' : 'Waiting for logs...'}</div>
+                    </div>
+                `;
+                logContent.dataset.empty = '1';
+                return;
+            }
+
+            logContent.dataset.empty = '0';
+            const html = rendered
+                .map(({ line, className }) => `<div class="log-line ${className}">${escapeHtml(line)}</div>`)
+                .join('');
+
+            logContent.innerHTML = html;
+
+            if (autoScroll) {
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Event handlers
+        btnAutoScroll.addEventListener('click', () => {
+            autoScroll = !autoScroll;
+            btnAutoScroll.classList.toggle('active', autoScroll);
+            if (autoScroll) {
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        });
+        
+        btnClear.addEventListener('click', () => {
+            allLogs = [];
+            renderLogs();
+        });
+        
+        searchInput.addEventListener('input', (e) => {
+            searchFilter = e.target.value;
+            renderLogs();
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'f') {
+                e.preventDefault();
+                searchInput.focus();
+            }
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                searchFilter = '';
+                renderLogs();
+                searchInput.blur();
+            }
+            if (e.key === 'End') {
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        });
+        
+        // Detect manual scroll
+        logContent.addEventListener('scroll', () => {
+            const isAtBottom = logContent.scrollHeight - logContent.scrollTop - logContent.clientHeight < 50;
+            if (!isAtBottom && autoScroll) {
+                autoScroll = false;
+                btnAutoScroll.classList.remove('active');
+            }
+        });
+        
+        // Start
+        connect();
+    </script>
+</body>
+</html>

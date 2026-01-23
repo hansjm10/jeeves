@@ -1,10 +1,22 @@
 # Ralph working files (generated during runs)
 prd.json
+issue.json
 progress.txt
 .last-branch
+review.md
+sonar-issues.json
+last-message.txt
+open-questions.md
+
+# Secrets
+.env.sonarcloud
 
 # Archive is optional to commit
 # archive/
 
 # OS files
 .DS_Store
+
+# Python cache
+__pycache__/
+*.pyc

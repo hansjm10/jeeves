@@ -40,7 +40,7 @@ const allSteps: { id: string; label: string; description: string; phase: Phase }
   { id: '2', label: 'Convert to prd.json', description: 'Break into small user stories', phase: 'setup' },
   { id: '3', label: 'Run ralph.sh', description: 'Starts the autonomous loop', phase: 'setup' },
   // Loop phase
-  { id: '4', label: 'Amp picks a story', description: 'Finds next passes: false', phase: 'loop' },
+  { id: '4', label: 'Agent picks a story', description: 'Finds next passes: false', phase: 'loop' },
   { id: '5', label: 'Implements it', description: 'Writes code, runs tests', phase: 'loop' },
   { id: '6', label: 'Commits changes', description: 'If tests pass', phase: 'loop' },
   { id: '7', label: 'Updates prd.json', description: 'Sets passes: true', phase: 'loop' },
@@ -240,7 +240,13 @@ function App() {
     return [...stepNodes, ...noteNodes];
   };
 
-  const initialNodes = getNodes(1);
+  const initialNodes = [
+    ...allSteps.map((step, index) => createNode(step, index < 1, positions[step.id])),
+    ...notes.map(note => {
+      const noteVisible = 1 >= note.appearsWithStep;
+      return createNoteNode(note, noteVisible, positions[note.id]);
+    }),
+  ];
   const initialEdges = edgeConnections.map((conn, index) =>
     createEdge(conn, index < 0)
   );
@@ -325,8 +331,8 @@ function App() {
   return (
     <div className="app-container">
       <div className="header">
-        <h1>How Ralph Works with Amp</h1>
-        <p>Autonomous AI agent loop for completing PRDs</p>
+        <h1>How Ralph Works</h1>
+        <p>Autonomous agent loop for completing PRDs or issues</p>
       </div>
       <div className="flow-container">
         <ReactFlow

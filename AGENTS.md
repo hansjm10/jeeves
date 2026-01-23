@@ -2,7 +2,7 @@
 
 ## Overview
 
-Ralph is an autonomous AI agent loop that runs fresh agent sessions (Codex, Claude, or Opencode) repeatedly until the configured work is complete. Each iteration is a fresh agent instance with clean context.
+Ralph is an autonomous AI agent loop that runs AI coding tools (Amp or Claude Code) repeatedly until the configured work is complete. Each iteration is a fresh agent instance with clean context.
 
 ## Commands
 
@@ -16,15 +16,19 @@ cd flowchart && npm run build
 # Run Ralph (from your project that has `ralph/prd.json` or `ralph/issue.json`)
 ./ralph.sh [max_iterations]
 
+# Run Ralph with Claude Code
+./ralph.sh --tool claude [max_iterations]
+
 # Start the real-time viewer dashboard
 python3 viewer/server.py
 ```
 
 ## Key Files
 
-- `ralph.sh` - The bash loop that spawns fresh agent sessions
+- `ralph.sh` - The bash loop that spawns fresh AI instances (supports `--tool amp` or `--tool claude`)
+- `prompt.md` - Instructions given to each Amp instance
+- `CLAUDE.md` - Instructions given to each Claude Code instance
 - `viewer/` - Real-time web dashboard for monitoring Ralph runs
-- `prompt.md` - Instructions given to each PRD-mode agent instance
 - `prompt.issue.design.md` - Issue-mode: draft a design doc from the template when missing
 - `prompt.issue.implement.md` - Issue-mode: implement + open PR
 - `prompt.issue.review.md` - Issue-mode: review loop
@@ -66,7 +70,7 @@ Use the viewer while running Ralph to see what's happening without scrolling thr
 
 ## Patterns
 
-- Each iteration spawns a fresh agent instance with clean context
-- Memory persists via git history plus the state files under `ralph/`
+- Each iteration spawns a fresh AI instance (Amp or Claude Code) with clean context
+- Memory persists via git history plus state files like `progress.txt`, `prd.json`, and `issue.json`
 - Stories should be small enough to complete in one context window
 - Always update AGENTS.md with discovered patterns for future iterations

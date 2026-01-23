@@ -16,7 +16,11 @@ open-questions.md
 
 # OS files
 .DS_Store
+.fuse_hidden*
 
 # Python cache
 __pycache__/
 *.pyc
+
+# Claude
+.claude/

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RALPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$RALPH_DIR/../.." && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$RALPH_DIR/../.." && pwd))"
 RALPH_SH="$RALPH_DIR/ralph.sh"
 RUN_DIR=""
 TMP_ROOT=""
@@ -62,10 +62,11 @@ write_issue_config() {
   local state_dir="$1"
   local pr_description_ready="${2:-true}"
   local review_clean="${3:-false}"
-  local coverage_clean="${4:-false}"
-  local coverage_needs_fix="${5:-false}"
-  local sonar_clean="${6:-false}"
-  local design_doc_path="${7-docs/design-document-template.md}"
+  local ci_clean="${4:-false}"
+  local coverage_clean="${5:-false}"
+  local coverage_needs_fix="${6:-false}"
+  local sonar_clean="${7:-false}"
+  local design_doc_path="${8-docs/design-document-template.md}"
   mkdir -p "$state_dir"
   cat > "$state_dir/issue.json" <<JSON
 {
@@ -83,6 +84,8 @@ write_issue_config() {
     "reviewClean": $review_clean,
     "reviewPasses": 0,
     "reviewCleanPasses": 0,
+    "ciClean": $ci_clean,
+    "ciPasses": 0,
     "coverageClean": $coverage_clean,
     "coverageNeedsFix": $coverage_needs_fix,
     "coveragePasses": 0,
@@ -107,6 +110,10 @@ set -euo pipefail
 
 args=("$@")
 printf '%s\n' "${args[*]}" >> "${CODEX_STUB_ARGS_FILE:?}"
+
+if [[ -n "${CODEX_STUB_STDIN_FILE:-}" ]]; then
+  cat - > "${CODEX_STUB_STDIN_FILE}"
+fi
 
 call_count=1
 if [[ -n "${CODEX_STUB_CALL_COUNT_FILE:-}" ]]; then
@@ -239,6 +246,42 @@ test_codex_exec_sandbox_landlock_retry() {
   assert_not_contains "$call2" " --sandbox "
 }
 
+test_prompt_append_file_is_included_in_stdin() {
+  local tmp_root="$1"
+  local state_dir="$tmp_root/state-prompt-append"
+  local stub_dir="$tmp_root/bin-prompt-append"
+  local args_file="$tmp_root/args-prompt-append.txt"
+  local stdin_file="$tmp_root/stdin-prompt-append.txt"
+  local append_file="$tmp_root/prompt-append.md"
+
+  write_prd_config "$state_dir"
+  write_codex_stub "$stub_dir"
+
+  echo "EXTRA PROMPT INSTRUCTIONS" > "$append_file"
+
+  set +e
+  run_ralph "prd" "$state_dir" "$stub_dir" "$args_file" \
+    RALPH_CODEX_APPROVAL_POLICY="never" \
+    RALPH_CODEX_DANGEROUS="1" \
+    RALPH_PROMPT_APPEND_FILE="$append_file" \
+    CODEX_STUB_STDIN_FILE="$stdin_file" \
+    >"$tmp_root/out-prompt-append.txt" 2>&1
+  local status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    cat "$tmp_root/out-prompt-append.txt" >&2
+    fail "ralph.sh exited non-zero in prompt append test: $status"
+  fi
+
+  assert_file_exists "$stdin_file"
+  local stdin_content
+  stdin_content="$(cat "$stdin_file")"
+
+  assert_contains "$stdin_content" "Ralph Agent Instructions"
+  assert_contains "$stdin_content" "EXTRA PROMPT INSTRUCTIONS"
+}
+
 test_issue_open_questions_selects_questions_prompt() {
   local tmp_root="$1"
   local state_dir="$tmp_root/state-questions"
@@ -274,7 +317,7 @@ test_issue_missing_design_doc_selects_design_prompt() {
   local stub_dir="$tmp_root/bin-missing-design-doc"
   local args_file="$tmp_root/args-missing-design-doc.txt"
 
-  write_issue_config "$state_dir" "true" "false" "false" "false" "false" ""
+  write_issue_config "$state_dir" "true" "false" "false" "false" "false" "false" ""
   write_codex_stub "$stub_dir"
 
   set +e
@@ -352,13 +395,13 @@ test_issue_pr_description_ready_selects_review_prompt() {
   assert_contains "$output" "prompt.issue.review.md"
 }
 
-test_issue_review_clean_selects_coverage_prompt() {
+test_issue_review_clean_selects_ci_prompt() {
   local tmp_root="$1"
   local state_dir="$tmp_root/state-review-clean"
   local stub_dir="$tmp_root/bin-review-clean"
   local args_file="$tmp_root/args-review-clean.txt"
 
-  write_issue_config "$state_dir" "true" "true" "false" "false" "false"
+  write_issue_config "$state_dir" "true" "true" "false" "false" "false" "false"
   write_codex_stub "$stub_dir"
 
   set +e
@@ -376,6 +419,34 @@ test_issue_review_clean_selects_coverage_prompt() {
 
   local output
   output="$(cat "$tmp_root/out-review-clean.txt")"
+  assert_contains "$output" "[DEBUG] Phase: ci"
+  assert_contains "$output" "prompt.issue.ci.md"
+}
+
+test_issue_ci_clean_selects_coverage_prompt() {
+  local tmp_root="$1"
+  local state_dir="$tmp_root/state-ci-clean"
+  local stub_dir="$tmp_root/bin-ci-clean"
+  local args_file="$tmp_root/args-ci-clean.txt"
+
+  write_issue_config "$state_dir" "true" "true" "true" "false" "false" "false"
+  write_codex_stub "$stub_dir"
+
+  set +e
+  run_ralph "issue" "$state_dir" "$stub_dir" "$args_file" \
+    RALPH_CODEX_APPROVAL_POLICY="never" \
+    RALPH_CODEX_DANGEROUS="1" \
+    >"$tmp_root/out-ci-clean.txt" 2>&1
+  local status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    cat "$tmp_root/out-ci-clean.txt" >&2
+    fail "ralph.sh exited non-zero in coverage phase selection test: $status"
+  fi
+
+  local output
+  output="$(cat "$tmp_root/out-ci-clean.txt")"
   assert_contains "$output" "[DEBUG] Phase: coverage"
   assert_contains "$output" "prompt.issue.coverage.md"
 }
@@ -386,7 +457,7 @@ test_issue_coverage_needs_fix_selects_coverage_fix_prompt() {
   local stub_dir="$tmp_root/bin-coverage-needs-fix"
   local args_file="$tmp_root/args-coverage-needs-fix.txt"
 
-  write_issue_config "$state_dir" "true" "true" "false" "true" "false"
+  write_issue_config "$state_dir" "true" "true" "true" "false" "true" "false"
   write_codex_stub "$stub_dir"
 
   set +e
@@ -414,7 +485,7 @@ test_issue_coverage_failures_file_selects_coverage_fix_prompt() {
   local stub_dir="$tmp_root/bin-coverage-failures-file"
   local args_file="$tmp_root/args-coverage-failures-file.txt"
 
-  write_issue_config "$state_dir" "true" "true" "false" "false" "false"
+  write_issue_config "$state_dir" "true" "true" "true" "false" "false" "false"
   echo "Failing test: should handle edge case X" > "$state_dir/coverage-failures.md"
   write_codex_stub "$stub_dir"
 
@@ -443,7 +514,7 @@ test_issue_coverage_clean_selects_sonar_prompt() {
   local stub_dir="$tmp_root/bin-coverage-clean"
   local args_file="$tmp_root/args-coverage-clean.txt"
 
-  write_issue_config "$state_dir" "true" "true" "true" "false" "false"
+  write_issue_config "$state_dir" "true" "true" "true" "true" "false" "false"
   write_codex_stub "$stub_dir"
 
   set +e
@@ -477,11 +548,13 @@ main() {
 
   test_codex_exec_dangerous_bypass "$TMP_ROOT"
   test_codex_exec_sandbox_landlock_retry "$TMP_ROOT"
+  test_prompt_append_file_is_included_in_stdin "$TMP_ROOT"
   test_issue_open_questions_selects_questions_prompt "$TMP_ROOT"
   test_issue_missing_design_doc_selects_design_prompt "$TMP_ROOT"
   test_issue_pr_description_not_ready_selects_implement_prompt "$TMP_ROOT"
   test_issue_pr_description_ready_selects_review_prompt "$TMP_ROOT"
-  test_issue_review_clean_selects_coverage_prompt "$TMP_ROOT"
+  test_issue_review_clean_selects_ci_prompt "$TMP_ROOT"
+  test_issue_ci_clean_selects_coverage_prompt "$TMP_ROOT"
   test_issue_coverage_needs_fix_selects_coverage_fix_prompt "$TMP_ROOT"
   test_issue_coverage_failures_file_selects_coverage_fix_prompt "$TMP_ROOT"
   test_issue_coverage_clean_selects_sonar_prompt "$TMP_ROOT"

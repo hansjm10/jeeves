@@ -346,8 +346,29 @@
             gap: 8px;
             padding: 10px 12px;
             background: var(--bg-tertiary);
+            border: 1px solid transparent;
             border-radius: 8px;
             font-size: 12px;
+        }
+
+        button.status-check {
+            appearance: none;
+            color: inherit;
+            text-align: left;
+            width: 100%;
+        }
+
+        .status-check.toggleable {
+            cursor: pointer;
+        }
+
+        .status-check.toggleable:hover {
+            border-color: var(--border-active);
+        }
+
+        .status-check.toggleable:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
         }
         
         .check-icon {
@@ -390,7 +411,42 @@
             background: var(--bg-tertiary);
             border-bottom: 1px solid var(--border-color);
         }
-        
+
+        .panel-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .panel-tabs {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tab-btn {
+            padding: 6px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 999px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            background: var(--bg-secondary);
+            border-color: var(--text-muted);
+        }
+
+        .tab-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
         .log-title {
             font-size: 13px;
             font-weight: 600;
@@ -471,6 +527,64 @@
         
         .log-content::-webkit-scrollbar-thumb:hover {
             background: var(--text-muted);
+        }
+
+        /* Prompt Editor Panel (tab) */
+        .prompt-panel {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+        }
+
+        .prompt-toolbar {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .prompt-file {
+            flex: 1;
+            min-width: 260px;
+        }
+
+        .prompt-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .prompt-tab {
+            padding: 4px 10px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 999px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .prompt-tab:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--text-muted);
+        }
+
+        .prompt-tab.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .prompt-editor {
+            flex: 1;
+            min-height: 0;
+            resize: none;
         }
         
         .log-line {
@@ -615,7 +729,64 @@
         .search-input::placeholder {
             color: var(--text-muted);
         }
-        
+
+        /* Controls */
+        .control-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .control-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .control-input,
+        .control-textarea {
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .control-input:focus,
+        .control-textarea:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .control-textarea {
+            resize: vertical;
+            min-height: 70px;
+            font-family: inherit;
+        }
+
+        .editor-textarea {
+            min-height: 240px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+
+        .control-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .control-status {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.4;
+            white-space: pre-line;
+        }
+
         /* Iteration indicator */
         .iteration-badge {
             background: var(--bg-tertiary);
@@ -709,6 +880,92 @@
     
     <main class="main">
         <aside class="sidebar">
+            <div class="panel-tabs">
+                <button class="tab-btn active" id="sidebarTabSetup">Setup</button>
+                <button class="tab-btn" id="sidebarTabMonitor">Monitor</button>
+            </div>
+
+            <div id="sidebarSetupSection">
+            <!-- Controls -->
+            <div class="card">
+                <div class="card-header">Controls</div>
+                <div class="card-body">
+                    <div class="control-row">
+                        <div class="control-label">Runner</div>
+                        <select class="control-input" id="runRunner">
+                            <option value="auto">Auto-detect</option>
+                            <option value="codex">Codex</option>
+                            <option value="claude">Claude</option>
+                            <option value="opencode">Opencode</option>
+                        </select>
+                    </div>
+                    <div class="control-row">
+                        <div class="control-label">Max iterations</div>
+                        <input class="control-input" id="runMaxIterations" type="number" min="1" max="10000" value="10" />
+                    </div>
+                    <div class="control-actions">
+                        <button class="log-btn active" id="btnRun">Run</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Git -->
+            <div class="card">
+                <div class="card-header">Git</div>
+                <div class="card-body">
+                    <div class="control-row">
+                        <div class="control-label">Branch</div>
+                        <input class="control-input" id="gitBranch" type="text" value="main" />
+                    </div>
+                    <div class="control-actions">
+                        <button class="log-btn active" id="btnGitUpdateMain">Checkout &amp; Update</button>
+                    </div>
+                    <div class="control-status" id="gitStatusText"></div>
+                </div>
+            </div>
+
+            <!-- Init Issue -->
+            <div class="card">
+                <div class="card-header">Init Issue</div>
+                <div class="card-body">
+                    <div class="control-row">
+                        <div class="control-label">Issue (number or URL)</div>
+                        <input class="control-input" id="initIssueNumber" type="text" placeholder="e.g. 590 or https://github.com/org/repo/issues/590" />
+                    </div>
+                    <div class="control-row">
+                        <div class="control-label">Design doc (optional)</div>
+                        <input class="control-input" id="initDesignDoc" type="text" placeholder="e.g. docs/issue-590-design.md" />
+                    </div>
+                    <div class="control-row">
+                        <div class="control-label">Repo (optional)</div>
+                        <input class="control-input" id="initRepo" type="text" placeholder="e.g. owner/repo" />
+                    </div>
+                    <div class="control-row">
+                        <div class="control-label">Branch (optional)</div>
+                        <input class="control-input" id="initBranch" type="text" placeholder="e.g. issue/590-some-slug" />
+                    </div>
+                    <div class="control-row">
+                        <label class="control-label"><input type="checkbox" id="initForce" /> Force overwrite</label>
+                    </div>
+                    <div class="control-actions">
+                        <button class="log-btn active" id="btnInitIssue">Init</button>
+                    </div>
+                    <div class="control-status" id="initStatusText"></div>
+                </div>
+            </div>
+            </div>
+
+            <div id="sidebarMonitorSection" style="display: none;">
+            <div class="card">
+                <div class="card-header">Run</div>
+                <div class="card-body">
+                    <div class="control-actions">
+                        <button class="log-btn" id="btnStop">Stop</button>
+                    </div>
+                    <div class="control-status" id="runStatusText"></div>
+                </div>
+            </div>
+
             <!-- Phase Progress -->
             <div class="card">
                 <div class="card-header">Workflow Progress</div>
@@ -728,7 +985,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <!-- Status Checks -->
             <div class="card" id="checksCard">
                 <div class="card-header">Status Checks</div>
@@ -738,29 +995,49 @@
                     </div>
                 </div>
             </div>
+            </div>
         </aside>
         
         <section class="card log-panel">
             <div class="log-header">
-                <span class="log-title">
-                    Live Output
+                <div class="panel-left">
+                    <div class="panel-tabs">
+                        <button class="tab-btn active" id="tabLogs">Logs</button>
+                        <button class="tab-btn" id="tabPrompts">Prompts</button>
+                    </div>
                     <span class="log-count" id="logCount">0 lines</span>
-                </span>
-                <div class="log-controls">
+                </div>
+                <div class="log-controls" id="logControls">
                     <button class="log-btn" id="btnClear">Clear</button>
+                    <button class="log-btn" id="btnHideDiffs">Hide diffs</button>
                     <button class="log-btn active" id="btnAutoScroll">Auto-scroll</button>
                 </div>
             </div>
-            <div class="search-container">
+            <div class="search-container" id="logsSearchContainer">
                 <input type="text" class="search-input" id="searchInput" placeholder="Filter logs... (Ctrl+F)">
             </div>
-            <div class="log-body">
+            <div class="log-body" id="logsBody">
                 <div class="log-content" id="logContent">
                     <div class="log-empty">
                         <div class="log-empty-icon">&#128196;</div>
                         <div>Waiting for logs...</div>
                     </div>
                 </div>
+            </div>
+            <div class="prompt-panel" id="promptsBody" style="display: none;">
+                <div class="prompt-toolbar">
+                    <div class="prompt-file">
+                        <div class="control-label">Prompt file</div>
+                        <select class="control-input" id="promptSelect"></select>
+                        <div class="prompt-tabs" id="promptTabs"></div>
+                    </div>
+                    <div class="control-actions">
+                        <button class="log-btn" id="btnPromptReload">Reload</button>
+                        <button class="log-btn active" id="btnPromptSave">Save</button>
+                    </div>
+                </div>
+                <textarea class="control-textarea editor-textarea prompt-editor" id="promptEditor" placeholder="Select a prompt file..."></textarea>
+                <div class="control-status" id="promptStatusText"></div>
             </div>
         </section>
     </main>
@@ -776,11 +1053,18 @@
         let allLogs = [];
         let autoScroll = true;
         let searchFilter = '';
+        let hideDiffs = false;
         let reconnectAttempts = 0;
         let lastPhase = null;
         let notificationsEnabled = false;
         let renderScheduled = false;
         const MAX_LOGS = 5000;
+        let promptListLoaded = false;
+        let promptLoadedId = null;
+        let promptDirty = false;
+        let promptListPromise = null;
+        let mainTab = 'logs';
+        let promptFiles = [];
 
         async function resyncLogs() {
             try {
@@ -868,8 +1152,15 @@
         const logContent = document.getElementById('logContent');
         const logCount = document.getElementById('logCount');
         const searchInput = document.getElementById('searchInput');
+        const logsSearchContainer = document.getElementById('logsSearchContainer');
+        const logsBody = document.getElementById('logsBody');
+        const promptsBody = document.getElementById('promptsBody');
+        const tabLogs = document.getElementById('tabLogs');
+        const tabPrompts = document.getElementById('tabPrompts');
         const btnAutoScroll = document.getElementById('btnAutoScroll');
         const btnClear = document.getElementById('btnClear');
+        const btnHideDiffs = document.getElementById('btnHideDiffs');
+        const logControls = document.getElementById('logControls');
         const connectionDot = document.getElementById('connectionDot');
         const connectionText = document.getElementById('connectionText');
         const statusBadge = document.getElementById('statusBadge');
@@ -880,23 +1171,126 @@
         const infoGrid = document.getElementById('infoGrid');
         const statusChecks = document.getElementById('statusChecks');
         const checksCard = document.getElementById('checksCard');
+        const runRunner = document.getElementById('runRunner');
+        const runMaxIterations = document.getElementById('runMaxIterations');
+        const btnRun = document.getElementById('btnRun');
+        const btnStop = document.getElementById('btnStop');
+        const runStatusText = document.getElementById('runStatusText');
+
+        const gitBranch = document.getElementById('gitBranch');
+        const btnGitUpdateMain = document.getElementById('btnGitUpdateMain');
+        const gitStatusText = document.getElementById('gitStatusText');
+
+        let runIsRunning = false;
+
+        const sidebarTabSetup = document.getElementById('sidebarTabSetup');
+        const sidebarTabMonitor = document.getElementById('sidebarTabMonitor');
+        const sidebarSetupSection = document.getElementById('sidebarSetupSection');
+        const sidebarMonitorSection = document.getElementById('sidebarMonitorSection');
+
+        const promptSelect = document.getElementById('promptSelect');
+        const promptTabs = document.getElementById('promptTabs');
+        const promptEditor = document.getElementById('promptEditor');
+        const btnPromptReload = document.getElementById('btnPromptReload');
+        const btnPromptSave = document.getElementById('btnPromptSave');
+        const promptStatusText = document.getElementById('promptStatusText');
+
+        const initIssueNumber = document.getElementById('initIssueNumber');
+        const initDesignDoc = document.getElementById('initDesignDoc');
+        const initRepo = document.getElementById('initRepo');
+        const initBranch = document.getElementById('initBranch');
+        const initForce = document.getElementById('initForce');
+        const btnInitIssue = document.getElementById('btnInitIssue');
+        const initStatusText = document.getElementById('initStatusText');
         
+        function updateHideDiffsButton() {
+            if (!btnHideDiffs) return;
+            btnHideDiffs.classList.toggle('active', hideDiffs);
+            btnHideDiffs.textContent = hideDiffs ? 'Show diffs' : 'Hide diffs';
+        }
+
+        try {
+            hideDiffs = localStorage.getItem('ralph_viewer_hide_diffs') === '1';
+        } catch (e) {
+            // ignore
+        }
+        updateHideDiffsButton();
+
         // Phase definitions
         const phases = [
             { id: 'design', name: 'Design', desc: 'Create design document' },
             { id: 'implement', name: 'Implement', desc: 'Build and create PR' },
+            { id: 'questions', name: 'Questions', desc: 'Resolve open questions' },
             { id: 'review', name: 'Review', desc: 'Address PR feedback' },
+            { id: 'ci', name: 'CI', desc: 'Verify GitHub CI is green' },
             { id: 'coverage', name: 'Coverage', desc: 'Add test coverage' },
             { id: 'sonar', name: 'Sonar', desc: 'Fix code quality' },
             { id: 'complete', name: 'Complete', desc: 'All checks passed' }
         ];
         
-        const phaseOrder = ['design', 'implement', 'review', 'coverage-fix', 'coverage', 'sonar', 'complete'];
+        const phaseOrder = ['design', 'implement', 'questions', 'review', 'ci', 'coverage-fix', 'coverage', 'sonar', 'complete'];
         
         function getPhaseIndex(phase) {
             // Normalize coverage-fix to coverage
             if (phase === 'coverage-fix') phase = 'coverage';
             return phaseOrder.indexOf(phase);
+        }
+
+        let sidebarTab = 'setup';
+
+        function setSidebarTab(tab) {
+            sidebarTab = tab === 'monitor' ? 'monitor' : 'setup';
+            if (sidebarTabSetup) sidebarTabSetup.classList.toggle('active', sidebarTab === 'setup');
+            if (sidebarTabMonitor) sidebarTabMonitor.classList.toggle('active', sidebarTab === 'monitor');
+            if (sidebarSetupSection) sidebarSetupSection.style.display = sidebarTab === 'setup' ? 'block' : 'none';
+            if (sidebarMonitorSection) sidebarMonitorSection.style.display = sidebarTab === 'monitor' ? 'block' : 'none';
+
+            try {
+                localStorage.setItem('ralph_viewer_sidebar_tab', sidebarTab);
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        if (sidebarTabSetup) sidebarTabSetup.addEventListener('click', () => setSidebarTab('setup'));
+        if (sidebarTabMonitor) sidebarTabMonitor.addEventListener('click', () => setSidebarTab('monitor'));
+
+        try {
+            const savedSidebar = localStorage.getItem('ralph_viewer_sidebar_tab');
+            setSidebarTab(savedSidebar || 'setup');
+        } catch (e) {
+            setSidebarTab('setup');
+        }
+
+        function setMainTab(tab) {
+            mainTab = tab === 'prompts' ? 'prompts' : 'logs';
+
+            if (tabLogs) tabLogs.classList.toggle('active', mainTab === 'logs');
+            if (tabPrompts) tabPrompts.classList.toggle('active', mainTab === 'prompts');
+
+            if (logsSearchContainer) logsSearchContainer.style.display = mainTab === 'logs' ? 'block' : 'none';
+            if (logsBody) logsBody.style.display = mainTab === 'logs' ? 'flex' : 'none';
+            if (logControls) logControls.style.display = mainTab === 'logs' ? 'flex' : 'none';
+            if (logCount) logCount.style.display = mainTab === 'logs' ? 'inline-block' : 'none';
+
+            if (promptsBody) promptsBody.style.display = mainTab === 'prompts' ? 'flex' : 'none';
+            if (mainTab === 'prompts' && promptEditor) promptEditor.focus();
+
+            try {
+                localStorage.setItem('ralph_viewer_main_tab', mainTab);
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        if (tabLogs) tabLogs.addEventListener('click', () => setMainTab('logs'));
+        if (tabPrompts) tabPrompts.addEventListener('click', () => setMainTab('prompts'));
+
+        try {
+            const savedTab = localStorage.getItem('ralph_viewer_main_tab');
+            setMainTab(savedTab || 'logs');
+        } catch (e) {
+            setMainTab('logs');
         }
         
         // Connection handling
@@ -963,6 +1357,7 @@
             const mode = state.mode;
             const status = state.status || {};
             const config = state.config || {};
+            const run = state.run || {};
             
             // Update iteration
             if (state.iteration) {
@@ -974,7 +1369,9 @@
             }
             
             // Update status badge
-            if (mode === 'unknown') {
+            if (run.running) {
+                setStatusBadge('running', 'Running');
+            } else if (mode === 'unknown') {
                 setStatusBadge('idle', 'Idle');
             } else if (status.phase === 'complete') {
                 setStatusBadge('complete', 'Complete');
@@ -983,7 +1380,7 @@
                     showNotification('Ralph Complete!', 'All workflow phases have finished successfully.');
                 }
             } else {
-                setStatusBadge('running', 'Running');
+                setStatusBadge('idle', 'Ready');
             }
             
             // Track phase changes for notifications
@@ -1004,16 +1401,377 @@
             
             // Update info grid
             updateInfoGrid(mode, status, config);
-            
+
+            // Prompt editor bootstrap (pick the currently-active prompt once).
+            if (promptSelect || promptTabs) {
+                const activePrompt = promptIdForState(state);
+                const chooseAndLoad = (promptId) => {
+                    if (promptLoadedId || promptDirty) return;
+                    let id = promptId;
+                    if (promptSelect) {
+                        const hasOption = Array.from(promptSelect.options).some(o => o.value === id);
+                        if (!hasOption) id = promptSelect.options[0] ? promptSelect.options[0].value : '';
+                    } else if (Array.isArray(promptFiles) && promptFiles.length > 0) {
+                        const has = promptFiles.some(p => p.id === id);
+                        if (!has) id = promptFiles[0].id;
+                    }
+                    if (id) setCurrentPromptId(id, { confirmDiscard: false });
+                };
+
+                if (!promptListLoaded) loadPromptList().then(() => chooseAndLoad(activePrompt));
+                else chooseAndLoad(activePrompt);
+            }
+
+            // Prefill init form from current state (only when empty).
+            if (initIssueNumber && !initIssueNumber.value && status.issue_number) {
+                initIssueNumber.value = String(status.issue_number);
+            }
+            if (initDesignDoc && !initDesignDoc.value && status.design_doc) {
+                initDesignDoc.value = String(status.design_doc);
+            }
+            if (initBranch && !initBranch.value && status.branch_name) {
+                initBranch.value = String(status.branch_name);
+            }
+            if (initRepo && !initRepo.value) {
+                const repo = (config.issue && config.issue.repo) ? config.issue.repo : '';
+                if (repo) initRepo.value = String(repo);
+            }
+
             // Update logs from initial state
             if (state.recent_logs && state.recent_logs.length > 0 && allLogs.length === 0) {
                 appendLogs(state.recent_logs);
+            }
+
+            updateRunControls(run);
+
+            // Auto-switch sidebar to Monitor while running (reduces clutter).
+            if (run.running && sidebarTab !== 'monitor') {
+                setSidebarTab('monitor');
+            }
+        }
+
+        function updateRunControls(run) {
+            if (!runStatusText) return;
+            const running = !!run.running;
+            runIsRunning = running;
+
+            if (btnRun) btnRun.disabled = running;
+            if (btnStop) btnStop.disabled = !running;
+            if (btnGitUpdateMain) btnGitUpdateMain.disabled = running;
+
+            if (running) {
+                runStatusText.textContent = `Running (pid ${run.pid || '?'})\nStarted: ${run.started_at || ''}`;
+            } else if (run.returncode !== null && run.returncode !== undefined) {
+                runStatusText.textContent = `Not running\nLast exit code: ${run.returncode}`;
+            } else {
+                runStatusText.textContent = 'Not running';
             }
         }
         
         function setStatusBadge(type, text) {
             statusBadge.className = 'status-badge ' + type;
             statusBadge.textContent = text;
+        }
+
+        async function apiPost(path, body) {
+            const response = await fetch(path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {})
+            });
+            const data = await response.json().catch(() => null);
+            return { response, data };
+        }
+
+        async function updateIssueStatus(updates) {
+            const { response, data } = await apiPost('/api/issue/status', { updates: updates || {} });
+            if (!response.ok || !data || !data.ok) {
+                const msg = (data && data.error) ? data.error : `Failed to update status (HTTP ${response.status})`;
+                throw new Error(msg);
+            }
+            return data;
+        }
+
+        if (btnGitUpdateMain) {
+            btnGitUpdateMain.addEventListener('click', async () => {
+                const branch = gitBranch ? (gitBranch.value || '').trim() : 'main';
+                if (!branch) {
+                    alert('Branch is required.');
+                    return;
+                }
+
+                if (!confirm(`Checkout '${branch}' and update it from origin?`)) return;
+
+                btnGitUpdateMain.disabled = true;
+                if (gitStatusText) gitStatusText.textContent = `Updating ${branch}...`;
+                try {
+                    const { response, data } = await apiPost('/api/git/update-main', { branch });
+                    if (!response.ok || !data || !data.ok) {
+                        const msg = (data && data.error) ? data.error : `Git update failed (HTTP ${response.status})`;
+                        if (gitStatusText) gitStatusText.textContent = msg;
+                        return;
+                    }
+                    const shortSha = (data.commit || '').slice(0, 7);
+                    if (gitStatusText) gitStatusText.textContent = `Now on ${data.branch || branch}${shortSha ? ` @ ${shortSha}` : ''}`;
+                } catch (e) {
+                    if (gitStatusText) gitStatusText.textContent = 'Git update failed: ' + e;
+                } finally {
+                    btnGitUpdateMain.disabled = runIsRunning;
+                }
+            });
+        }
+
+        function promptIdForState(state) {
+            if (!state) return null;
+            if (state.mode === 'prd') return 'prompt.md';
+            if (state.mode !== 'issue') return null;
+            const phase = (state.status && state.status.phase) ? state.status.phase : 'implement';
+            const map = {
+                'design': 'prompt.issue.design.md',
+                'implement': 'prompt.issue.implement.md',
+                'review': 'prompt.issue.review.md',
+                'questions': 'prompt.issue.questions.md',
+                'ci': 'prompt.issue.ci.md',
+                'coverage': 'prompt.issue.coverage.md',
+                'coverage-fix': 'prompt.issue.coverage.fix.md',
+                'sonar': 'prompt.issue.sonar.md',
+                'complete': 'prompt.issue.sonar.md'
+            };
+            return map[phase] || 'prompt.issue.implement.md';
+        }
+
+        function promptTabLabel(promptId) {
+            if (!promptId) return '';
+            if (promptId === 'prompt.md') return 'prd';
+            let label = promptId;
+            if (label.startsWith('prompt.issue.')) label = label.slice('prompt.issue.'.length);
+            else if (label.startsWith('prompt.')) label = label.slice('prompt.'.length);
+            if (label.endsWith('.md')) label = label.slice(0, -3);
+            return label.replace(/\./g, ' / ');
+        }
+
+        function updatePromptTabsActive() {
+            if (!promptTabs) return;
+            const buttons = Array.from(promptTabs.querySelectorAll('[data-prompt-id]'));
+            for (const btn of buttons) {
+                const id = btn.getAttribute('data-prompt-id');
+                btn.classList.toggle('active', !!promptLoadedId && id === promptLoadedId);
+            }
+        }
+
+        function renderPromptTabs(prompts) {
+            if (!promptTabs) return;
+            promptTabs.innerHTML = '';
+            for (const p of prompts) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'prompt-tab';
+                btn.textContent = promptTabLabel(p.id);
+                btn.setAttribute('data-prompt-id', p.id);
+                btn.addEventListener('click', async () => {
+                    await setCurrentPromptId(p.id, { confirmDiscard: true });
+                });
+                promptTabs.appendChild(btn);
+            }
+            updatePromptTabsActive();
+        }
+
+        async function setCurrentPromptId(promptId, { confirmDiscard = true } = {}) {
+            if (!promptId) return;
+
+            if (confirmDiscard && promptDirty && promptLoadedId && promptId !== promptLoadedId) {
+                if (!confirm('Discard unsaved changes?')) {
+                    if (promptSelect) promptSelect.value = promptLoadedId;
+                    updatePromptTabsActive();
+                    return;
+                }
+            }
+
+            if (promptSelect) promptSelect.value = promptId;
+            await loadPromptContent(promptId);
+        }
+
+        async function reloadPrompt() {
+            const id = promptLoadedId || (promptSelect ? promptSelect.value : '');
+            if (!id) return;
+            if (promptDirty) {
+                if (!confirm('Discard unsaved changes and reload?')) return;
+            }
+            await loadPromptContent(id);
+        }
+
+        async function loadPromptList() {
+            if (!promptSelect && !promptTabs) return;
+            if (promptListLoaded) return;
+            if (promptListPromise) return promptListPromise;
+
+            promptListPromise = (async () => {
+                const response = await fetch('/api/prompts', { cache: 'no-store' });
+                const data = await response.json().catch(() => null);
+                if (!response.ok || !data || !data.ok) {
+                    throw new Error('Failed to load prompt list');
+                }
+
+                const prompts = Array.isArray(data.prompts) ? data.prompts : [];
+                promptFiles = prompts;
+                if (promptSelect) {
+                    const previous = promptSelect.value || promptLoadedId;
+                    promptSelect.innerHTML = '';
+                    for (const p of prompts) {
+                        const opt = document.createElement('option');
+                        opt.value = p.id;
+                        opt.textContent = p.name;
+                        promptSelect.appendChild(opt);
+                    }
+                    if (previous) promptSelect.value = previous;
+                }
+                renderPromptTabs(prompts);
+                promptListLoaded = true;
+            })()
+                .catch((e) => {
+                    promptListPromise = null;
+                    if (promptStatusText) promptStatusText.textContent = String(e);
+                });
+
+            return promptListPromise;
+        }
+
+        async function loadPromptContent(promptId) {
+            if (!promptEditor || !promptId) return;
+            const response = await fetch('/api/prompts/' + encodeURIComponent(promptId), { cache: 'no-store' });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !data || !data.ok) {
+                const msg = (data && data.error) ? data.error : `Failed to load prompt (HTTP ${response.status})`;
+                if (promptStatusText) promptStatusText.textContent = msg;
+                return;
+            }
+            promptLoadedId = promptId;
+            if (promptSelect) promptSelect.value = promptId;
+            promptEditor.value = (data.prompt && typeof data.prompt.content === 'string') ? data.prompt.content : '';
+            promptDirty = false;
+            if (promptStatusText) promptStatusText.textContent = `Loaded ${promptId}`;
+            updatePromptTabsActive();
+        }
+
+        async function savePromptContent() {
+            if (!promptLoadedId || !promptEditor) return;
+            if (btnPromptSave) btnPromptSave.disabled = true;
+            try {
+                const { response, data } = await apiPost('/api/prompts/' + encodeURIComponent(promptLoadedId), { content: promptEditor.value });
+                if (!response.ok || !data || !data.ok) {
+                    const msg = (data && data.error) ? data.error : `Failed to save (HTTP ${response.status})`;
+                    if (promptStatusText) promptStatusText.textContent = msg;
+                    return;
+                }
+                promptDirty = false;
+                if (promptStatusText) promptStatusText.textContent = `Saved ${promptLoadedId}`;
+            } finally {
+                if (btnPromptSave) btnPromptSave.disabled = false;
+            }
+        }
+
+        async function initIssue() {
+            if (btnInitIssue) btnInitIssue.disabled = true;
+            if (initStatusText) initStatusText.textContent = 'Running init-issue.sh...';
+            try {
+                const { response, data } = await apiPost('/api/init/issue', {
+                    issue: initIssueNumber ? initIssueNumber.value : '',
+                    design_doc: initDesignDoc ? initDesignDoc.value : '',
+                    repo: initRepo ? initRepo.value : '',
+                    branch: initBranch ? initBranch.value : '',
+                    force: initForce ? !!initForce.checked : false
+                });
+
+                if (!response.ok || !data || !data.ok) {
+                    const msg = (data && data.output) ? data.output : ((data && data.error) ? data.error : `Init failed (HTTP ${response.status})`);
+                    if (initStatusText) initStatusText.textContent = msg;
+                    return;
+                }
+
+                if (initStatusText) initStatusText.textContent = (data.output || 'Init complete.');
+            } catch (e) {
+                if (initStatusText) initStatusText.textContent = 'Init failed: ' + e;
+            } finally {
+                if (btnInitIssue) btnInitIssue.disabled = false;
+            }
+        }
+
+        if (btnRun) {
+            btnRun.addEventListener('click', async () => {
+                btnRun.disabled = true;
+                try {
+                    const runner = runRunner ? runRunner.value : 'auto';
+                    const maxIterations = runMaxIterations ? parseInt(runMaxIterations.value || '10', 10) : 10;
+
+                    const { response, data } = await apiPost('/api/run', {
+                        runner: runner,
+                        max_iterations: Number.isFinite(maxIterations) ? maxIterations : 10,
+                        output_mode: 'stream'
+                    });
+
+                    if (!response.ok) {
+                        const msg = (data && data.error) ? data.error : `Failed to start (HTTP ${response.status})`;
+                        alert(msg);
+                        return;
+                    }
+                } catch (e) {
+                    alert('Failed to start: ' + e);
+                } finally {
+                    btnRun.disabled = false;
+                }
+            });
+        }
+
+        if (btnStop) {
+            btnStop.addEventListener('click', async () => {
+                btnStop.disabled = true;
+                try {
+                    const { response, data } = await apiPost('/api/run/stop', {});
+                    if (!response.ok) {
+                        const msg = (data && data.error) ? data.error : `Failed to stop (HTTP ${response.status})`;
+                        alert(msg);
+                        return;
+                    }
+                } catch (e) {
+                    alert('Failed to stop: ' + e);
+                } finally {
+                    btnStop.disabled = false;
+                }
+            });
+        }
+
+        if (promptSelect) {
+            promptSelect.addEventListener('change', async () => {
+                const id = promptSelect.value;
+                await setCurrentPromptId(id, { confirmDiscard: true });
+            });
+        }
+
+        if (promptEditor) {
+            promptEditor.addEventListener('input', () => {
+                promptDirty = true;
+                if (promptStatusText && promptLoadedId) {
+                    promptStatusText.textContent = `Editing ${promptLoadedId} (unsaved)`;
+                }
+            });
+        }
+
+        if (btnPromptReload) {
+            btnPromptReload.addEventListener('click', async () => {
+                await reloadPrompt();
+            });
+        }
+
+        if (btnPromptSave) {
+            btnPromptSave.addEventListener('click', async () => {
+                await savePromptContent();
+            });
+        }
+
+        if (btnInitIssue) {
+            btnInitIssue.addEventListener('click', async () => {
+                await initIssue();
+            });
         }
         
         function updatePhaseTimeline(currentPhase) {
@@ -1119,6 +1877,7 @@
                 'design': 'Design',
                 'implement': 'Implement',
                 'review': 'Review',
+                'ci': 'CI',
                 'coverage': 'Coverage',
                 'coverage-fix': 'Fix Coverage',
                 'sonar': 'Sonar',
@@ -1129,22 +1888,58 @@
         
         function updateStatusChecks(status) {
             const checks = [
-                { label: 'Implemented', value: status.implemented },
+                { label: 'Implemented', value: status.implemented, toggleKey: 'implemented' },
                 { label: 'PR Created', value: status.pr_created },
                 { label: 'PR Ready', value: status.pr_description_ready },
-                { label: 'Review Clean', value: status.review_clean },
-                { label: 'Coverage', value: status.coverage_clean },
-                { label: 'Sonar', value: status.sonar_clean }
+                { label: 'Review Clean', value: status.review_clean, toggleKey: 'reviewClean' },
+                { label: 'CI', value: status.ci_clean, toggleKey: 'ciClean' },
+                { label: 'Coverage', value: status.coverage_clean, toggleKey: 'coverageClean' },
+                { label: 'Sonar', value: status.sonar_clean, toggleKey: 'sonarClean' }
             ];
             
-            statusChecks.innerHTML = checks.map(check => `
-                <div class="status-check">
-                    <div class="check-icon ${check.value ? 'pass' : 'fail'}">
-                        ${check.value ? '&#10003;' : ''}
-                    </div>
-                    <span>${check.label}</span>
-                </div>
-            `).join('');
+            statusChecks.innerHTML = checks.map(check => {
+                const tag = check.toggleKey ? 'button' : 'div';
+                const className = `status-check${check.toggleKey ? ' toggleable' : ''}`;
+                const disabled = check.toggleKey && runIsRunning ? ' disabled' : '';
+                const attrs = check.toggleKey
+                    ? ` type="button" data-status-key="${check.toggleKey}" data-status-value="${check.value ? '1' : '0'}"${disabled} title="Click to toggle"`
+                    : '';
+
+                return `
+                    <${tag} class="${className}"${attrs}>
+                        <div class="check-icon ${check.value ? 'pass' : 'fail'}">
+                            ${check.value ? '&#10003;' : ''}
+                        </div>
+                        <span>${check.label}</span>
+                    </${tag}>
+                `;
+            }).join('');
+
+            const toggleButtons = Array.from(statusChecks.querySelectorAll('button.status-check.toggleable'));
+            for (const btn of toggleButtons) {
+                btn.addEventListener('click', async () => {
+                    const key = btn.getAttribute('data-status-key');
+                    const current = btn.getAttribute('data-status-value') === '1';
+                    const next = !current;
+
+                    btn.disabled = true;
+                    try {
+                        await updateIssueStatus({ [key]: next });
+
+                        btn.setAttribute('data-status-value', next ? '1' : '0');
+                        const icon = btn.querySelector('.check-icon');
+                        if (icon) {
+                            icon.classList.toggle('pass', next);
+                            icon.classList.toggle('fail', !next);
+                            icon.innerHTML = next ? '&#10003;' : '';
+                        }
+                    } catch (e) {
+                        alert((e && e.message) ? e.message : String(e));
+                    } finally {
+                        btn.disabled = runIsRunning;
+                    }
+                });
+            }
         }
         
         // Log handling
@@ -1264,7 +2059,7 @@
                 newLines.push(line);
             }
 
-            if (!searchFilter) {
+            if (!searchFilter && !hideDiffs) {
                 appendLogLinesToDom(newLines);
                 return;
             }
@@ -1277,11 +2072,93 @@
 
             diffState.inDiff = false;
             const rendered = [];
+
+            const hiddenDiff = {
+                inDiff: false,
+                placeholderEmitted: false,
+                pendingFileUpdate: false,
+            };
+
+            function parseDiffHeaderPath(line) {
+                const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+                if (!match) return null;
+                return match[1] || null;
+            }
+
+            function isDiffStartLine(line) {
+                return line.startsWith('diff --git ') || line.startsWith('--- a/') || line.startsWith('+++ b/');
+            }
+
+            function isDiffContinuationLine(line) {
+                return (
+                    line === '' ||
+                    line.startsWith('index ') ||
+                    line.startsWith('@@ ') ||
+                    line.startsWith('--- ') ||
+                    line.startsWith('+++ ') ||
+                    line.startsWith('+') ||
+                    line.startsWith('-') ||
+                    line.startsWith(' ') ||
+                    line.startsWith('\\')
+                );
+            }
+
+            function pushRendered(line, className) {
+                if (filterLower && !line.toLowerCase().includes(filterLower)) return;
+                rendered.push({ line, className });
+            }
+
             for (const line of allLogs) {
-                const className = getLogClassForLine(line);
-                if (!filterLower || line.toLowerCase().includes(filterLower)) {
-                    rendered.push({ line, className });
+                if (hideDiffs) {
+                    if (/^file update:?$/i.test(line)) {
+                        hiddenDiff.inDiff = true;
+                        hiddenDiff.placeholderEmitted = false;
+                        hiddenDiff.pendingFileUpdate = true;
+                        continue;
+                    }
+
+                    if (hiddenDiff.inDiff) {
+                        if (line.startsWith('diff --git ')) {
+                            if (!hiddenDiff.placeholderEmitted) {
+                                const path = parseDiffHeaderPath(line);
+                                const placeholder = path ? `file update (diff hidden): ${path}` : 'file update (diff hidden)';
+                                pushRendered(placeholder, 'section');
+                                hiddenDiff.placeholderEmitted = true;
+                            }
+                            continue;
+                        }
+
+                        if (isDiffStartLine(line) || isDiffContinuationLine(line)) {
+                            continue;
+                        }
+
+                        if (hiddenDiff.pendingFileUpdate && !hiddenDiff.placeholderEmitted) {
+                            pushRendered('file update (diff hidden)', 'section');
+                        }
+
+                        hiddenDiff.inDiff = false;
+                        hiddenDiff.placeholderEmitted = false;
+                        hiddenDiff.pendingFileUpdate = false;
+                        // fall through to handle the current line normally
+                    }
+
+                    if (isDiffStartLine(line)) {
+                        const path = line.startsWith('diff --git ') ? parseDiffHeaderPath(line) : null;
+                        const placeholder = path ? `diff (hidden): ${path}` : 'diff (hidden)';
+                        pushRendered(placeholder, 'section');
+                        hiddenDiff.inDiff = true;
+                        hiddenDiff.placeholderEmitted = true;
+                        hiddenDiff.pendingFileUpdate = false;
+                        continue;
+                    }
                 }
+
+                const className = getLogClassForLine(line);
+                pushRendered(line, className);
+            }
+
+            if (hideDiffs && hiddenDiff.inDiff && hiddenDiff.pendingFileUpdate && !hiddenDiff.placeholderEmitted) {
+                pushRendered('file update (diff hidden)', 'section');
             }
 
             updateLogCount(rendered.length);
@@ -1328,6 +2205,17 @@
             allLogs = [];
             renderLogs();
         });
+
+        if (btnHideDiffs) btnHideDiffs.addEventListener('click', () => {
+            hideDiffs = !hideDiffs;
+            try {
+                localStorage.setItem('ralph_viewer_hide_diffs', hideDiffs ? '1' : '0');
+            } catch (e) {
+                // ignore
+            }
+            updateHideDiffsButton();
+            scheduleRender();
+        });
         
         searchInput.addEventListener('input', (e) => {
             searchFilter = e.target.value;
@@ -1338,13 +2226,21 @@
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'f') {
                 e.preventDefault();
-                searchInput.focus();
+                if (mainTab === 'prompts' && promptEditor) {
+                    promptEditor.focus();
+                } else if (searchInput) {
+                    searchInput.focus();
+                }
             }
             if (e.key === 'Escape') {
-                searchInput.value = '';
-                searchFilter = '';
-                renderLogs();
-                searchInput.blur();
+                if (mainTab === 'logs' && searchInput) {
+                    searchInput.value = '';
+                    searchFilter = '';
+                    renderLogs();
+                    searchInput.blur();
+                } else if (promptEditor) {
+                    promptEditor.blur();
+                }
             }
             if (e.key === 'End') {
                 logContent.scrollTop = logContent.scrollHeight;
@@ -1361,6 +2257,7 @@
         });
         
         // Start
+        loadPromptList();
         connect();
     </script>
 </body>

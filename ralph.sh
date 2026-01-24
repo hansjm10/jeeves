@@ -4,6 +4,14 @@
 
 set -e
 
+cleanup_tmp_prompt() {
+  if [ -n "${TMP_PROMPT_FILE:-}" ] && [ -f "${TMP_PROMPT_FILE:-}" ]; then
+    rm -f "$TMP_PROMPT_FILE" 2>/dev/null || true
+  fi
+}
+
+trap cleanup_tmp_prompt EXIT
+
 print_usage() {
     cat <<EOF
 Usage: $0 [OPTIONS] [max_iterations]
@@ -105,10 +113,16 @@ PROMPT_PRD_FILE="$SCRIPT_DIR/prompt.md"
 PROMPT_ISSUE_DESIGN_FILE="$SCRIPT_DIR/prompt.issue.design.md"
 PROMPT_ISSUE_IMPLEMENT_FILE="$SCRIPT_DIR/prompt.issue.implement.md"
 PROMPT_ISSUE_REVIEW_FILE="$SCRIPT_DIR/prompt.issue.review.md"
+PROMPT_ISSUE_CI_FILE="$SCRIPT_DIR/prompt.issue.ci.md"
 PROMPT_ISSUE_COVERAGE_FILE="$SCRIPT_DIR/prompt.issue.coverage.md"
 PROMPT_ISSUE_COVERAGE_FIX_FILE="$SCRIPT_DIR/prompt.issue.coverage.fix.md"
 PROMPT_ISSUE_SONAR_FILE="$SCRIPT_DIR/prompt.issue.sonar.md"
 PROMPT_ISSUE_QUESTIONS_FILE="$SCRIPT_DIR/prompt.issue.questions.md"
+
+# Optional: append extra instructions to the selected prompt each iteration.
+# Useful for tooling (e.g. the viewer) that wants to inject per-run guidance without
+# modifying the prompt templates in this directory.
+PROMPT_APPEND_FILE="${RALPH_PROMPT_APPEND_FILE:-}"
 
 # Select mode + config file
 MODE="${RALPH_MODE:-auto}"
@@ -119,6 +133,7 @@ ISSUE_STATUS_IMPLEMENTED="false"
 ISSUE_STATUS_PR_CREATED="false"
 ISSUE_STATUS_PR_DESCRIPTION_READY="false"
 ISSUE_STATUS_REVIEW_CLEAN="false"
+ISSUE_STATUS_CI_CLEAN="false"
 ISSUE_STATUS_COVERAGE_CLEAN="false"
 ISSUE_STATUS_COVERAGE_NEEDS_FIX="false"
 ISSUE_STATUS_SONAR_CLEAN="false"
@@ -181,7 +196,7 @@ pr_body_meets_requirements() {
 }
 
 select_issue_phase() {
-  local implemented prCreated prDescriptionReady prNumber prUrl reviewClean coverageClean coverageNeedsFix sonarClean hasOpenQuestions hasCoverageFailures
+  local implemented prCreated prDescriptionReady prNumber prUrl reviewClean ciClean coverageClean coverageNeedsFix sonarClean hasOpenQuestions hasCoverageFailures
   local designDocPath designDocResolved hasDesignDoc
 
   implemented=$(jq -r '.status.implemented // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
@@ -190,6 +205,7 @@ select_issue_phase() {
   prNumber=$(jq -r '.pullRequest.number // empty' "$ISSUE_FILE" 2>/dev/null || echo "")
   prUrl=$(jq -r '.pullRequest.url // empty' "$ISSUE_FILE" 2>/dev/null || echo "")
   reviewClean=$(jq -r '.status.reviewClean // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
+  ciClean=$(jq -r '.status.ciClean // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
   coverageClean=$(jq -r '.status.coverageClean // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
   coverageNeedsFix=$(jq -r '.status.coverageNeedsFix // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
   sonarClean=$(jq -r '.status.sonarClean // false' "$ISSUE_FILE" 2>/dev/null || echo "false")
@@ -335,6 +351,7 @@ select_issue_phase() {
   ISSUE_STATUS_PR_CREATED="$prCreated"
   ISSUE_STATUS_PR_DESCRIPTION_READY="$prDescriptionReady"
   ISSUE_STATUS_REVIEW_CLEAN="$reviewClean"
+  ISSUE_STATUS_CI_CLEAN="$ciClean"
   ISSUE_STATUS_COVERAGE_CLEAN="$coverageClean"
   ISSUE_STATUS_COVERAGE_NEEDS_FIX="$coverageNeedsFix"
   ISSUE_STATUS_SONAR_CLEAN="$sonarClean"
@@ -372,6 +389,9 @@ select_issue_phase() {
   elif [ "$reviewClean" != "true" ]; then
     ISSUE_PHASE="review"
     PROMPT_FILE="$PROMPT_ISSUE_REVIEW_FILE"
+  elif [ "$ciClean" != "true" ]; then
+    ISSUE_PHASE="ci"
+    PROMPT_FILE="$PROMPT_ISSUE_CI_FILE"
   elif [ "$coverageNeedsFix" = "true" ]; then
     ISSUE_PHASE="coverage-fix"
     PROMPT_FILE="$PROMPT_ISSUE_COVERAGE_FIX_FILE"
@@ -524,9 +544,9 @@ else
   elif [ -n "$ISSUE_PR_URL" ] && [ "$ISSUE_PR_URL" != "null" ]; then
     echo "       PR: $ISSUE_PR_URL"
   else
-    echo "       PR: <none>"
+  echo "       PR: <none>"
   fi
-  echo "       Status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
+  echo "       Status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, ciClean=$ISSUE_STATUS_CI_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
   echo "       Phase: $ISSUE_PHASE"
 fi
 echo ""
@@ -534,7 +554,7 @@ echo ""
 echo "Starting Ralph - Max iterations: $MAX_ITERATIONS"
 echo ""
 
-LAST_PRINTED_PROMPT_FILE=""
+LAST_PRINTED_PROMPT_KEY=""
 
 # Fast exit if already complete
 if [ "$MODE" = "prd" ]; then
@@ -548,7 +568,7 @@ if [ "$MODE" = "prd" ]; then
   fi
 else
   select_issue_phase
-  if [ "$ISSUE_STATUS_IMPLEMENTED" = "true" ] && [ "$ISSUE_STATUS_PR_CREATED" = "true" ] && [ "$ISSUE_STATUS_PR_DESCRIPTION_READY" = "true" ] && [ "$ISSUE_STATUS_REVIEW_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_NEEDS_FIX" != "true" ] && [ "$ISSUE_STATUS_SONAR_CLEAN" = "true" ]; then
+  if [ "$ISSUE_STATUS_IMPLEMENTED" = "true" ] && [ "$ISSUE_STATUS_PR_CREATED" = "true" ] && [ "$ISSUE_STATUS_PR_DESCRIPTION_READY" = "true" ] && [ "$ISSUE_STATUS_REVIEW_CLEAN" = "true" ] && [ "$ISSUE_STATUS_CI_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_NEEDS_FIX" != "true" ] && [ "$ISSUE_STATUS_SONAR_CLEAN" = "true" ]; then
     echo "╔═══════════════════════════════════════════════════════╗"
     echo "║           Ralph completed all tasks!                  ║"
     echo "╚═══════════════════════════════════════════════════════╝"
@@ -571,7 +591,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   else
     select_issue_phase
     echo "[DEBUG] Phase: $ISSUE_PHASE"
-    echo "[DEBUG] Issue status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
+    echo "[DEBUG] Issue status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, ciClean=$ISSUE_STATUS_CI_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
   fi
 
   echo "[DEBUG] Prompt file: $PROMPT_FILE"
@@ -580,13 +600,36 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     exit 1
   fi
 
-  if [ "$OUTPUT_MODE" != "stream" ] && [ "$PRINT_PROMPT" = "1" ] && [ "$PROMPT_FILE" != "$LAST_PRINTED_PROMPT_FILE" ]; then
+  # Optionally append extra instructions to the prompt (per-iteration).
+  PROMPT_FILE_TO_USE="$PROMPT_FILE"
+  PROMPT_KEY="$PROMPT_FILE"
+  TMP_PROMPT_FILE=""
+
+  if [ -n "$PROMPT_APPEND_FILE" ]; then
+    APPEND_PATH="$PROMPT_APPEND_FILE"
+    if [ ! -f "$APPEND_PATH" ] && [[ "$APPEND_PATH" != /* ]]; then
+      if [ -f "$WORK_DIR/$APPEND_PATH" ]; then
+        APPEND_PATH="$WORK_DIR/$APPEND_PATH"
+      fi
+    fi
+
+    if [ -s "$APPEND_PATH" ]; then
+      PROMPT_KEY="$PROMPT_FILE|$APPEND_PATH"
+      TMP_PROMPT_FILE="$(mktemp "$RALPH_STATE_DIR/.prompt.combined.XXXXXX")"
+      cat "$PROMPT_FILE" > "$TMP_PROMPT_FILE"
+      printf '\n' >> "$TMP_PROMPT_FILE"
+      cat "$APPEND_PATH" >> "$TMP_PROMPT_FILE"
+      PROMPT_FILE_TO_USE="$TMP_PROMPT_FILE"
+    fi
+  fi
+
+  if [ "$OUTPUT_MODE" != "stream" ] && [ "$PRINT_PROMPT" = "1" ] && [ "$PROMPT_KEY" != "$LAST_PRINTED_PROMPT_KEY" ]; then
     echo ""
-    echo "----- Prompt ($PROMPT_FILE) -----"
-    cat "$PROMPT_FILE"
+    echo "----- Prompt ($PROMPT_FILE_TO_USE) -----"
+    cat "$PROMPT_FILE_TO_USE"
     echo "----- End Prompt -----"
     echo ""
-    LAST_PRINTED_PROMPT_FILE="$PROMPT_FILE"
+    LAST_PRINTED_PROMPT_KEY="$PROMPT_KEY"
   fi
 
   # Run the agent with the ralph prompt
@@ -601,15 +644,15 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
       : > "$LAST_RUN_LOG_FILE"
       if [ "$CODEX_DANGEROUS" = "1" ]; then
-        OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+        OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
       else
-        OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --sandbox "$CODEX_SANDBOX" -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+        OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --sandbox "$CODEX_SANDBOX" -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
         if echo "$OUTPUT" | grep -qi "error running landlock"; then
           echo ""
           echo "[WARN] Codex sandbox failed (landlock). Retrying without sandbox."
           echo "[WARN] To bypass the sandbox next time, set: RALPH_CODEX_DANGEROUS=1"
           echo ""
-          OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+          OUTPUT=$(codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
         fi
       fi
     else
@@ -617,9 +660,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       : > "$LAST_RUN_LOG_FILE"
 
       if [ "$CODEX_DANGEROUS" = "1" ]; then
-        codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" > "$LAST_RUN_LOG_FILE" 2>&1 || true
+        codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" > "$LAST_RUN_LOG_FILE" 2>&1 || true
       else
-        codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --sandbox "$CODEX_SANDBOX" -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" > "$LAST_RUN_LOG_FILE" 2>&1 || true
+        codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --sandbox "$CODEX_SANDBOX" -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" > "$LAST_RUN_LOG_FILE" 2>&1 || true
         if grep -qi "error running landlock" "$LAST_RUN_LOG_FILE"; then
           echo ""
           echo "[WARN] Codex sandbox failed (landlock). Retrying without sandbox."
@@ -628,7 +671,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 
           echo "" >> "$LAST_RUN_LOG_FILE"
           echo "[WARN] Codex sandbox failed (landlock). Retrying without sandbox." >> "$LAST_RUN_LOG_FILE"
-          codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" >> "$LAST_RUN_LOG_FILE" 2>&1 || true
+          codex --ask-for-approval "$CODEX_APPROVAL_POLICY" exec --dangerously-bypass-approvals-and-sandbox -C "$WORK_DIR" --color never --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE_TO_USE" >> "$LAST_RUN_LOG_FILE" 2>&1 || true
         fi
       fi
 
@@ -656,17 +699,17 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
       : > "$LAST_RUN_LOG_FILE"
       if [ -n "$SANDBOX_VALUE" ]; then
-        OUTPUT=$(IS_SANDBOX="$SANDBOX_VALUE" "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+        OUTPUT=$(IS_SANDBOX="$SANDBOX_VALUE" "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE_TO_USE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
       else
-        OUTPUT=$("${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+        OUTPUT=$("${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE_TO_USE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
       fi
     else
       rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
       : > "$LAST_RUN_LOG_FILE"
       if [ -n "$SANDBOX_VALUE" ]; then
-        IS_SANDBOX="$SANDBOX_VALUE" "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE")" > "$LAST_RUN_LOG_FILE" 2>&1 || true
+        IS_SANDBOX="$SANDBOX_VALUE" "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE_TO_USE")" > "$LAST_RUN_LOG_FILE" 2>&1 || true
       else
-        "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE")" > "$LAST_RUN_LOG_FILE" 2>&1 || true
+        "${CLAUDE_ARGS[@]}" "$(cat "$PROMPT_FILE_TO_USE")" > "$LAST_RUN_LOG_FILE" 2>&1 || true
       fi
       OUTPUT=$(cat "$LAST_RUN_LOG_FILE" 2>/dev/null || true)
     fi
@@ -677,16 +720,21 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       # In stream mode, write to both log file AND stderr for real-time viewing
       rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
       : > "$LAST_RUN_LOG_FILE"
-      OUTPUT=$(cd "$WORK_DIR" && $OPENCODE_CMD run "$(cat "$PROMPT_FILE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
+      OUTPUT=$(cd "$WORK_DIR" && $OPENCODE_CMD run "$(cat "$PROMPT_FILE_TO_USE")" 2>&1 | tee "$LAST_RUN_LOG_FILE" >(cat >&2)) || true
     else
       rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
       : > "$LAST_RUN_LOG_FILE"
-      (cd "$WORK_DIR" && $OPENCODE_CMD run "$(cat "$PROMPT_FILE")" > "$LAST_RUN_LOG_FILE" 2>&1) || true
+      (cd "$WORK_DIR" && $OPENCODE_CMD run "$(cat "$PROMPT_FILE_TO_USE")" > "$LAST_RUN_LOG_FILE" 2>&1) || true
       OUTPUT=$(cat "$LAST_RUN_LOG_FILE" 2>/dev/null || true)
     fi
   else
     echo "[ERROR] Unsupported runner: $RUNNER"
     exit 1
+  fi
+
+  # Clean up any temp prompt file created for this iteration.
+  if [ -n "$TMP_PROMPT_FILE" ] && [ -f "$TMP_PROMPT_FILE" ]; then
+    rm -f "$TMP_PROMPT_FILE" 2>/dev/null || true
   fi
 
   END_TIME=$(date +%s)
@@ -737,9 +785,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     fi
   else
     select_issue_phase
-    echo "[DEBUG] Issue status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
+    echo "[DEBUG] Issue status: implemented=$ISSUE_STATUS_IMPLEMENTED, prCreated=$ISSUE_STATUS_PR_CREATED, prDescriptionReady=$ISSUE_STATUS_PR_DESCRIPTION_READY, reviewClean=$ISSUE_STATUS_REVIEW_CLEAN, ciClean=$ISSUE_STATUS_CI_CLEAN, coverageClean=$ISSUE_STATUS_COVERAGE_CLEAN, coverageNeedsFix=$ISSUE_STATUS_COVERAGE_NEEDS_FIX, sonarClean=$ISSUE_STATUS_SONAR_CLEAN"
 
-    if [ "$ISSUE_STATUS_IMPLEMENTED" = "true" ] && [ "$ISSUE_STATUS_PR_CREATED" = "true" ] && [ "$ISSUE_STATUS_PR_DESCRIPTION_READY" = "true" ] && [ "$ISSUE_STATUS_REVIEW_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_NEEDS_FIX" != "true" ] && [ "$ISSUE_STATUS_SONAR_CLEAN" = "true" ]; then
+    if [ "$ISSUE_STATUS_IMPLEMENTED" = "true" ] && [ "$ISSUE_STATUS_PR_CREATED" = "true" ] && [ "$ISSUE_STATUS_PR_DESCRIPTION_READY" = "true" ] && [ "$ISSUE_STATUS_REVIEW_CLEAN" = "true" ] && [ "$ISSUE_STATUS_CI_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_CLEAN" = "true" ] && [ "$ISSUE_STATUS_COVERAGE_NEEDS_FIX" != "true" ] && [ "$ISSUE_STATUS_SONAR_CLEAN" = "true" ]; then
       echo ""
       echo "╔═══════════════════════════════════════════════════════╗"
       echo "║           Ralph completed all tasks!                  ║"

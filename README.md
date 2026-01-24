@@ -59,6 +59,7 @@ Ralph supports two modes:
    - Draft design doc (runs when `designDocPath` is missing or points to a non-existent file; uses `docs/design-document-template.md` and updates `designDocPath`)
    - Implement + open PR (until `implemented=true`, `prCreated=true`, and `prDescriptionReady=true`; PR body must include a change summary + `Fixes #<issueNumber>`)
    - Review loop (until `reviewClean=true`; requires multiple clean passes and fixes all `P0–P3` issues)
+   - CI loop (until `ciClean=true`; verifies GitHub CI checks are green for the PR)
    - Coverage/test loop (until `coverageClean=true`; adds edge-case tests and improves coverage without changing production code; may trigger a fix loop when tests expose bugs)
    - Open questions loop (runs whenever `ralph/open-questions.md` exists and is non-empty)
    - Sonar loop (until `sonarClean=true`)

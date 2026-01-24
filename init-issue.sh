@@ -146,6 +146,8 @@ jq -n \
       reviewClean: false,
       reviewPasses: 0,
       reviewCleanPasses: 0,
+      ciClean: false,
+      ciPasses: 0,
       coverageClean: false,
       coverageNeedsFix: false,
       coveragePasses: 0,

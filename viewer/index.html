@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ralph Viewer</title>
+    <title>Jeeves Viewer</title>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -862,7 +862,7 @@
         <div class="header-content">
             <div class="brand">
                 <div class="brand-icon">R</div>
-                <span class="brand-text">Ralph Viewer</span>
+                <span class="brand-text">Jeeves Viewer</span>
             </div>
             <div class="header-status">
                 <div class="iteration-badge" id="iterationBadge" style="display: none;">
@@ -902,6 +902,13 @@
                     <div class="control-row">
                         <div class="control-label">Max iterations</div>
                         <input class="control-input" id="runMaxIterations" type="number" min="1" max="10000" value="10" />
+                    </div>
+                    <div class="control-row">
+                        <div class="control-label">Review passes required</div>
+                        <input class="control-input" id="configReviewPasses" type="number" min="1" max="10" value="3" />
+                    </div>
+                    <div class="control-row">
+                        <label class="control-label"><input type="checkbox" id="configAutoSkipTaskReviews" /> Auto-skip low-risk task reviews</label>
                     </div>
                     <div class="control-actions">
                         <button class="log-btn active" id="btnRun">Run</button>
@@ -1173,6 +1180,8 @@
         const checksCard = document.getElementById('checksCard');
         const runRunner = document.getElementById('runRunner');
         const runMaxIterations = document.getElementById('runMaxIterations');
+        const configReviewPasses = document.getElementById('configReviewPasses');
+        const configAutoSkipTaskReviews = document.getElementById('configAutoSkipTaskReviews');
         const btnRun = document.getElementById('btnRun');
         const btnStop = document.getElementById('btnStop');
         const runStatusText = document.getElementById('runStatusText');
@@ -1210,7 +1219,7 @@
         }
 
         try {
-            hideDiffs = localStorage.getItem('ralph_viewer_hide_diffs') === '1';
+            hideDiffs = localStorage.getItem('jeeves_viewer_hide_diffs') === '1';
         } catch (e) {
             // ignore
         }
@@ -1219,6 +1228,9 @@
         // Phase definitions
         const phases = [
             { id: 'design', name: 'Design', desc: 'Create design document' },
+            { id: 'task-implement', name: 'Task Implement', desc: 'Implement current task' },
+            { id: 'task-spec-review', name: 'Task Spec Review', desc: 'Check task spec compliance' },
+            { id: 'task-quality-review', name: 'Task Quality Review', desc: 'Review task code quality' },
             { id: 'implement', name: 'Implement', desc: 'Build and create PR' },
             { id: 'questions', name: 'Questions', desc: 'Resolve open questions' },
             { id: 'review', name: 'Review', desc: 'Address PR feedback' },
@@ -1228,7 +1240,7 @@
             { id: 'complete', name: 'Complete', desc: 'All checks passed' }
         ];
         
-        const phaseOrder = ['design', 'implement', 'questions', 'review', 'ci', 'coverage-fix', 'coverage', 'sonar', 'complete'];
+        const phaseOrder = ['design', 'task-implement', 'task-spec-review', 'task-quality-review', 'implement', 'questions', 'review', 'ci', 'coverage-fix', 'coverage', 'sonar', 'complete'];
         
         function getPhaseIndex(phase) {
             // Normalize coverage-fix to coverage
@@ -1246,7 +1258,7 @@
             if (sidebarMonitorSection) sidebarMonitorSection.style.display = sidebarTab === 'monitor' ? 'block' : 'none';
 
             try {
-                localStorage.setItem('ralph_viewer_sidebar_tab', sidebarTab);
+                localStorage.setItem('jeeves_viewer_sidebar_tab', sidebarTab);
             } catch (e) {
                 // ignore
             }
@@ -1256,7 +1268,7 @@
         if (sidebarTabMonitor) sidebarTabMonitor.addEventListener('click', () => setSidebarTab('monitor'));
 
         try {
-            const savedSidebar = localStorage.getItem('ralph_viewer_sidebar_tab');
+            const savedSidebar = localStorage.getItem('jeeves_viewer_sidebar_tab');
             setSidebarTab(savedSidebar || 'setup');
         } catch (e) {
             setSidebarTab('setup');
@@ -1277,7 +1289,7 @@
             if (mainTab === 'prompts' && promptEditor) promptEditor.focus();
 
             try {
-                localStorage.setItem('ralph_viewer_main_tab', mainTab);
+                localStorage.setItem('jeeves_viewer_main_tab', mainTab);
             } catch (e) {
                 // ignore
             }
@@ -1287,7 +1299,7 @@
         if (tabPrompts) tabPrompts.addEventListener('click', () => setMainTab('prompts'));
 
         try {
-            const savedTab = localStorage.getItem('ralph_viewer_main_tab');
+            const savedTab = localStorage.getItem('jeeves_viewer_main_tab');
             setMainTab(savedTab || 'logs');
         } catch (e) {
             setMainTab('logs');
@@ -1377,7 +1389,7 @@
                 setStatusBadge('complete', 'Complete');
                 // Notify on completion (only once)
                 if (lastPhase && lastPhase !== 'complete') {
-                    showNotification('Ralph Complete!', 'All workflow phases have finished successfully.');
+                    showNotification('Jeeves Complete!', 'All workflow phases have finished successfully.');
                 }
             } else {
                 setStatusBadge('idle', 'Ready');
@@ -1388,7 +1400,7 @@
             
             // Update phase timeline
             if (mode === 'issue') {
-                updatePhaseTimeline(status.phase || 'design');
+                updatePhaseTimeline(status.phase || 'design', status.current_task, status.tasks_total, status.tasks_done);
                 checksCard.style.display = 'block';
                 updateStatusChecks(status);
             } else if (mode === 'prd') {
@@ -1420,6 +1432,15 @@
 
                 if (!promptListLoaded) loadPromptList().then(() => chooseAndLoad(activePrompt));
                 else chooseAndLoad(activePrompt);
+            }
+
+            // Prefill config from current state (only when at defaults).
+            const issueConfig = config.config || {};
+            if (configReviewPasses && configReviewPasses.value === '3' && issueConfig.reviewCleanPassesRequired !== undefined) {
+                configReviewPasses.value = String(issueConfig.reviewCleanPassesRequired);
+            }
+            if (configAutoSkipTaskReviews && !configAutoSkipTaskReviews.checked && issueConfig.autoSkipTaskReviews === true) {
+                configAutoSkipTaskReviews.checked = true;
             }
 
             // Prefill init form from current state (only when empty).
@@ -1528,6 +1549,9 @@
             const phase = (state.status && state.status.phase) ? state.status.phase : 'implement';
             const map = {
                 'design': 'prompt.issue.design.md',
+                'task-implement': 'prompt.issue.task.implement.md',
+                'task-spec-review': 'prompt.issue.task.spec-review.md',
+                'task-quality-review': 'prompt.issue.task.quality-review.md',
                 'implement': 'prompt.issue.implement.md',
                 'review': 'prompt.issue.review.md',
                 'questions': 'prompt.issue.questions.md',
@@ -1702,11 +1726,22 @@
                 try {
                     const runner = runRunner ? runRunner.value : 'auto';
                     const maxIterations = runMaxIterations ? parseInt(runMaxIterations.value || '10', 10) : 10;
+                    const reviewPasses = configReviewPasses ? parseInt(configReviewPasses.value || '3', 10) : 3;
+                    const autoSkipTaskReviews = configAutoSkipTaskReviews ? configAutoSkipTaskReviews.checked : false;
+
+                    const envOverrides = {};
+                    if (Number.isFinite(reviewPasses) && reviewPasses >= 1) {
+                        envOverrides['JEEVES_REVIEW_CLEAN_PASSES_REQUIRED'] = String(reviewPasses);
+                    }
+                    if (autoSkipTaskReviews) {
+                        envOverrides['JEEVES_AUTO_SKIP_TASK_REVIEWS'] = 'true';
+                    }
 
                     const { response, data } = await apiPost('/api/run', {
                         runner: runner,
                         max_iterations: Number.isFinite(maxIterations) ? maxIterations : 10,
-                        output_mode: 'stream'
+                        output_mode: 'stream',
+                        env: envOverrides
                     });
 
                     if (!response.ok) {
@@ -1774,14 +1809,23 @@
             });
         }
         
-        function updatePhaseTimeline(currentPhase) {
+        function updatePhaseTimeline(currentPhase, currentTask, tasksTotal, tasksDone) {
             const currentIndex = getPhaseIndex(currentPhase);
-            
+
+            // Build task description for task phases
+            const isTaskPhase = (phase) => ['task-implement', 'task-spec-review', 'task-quality-review'].includes(phase);
+            const getTaskDesc = (phase) => {
+                if (!isTaskPhase(phase) || !currentTask) return null;
+                const progress = tasksTotal > 0 ? ` (${tasksDone}/${tasksTotal} done)` : '';
+                const title = currentTask.title || currentTask.id || 'Unknown';
+                return `Task ${currentTask.index}: ${escapeHtml(title)}${progress}`;
+            };
+
             phaseTimeline.innerHTML = phases.map((phase, index) => {
                 const phaseIdx = getPhaseIndex(phase.id);
                 let stateClass = '';
                 let icon = '';
-                
+
                 if (phaseIdx < currentIndex || currentPhase === 'complete') {
                     stateClass = 'complete';
                     icon = '&#10003;';
@@ -1789,13 +1833,22 @@
                     stateClass = 'active';
                     icon = '&#9679;';
                 }
-                
+
+                // Determine description
+                let desc = phase.desc;
+                if (currentPhase === 'coverage-fix' && phase.id === 'coverage') {
+                    desc = 'Fixing test failures';
+                } else if (phase.id === currentPhase && isTaskPhase(phase.id)) {
+                    const taskDesc = getTaskDesc(phase.id);
+                    if (taskDesc) desc = taskDesc;
+                }
+
                 return `
                     <div class="phase-item ${stateClass}">
                         <div class="phase-dot">${icon}</div>
                         <div class="phase-content">
                             <div class="phase-name">${phase.name}</div>
-                            <div class="phase-desc">${currentPhase === 'coverage-fix' && phase.id === 'coverage' ? 'Fixing test failures' : phase.desc}</div>
+                            <div class="phase-desc">${desc}</div>
                         </div>
                     </div>
                 `;
@@ -1875,6 +1928,9 @@
         function formatPhase(phase) {
             const names = {
                 'design': 'Design',
+                'task-implement': 'Task Implement',
+                'task-spec-review': 'Task Spec Review',
+                'task-quality-review': 'Task Quality Review',
                 'implement': 'Implement',
                 'review': 'Review',
                 'ci': 'CI',
@@ -2014,7 +2070,7 @@
             if (/\[WARN\]|Warning:|warn:/i.test(line)) return 'warn';
             if (/\[INFO\]/i.test(line)) return 'info';
             if (/\[DEBUG\]/i.test(line)) return 'debug';
-            if (/Ralph Iteration \d+ of \d+/i.test(line)) return 'iteration';
+            if (/Jeeves Iteration \d+ of \d+/i.test(line)) return 'iteration';
             if (/completed|success|passed|✓|✔/i.test(line)) return 'success';
             return '';
         }
@@ -2209,7 +2265,7 @@
         if (btnHideDiffs) btnHideDiffs.addEventListener('click', () => {
             hideDiffs = !hideDiffs;
             try {
-                localStorage.setItem('ralph_viewer_hide_diffs', hideDiffs ? '1' : '0');
+                localStorage.setItem('jeeves_viewer_hide_diffs', hideDiffs ? '1' : '0');
             } catch (e) {
                 // ignore
             }

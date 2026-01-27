@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ralph Real-time Viewer - A beautiful web dashboard for monitoring Ralph agent runs
+Jeeves Real-time Viewer - A beautiful web dashboard for monitoring Jeeves agent runs
 
 Features:
 - Real-time log streaming via SSE with file watching
@@ -33,8 +33,8 @@ import select
 import subprocess
 
 
-class RalphPromptManager:
-    """Read/write Ralph prompt templates stored alongside ralph.sh."""
+class JeevesPromptManager:
+    """Read/write Jeeves prompt templates stored alongside jeeves.sh."""
 
     def __init__(self, prompt_dir: Path):
         self.prompt_dir = prompt_dir.resolve()
@@ -191,8 +191,8 @@ class LogWatcher:
             self.last_size = 0
 
 
-class RalphState:
-    """Track Ralph's current state from files"""
+class JeevesState:
+    """Track Jeeves's current state from files"""
     
     def __init__(self, state_dir: str):
         self.state_dir = Path(state_dir)
@@ -233,7 +233,7 @@ class RalphState:
         return False
     
     def get_state(self, force: bool = False, include_recent_logs: bool = True) -> Dict:
-        """Get current Ralph state"""
+        """Get current Jeeves state"""
         now = time.time()
         
         # Check cache (50ms cache to avoid hammering disk)
@@ -286,6 +286,22 @@ class RalphState:
             coverage_needs_fix = bool(status.get("coverageNeedsFix", False) or has_coverage_failures)
             coverage_clean = bool(status.get("coverageClean", False) and not coverage_needs_fix)
             
+            # Get current task info
+            tasks = config.get("tasks") or []
+            current_task_id = status.get("currentTaskId")
+            current_task = None
+            tasks_done_count = 0
+            for i, t in enumerate(tasks):
+                if (t.get("status") or "pending") == "done":
+                    tasks_done_count += 1
+                if current_task_id and t.get("id") == current_task_id:
+                    current_task = {
+                        "id": t.get("id"),
+                        "index": i + 1,
+                        "title": t.get("title", ""),
+                        "summary": t.get("summary", ""),
+                    }
+
             state["status"] = {
                 "phase": self._determine_phase(config, status),
                 "implemented": status.get("implemented", False),
@@ -305,6 +321,9 @@ class RalphState:
                 "issue_title": issue.get("title", ""),
                 "branch_name": config.get("branchName"),
                 "design_doc": config.get("designDocPath") or config.get("designDoc"),
+                "current_task": current_task,
+                "tasks_total": len(tasks),
+                "tasks_done": tasks_done_count,
             }
         elif state["mode"] == "prd":
             config = state["config"]
@@ -344,7 +363,7 @@ class RalphState:
         
         try:
             content = self.progress_file.read_text()
-            # Look for "Ralph Iteration X of Y" pattern
+            # Look for "Jeeves Iteration X of Y" pattern
             match = re.search(r'Iteration\s+(\d+)\s+of\s+(\d+)', content, re.IGNORECASE)
             if match:
                 return {
@@ -381,8 +400,15 @@ class RalphState:
         coverage_clean = bool(status.get("coverageClean", False) and not coverage_needs_fix)
         sonar_clean = status.get("sonarClean", False)
         has_open_questions = self.open_questions.exists() and self.open_questions.stat().st_size > 0
+        tasks = config.get("tasks") or []
+        has_tasks = len(tasks) > 0
+        task_stage = status.get("taskStage") or "implement"
+        tasks_complete = status.get("tasksComplete")
+        if tasks_complete is None and has_tasks:
+            tasks_complete = all((task.get("status") or "pending") == "done" for task in tasks)
+        tasks_complete = bool(tasks_complete) if has_tasks else False
 
-        # Check if design doc exists on disk (matches ralph.sh behavior)
+        # Check if design doc exists on disk (matches jeeves.sh behavior)
         design_doc = config.get("designDocPath") or config.get("designDoc")
         has_design_doc = False
         if design_doc:
@@ -393,6 +419,12 @@ class RalphState:
 
         if not has_design_doc:
             return "design"
+        if has_tasks and not tasks_complete:
+            if task_stage == "spec-review":
+                return "task-spec-review"
+            if task_stage == "quality-review":
+                return "task-quality-review"
+            return "task-implement"
         if implemented and pr_created and pr_desc_ready and has_open_questions:
             return "questions"
         if not (implemented and pr_created and pr_desc_ready):
@@ -427,13 +459,13 @@ class RalphState:
             return []
 
 
-class RalphRunManager:
-    """Start/stop Ralph runs from the viewer (single run at a time)."""
+class JeevesRunManager:
+    """Start/stop Jeeves runs from the viewer (single run at a time)."""
 
-    def __init__(self, *, state_dir: Path, ralph_script: Path, work_dir: Optional[Path] = None):
+    def __init__(self, *, state_dir: Path, jeeves_script: Path, work_dir: Optional[Path] = None):
         self.state_dir = state_dir.resolve()
         self.work_dir = (work_dir or self.state_dir.parent).resolve()
-        self.ralph_script = ralph_script.resolve()
+        self.jeeves_script = jeeves_script.resolve()
 
         self._lock = Lock()
         self._proc: Optional[subprocess.Popen] = None
@@ -504,10 +536,10 @@ class RalphRunManager:
     ) -> Dict:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
-                raise RuntimeError("Ralph is already running")
+                raise RuntimeError("Jeeves is already running")
 
-            if not self.ralph_script.exists():
-                raise FileNotFoundError(f"ralph.sh not found at {self.ralph_script}")
+            if not self.jeeves_script.exists():
+                raise FileNotFoundError(f"jeeves.sh not found at {self.jeeves_script}")
 
             if runner not in {"auto", "codex", "claude", "opencode"}:
                 raise ValueError("runner must be one of: auto, codex, claude, opencode")
@@ -532,35 +564,35 @@ class RalphRunManager:
             append_path = self._write_prompt_append(prompt_append)
 
             env = os.environ.copy()
-            env["RALPH_STATE_DIR"] = str(self.state_dir)
-            env["RALPH_WORK_DIR"] = str(self.work_dir)
-            env["RALPH_MODE"] = mode
-            env["RALPH_OUTPUT_MODE"] = output_mode
-            env["RALPH_PRINT_PROMPT"] = "1" if print_prompt else "0"
+            env["JEEVES_STATE_DIR"] = str(self.state_dir)
+            env["JEEVES_WORK_DIR"] = str(self.work_dir)
+            env["JEEVES_MODE"] = mode
+            env["JEEVES_OUTPUT_MODE"] = output_mode
+            env["JEEVES_PRINT_PROMPT"] = "1" if print_prompt else "0"
 
             if runner != "auto":
-                env["RALPH_RUNNER"] = runner
+                env["JEEVES_RUNNER"] = runner
 
             # Codex often needs fully unsandboxed execution to access installed skills
             # and repo tooling like `gh`. Default to dangerous mode when using Codex.
             # (Callers can still override via explicit env_overrides.)
-            if runner in {"auto", "codex"} and "RALPH_CODEX_DANGEROUS" not in (env_overrides or {}):
-                env["RALPH_CODEX_DANGEROUS"] = "1"
+            if runner in {"auto", "codex"} and "JEEVES_CODEX_DANGEROUS" not in (env_overrides or {}):
+                env["JEEVES_CODEX_DANGEROUS"] = "1"
 
             if append_path is not None:
-                env["RALPH_PROMPT_APPEND_FILE"] = str(append_path)
+                env["JEEVES_PROMPT_APPEND_FILE"] = str(append_path)
             else:
-                env.pop("RALPH_PROMPT_APPEND_FILE", None)
+                env.pop("JEEVES_PROMPT_APPEND_FILE", None)
 
             if env_overrides:
                 for key, value in env_overrides.items():
                     if not isinstance(key, str) or not isinstance(value, str):
                         continue
-                    if not key.startswith("RALPH_"):
+                    if not key.startswith("JEEVES_"):
                         continue
                     env[key] = value
 
-            cmd: List[str] = [str(self.ralph_script), "--max-iterations", str(max_iterations_int)]
+            cmd: List[str] = [str(self.jeeves_script), "--max-iterations", str(max_iterations_int)]
             if runner != "auto":
                 cmd += ["--runner", runner]
 
@@ -638,17 +670,17 @@ class RalphRunManager:
         return self.get_status()
 
 
-class RalphViewerHandler(SimpleHTTPRequestHandler):
-    """HTTP handler for Ralph viewer"""
+class JeevesViewerHandler(SimpleHTTPRequestHandler):
+    """HTTP handler for Jeeves viewer"""
 
     protocol_version = "HTTP/1.1"
     
     def __init__(
         self,
         *args,
-        state: RalphState,
-        run_manager: RalphRunManager,
-        prompt_manager: RalphPromptManager,
+        state: JeevesState,
+        run_manager: JeevesRunManager,
+        prompt_manager: JeevesPromptManager,
         allow_remote_run: bool = False,
         init_issue_script: Optional[Path] = None,
         **kwargs,
@@ -659,6 +691,14 @@ class RalphViewerHandler(SimpleHTTPRequestHandler):
         self.allow_remote_run = allow_remote_run
         self.init_issue_script = init_issue_script
         super().__init__(*args, **kwargs)
+
+    def handle(self):
+        """Handle request with graceful connection error handling."""
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            # Client disconnected before/during request - this is normal
+            pass
 
     def do_GET(self):
         """Handle GET requests"""
@@ -862,7 +902,7 @@ class RalphViewerHandler(SimpleHTTPRequestHandler):
             return
 
         if self.run_manager.get_status().get("running"):
-            self._send_json({"ok": False, "error": "Cannot edit status while Ralph is running."}, status=409)
+            self._send_json({"ok": False, "error": "Cannot edit status while Jeeves is running."}, status=409)
             return
 
         issue_file = self.state.issue_file
@@ -970,7 +1010,7 @@ class RalphViewerHandler(SimpleHTTPRequestHandler):
             return
 
         if self.run_manager.get_status().get("running"):
-            self._send_json({"ok": False, "error": "Cannot update main while Ralph is running."}, status=409)
+            self._send_json({"ok": False, "error": "Cannot update main while Jeeves is running."}, status=409)
             return
 
         body = self._read_json_body()
@@ -1125,7 +1165,7 @@ class RalphViewerHandler(SimpleHTTPRequestHandler):
             return
 
         if self.run_manager.get_status().get("running"):
-            self._send_json({"ok": False, "error": "Cannot init while Ralph is running."}, status=409)
+            self._send_json({"ok": False, "error": "Cannot init while Jeeves is running."}, status=409)
             return
 
         script = self.init_issue_script
@@ -1273,14 +1313,14 @@ class RalphViewerHandler(SimpleHTTPRequestHandler):
 
 
 def find_state_dir() -> Optional[str]:
-    """Find Ralph state directory (or suggest a default)."""
+    """Find Jeeves state directory (or suggest a default)."""
     cwd = Path.cwd()
     fallback: Optional[str] = None
     
-    # Try git root first (matches ralph.sh behavior)
+    # Try git root first (matches jeeves.sh behavior)
     try:
         root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], stderr=subprocess.DEVNULL).decode().strip()
-        git_state_dir = Path(root) / "ralph"
+        git_state_dir = Path(root) / "jeeves"
         fallback = str(git_state_dir)
         # Verify it looks like a state dir (has logs or config) or just exists at root
         if git_state_dir.exists():
@@ -1289,39 +1329,39 @@ def find_state_dir() -> Optional[str]:
         pass
     
     # Check current directory
-    state_dir = cwd / "ralph"
+    state_dir = cwd / "jeeves"
     if state_dir.exists() and (state_dir / "last-run.log").exists():
         return str(state_dir)
     
     # Check parent directories
     for parent in [cwd] + list(cwd.parents):
-        state_dir = parent / "ralph"
+        state_dir = parent / "jeeves"
         if state_dir.exists():
-            # Verify it has key files to avoid confusing with scripts/ralph
+            # Verify it has key files to avoid confusing with scripts/jeeves
             if (state_dir / "last-run.log").exists() or \
                (state_dir / "issue.json").exists() or \
                (state_dir / "prd.json").exists():
                 return str(state_dir)
     
-    # Fallback to any ralph dir if strict check fails
-    if (cwd / "ralph").exists():
-        return str(cwd / "ralph")
+    # Fallback to any jeeves dir if strict check fails
+    if (cwd / "jeeves").exists():
+        return str(cwd / "jeeves")
         
     for parent in [cwd] + list(cwd.parents):
-        state_dir = parent / "ralph"
+        state_dir = parent / "jeeves"
         if state_dir.exists():
              return str(state_dir)
 
     # No existing state dir found; suggest a default location so the viewer can still run.
     if fallback:
         return fallback
-    return str(cwd / "ralph")
+    return str(cwd / "jeeves")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ralph Real-time Viewer")
+    parser = argparse.ArgumentParser(description="Jeeves Real-time Viewer")
     parser.add_argument("--port", "-p", type=int, default=8080, help="Port to serve on")
-    parser.add_argument("--state-dir", "-s", type=str, help="Path to Ralph state directory")
+    parser.add_argument("--state-dir", "-s", type=str, help="Path to Jeeves state directory")
     parser.add_argument(
         "--allow-remote-run",
         action="store_true",
@@ -1329,13 +1369,13 @@ def main():
     )
     args = parser.parse_args()
 
-    env_allow_remote = str(os.environ.get("RALPH_VIEWER_ALLOW_REMOTE_RUN", "")).strip().lower() in {"1", "true", "yes", "on"}
+    env_allow_remote = str(os.environ.get("JEEVES_VIEWER_ALLOW_REMOTE_RUN", "")).strip().lower() in {"1", "true", "yes", "on"}
     if env_allow_remote:
         args.allow_remote_run = True
     
     state_dir = args.state_dir or find_state_dir()
     if not state_dir:
-        print("Error: Could not find Ralph state directory")
+        print("Error: Could not find Jeeves state directory")
         print("Run this from your project directory or specify --state-dir")
         return 1
 
@@ -1347,7 +1387,7 @@ def main():
         return 1
     
     print("")
-    print("  Ralph Real-time Viewer")
+    print("  Jeeves Real-time Viewer")
     print("  " + "=" * 40)
     print(f"  State directory: {state_dir}")
     print(f"  Server: http://localhost:{args.port}")
@@ -1357,18 +1397,18 @@ def main():
     
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     
-    state = RalphState(state_dir)
-    run_manager = RalphRunManager(
+    state = JeevesState(state_dir)
+    run_manager = JeevesRunManager(
         state_dir=Path(state_dir),
-        ralph_script=(Path(__file__).resolve().parent.parent / "ralph.sh"),
+        jeeves_script=(Path(__file__).resolve().parent.parent / "jeeves.sh"),
         work_dir=Path(state_dir).resolve().parent,
     )
-    ralph_dir = Path(__file__).resolve().parent.parent
-    prompt_manager = RalphPromptManager(ralph_dir)
-    init_issue_script = ralph_dir / "init-issue.sh"
+    jeeves_dir = Path(__file__).resolve().parent.parent
+    prompt_manager = JeevesPromptManager(jeeves_dir)
+    init_issue_script = jeeves_dir / "init-issue.sh"
     
     def handler(*args_handler, **kwargs_handler):
-        return RalphViewerHandler(
+        return JeevesViewerHandler(
             *args_handler,
             state=state,
             run_manager=run_manager,

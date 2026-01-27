@@ -4,20 +4,20 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Initialize Ralph issue mode state.
+Initialize Jeeves issue mode state.
 
 Usage:
-  ./scripts/ralph/init-issue.sh --issue <number> [--design-doc <path>] [--repo <owner/repo>] [--branch <name>] [--state-dir <dir>] [--force]
+  ./scripts/jeeves/init-issue.sh --issue <number> [--design-doc <path>] [--repo <owner/repo>] [--branch <name>] [--state-dir <dir>] [--force]
 
 Examples:
-  ./scripts/ralph/init-issue.sh --issue 590 --design-doc docs/rng-prd-design-issue-590.md
-  ./scripts/ralph/init-issue.sh --issue 205 --design-doc docs/runtime-event-pubsub-design.md --branch ralph/issue-205-pubsub
-  ./scripts/ralph/init-issue.sh --issue 348 --repo owner/repo
-  ./scripts/ralph/init-issue.sh --force --issue 784 --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md
+  ./scripts/jeeves/init-issue.sh --issue 590 --design-doc docs/rng-prd-design-issue-590.md
+  ./scripts/jeeves/init-issue.sh --issue 205 --design-doc docs/runtime-event-pubsub-design.md --branch jeeves/issue-205-pubsub
+  ./scripts/jeeves/init-issue.sh --issue 348 --repo owner/repo
+  ./scripts/jeeves/init-issue.sh --force --issue 784 --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md
 EOF
 }
 
-STATE_DIR="ralph"
+STATE_DIR="jeeves"
 ISSUE_NUMBER=""
 DESIGN_DOC_PATH=""
 REPO=""

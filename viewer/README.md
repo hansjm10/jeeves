@@ -1,16 +1,16 @@
-# Ralph Viewer - Real-time Dashboard
+# Jeeves Viewer - Real-time Dashboard
 
-A beautiful, production-ready web dashboard for monitoring Ralph agent runs in real-time.
+A beautiful, production-ready web dashboard for monitoring Jeeves agent runs in real-time.
 
 ## Features
 
 - **Real-time Log Streaming**: Logs update as they're written, with intelligent file watching
-- **Phase Timeline**: Visual workflow progress showing all phases (Design > Implement > Review > CI > Coverage > Sonar > Complete)
+- **Phase Timeline**: Visual workflow progress showing all phases (Design > Task Implement > Task Spec Review > Task Quality Review > Implement > Review > CI > Coverage > Sonar > Complete)
 - **Iteration Tracking**: Shows current iteration (e.g., "2 of 10") in the header
 - **Status Checks Grid**: Visual checklist showing implemented, PR created, review clean, coverage, sonar status
 - **Manual Overrides**: Click status checks to toggle (localhost-only by default; use `--allow-remote-run` to enable remotely)
-- **Prompt Template Editor**: Edit `prompt*.md` files used by `ralph.sh` directly from the dashboard
-- **Issue Init**: Run `init-issue.sh` from the dashboard to generate/update `ralph/issue.json`
+- **Prompt Template Editor**: Edit `prompt*.md` files used by `jeeves.sh` directly from the dashboard
+- **Issue Init**: Run `init-issue.sh` from the dashboard to generate/update `jeeves/issue.json`
 - **Log Filtering**: Search/filter logs in real-time with Ctrl+F
 - **Diff Toggle**: Hide/show Codex `file update` diff blocks to reduce log noise
 - **Completion Notifications**: Browser notifications + audio alert when workflow completes
@@ -22,13 +22,13 @@ A beautiful, production-ready web dashboard for monitoring Ralph agent runs in r
 
 ```bash
 # From your project directory
-python3 /path/to/ralph/viewer/server.py
+python3 /path/to/jeeves/viewer/server.py
 
 # Custom port
-python3 /path/to/ralph/viewer/server.py --port 9000
+python3 /path/to/jeeves/viewer/server.py --port 9000
 
 # Explicit state directory
-python3 /path/to/ralph/viewer/server.py --state-dir /path/to/ralph
+python3 /path/to/jeeves/viewer/server.py --state-dir /path/to/jeeves
 ```
 
 Then open: **http://localhost:8080**
@@ -37,13 +37,13 @@ Then open: **http://localhost:8080**
 
 1. Start the viewer in one terminal
 2. Either:
-   - Run `./ralph.sh` in another terminal, or
-   - Use the **Controls** card in the dashboard to start/stop Ralph
-   - If you don't have `ralph/issue.json` yet, use the **Init Issue** card (runs `init-issue.sh`)
+   - Run `./jeeves.sh` in another terminal, or
+   - Use the **Controls** card in the dashboard to start/stop Jeeves
+   - If you don't have `jeeves/issue.json` yet, use the **Init Issue** card (runs `init-issue.sh`)
 3. Watch the dashboard update in real-time
 
 The viewer will:
-- Auto-detect your Ralph state directory
+- Auto-detect your Jeeves state directory
 - Stream logs as they're written
 - Update phase/status as issue.json changes
 - Notify you when the workflow completes
@@ -51,7 +51,7 @@ The viewer will:
 ## Dashboard Layout
 
 ### Header
-- **Brand**: Ralph Viewer logo
+- **Brand**: Jeeves Viewer logo
 - **Iteration Badge**: Shows "2 of 10" style iteration counter
 - **Connection Status**: Green pulsing dot when connected
 - **Status Badge**: Running (green), Complete (blue), or Idle (gray)
@@ -102,15 +102,15 @@ Each phase shows:
 | `GET /api/stream` | SSE stream for real-time updates |
 | `GET /api/logs` | All logs as JSON |
 | `GET /api/run` | Current run status (pid, started_at, etc.) |
-| `GET /api/run/logs` | Viewer-runner log tail (stdout/stderr of `ralph.sh`) |
-| `POST /api/run` | Start `ralph.sh` (localhost-only by default) |
-| `POST /api/run/stop` | Stop the running `ralph.sh` process |
-| `POST /api/issue/status` | Update `ralph/issue.json.status` (localhost-only by default) |
+| `GET /api/run/logs` | Viewer-runner log tail (stdout/stderr of `jeeves.sh`) |
+| `POST /api/run` | Start `jeeves.sh` (localhost-only by default) |
+| `POST /api/run/stop` | Stop the running `jeeves.sh` process |
+| `POST /api/issue/status` | Update `jeeves/issue.json.status` (localhost-only by default) |
 | `POST /api/git/update-main` | Checkout + fast-forward a branch (defaults to `main`) (localhost-only by default) |
 | `GET /api/prompts` | List editable prompt templates (`prompt*.md`) |
 | `GET /api/prompts/<name>` | Read a prompt template |
 | `POST /api/prompts/<name>` | Save a prompt template (localhost-only by default) |
-| `POST /api/init/issue` | Run `init-issue.sh` to write `ralph/issue.json` (localhost-only by default) |
+| `POST /api/init/issue` | Run `init-issue.sh` to write `jeeves/issue.json` (localhost-only by default) |
 
 ### Run Control Security
 
@@ -119,14 +119,14 @@ For safety, endpoints that modify local state (run control, status overrides, gi
 To allow start/stop from non-localhost clients, launch the server with:
 
 ```bash
-python3 /path/to/ralph/viewer/server.py --allow-remote-run
+python3 /path/to/jeeves/viewer/server.py --allow-remote-run
 ```
 
 You can also enable this via environment variable (useful for Docker):
 
 ```bash
-export RALPH_VIEWER_ALLOW_REMOTE_RUN=1
-python3 /path/to/ralph/viewer/server.py
+export JEEVES_VIEWER_ALLOW_REMOTE_RUN=1
+python3 /path/to/jeeves/viewer/server.py
 ```
 
 ### SSE Events
@@ -146,7 +146,7 @@ python3 /path/to/ralph/viewer/server.py
 ## Troubleshooting
 
 ### No logs appearing?
-- Check that Ralph is running and writing to `ralph/last-run.log`
+- Check that Jeeves is running and writing to `jeeves/last-run.log`
 - Verify the state directory path is correct
 - Check browser console for connection errors
 
@@ -160,4 +160,4 @@ python3 /path/to/ralph/viewer/server.py
 - Click anywhere on the page to enable audio (browser autoplay policy)
 
 ### Codex can't run `gh` / can't read skills?
-- Ensure Codex is running in dangerous mode (no sandbox). `ralph.sh` defaults to this, and the viewer forces it for Codex runs via `RALPH_CODEX_DANGEROUS=1`.
+- Ensure Codex is running in dangerous mode (no sandbox). `jeeves.sh` defaults to this, and the viewer forces it for Codex runs via `JEEVES_CODEX_DANGEROUS=1`.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ralph Terminal Viewer - A simple TUI for monitoring Ralph in SSH/Docker
+Jeeves Terminal Viewer - A simple TUI for monitoring Jeeves in SSH/Docker
 """
 
 import argparse
@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
-class RalphTerminalViewer:
-    """Terminal-based viewer for Ralph"""
+class JeevesTerminalViewer:
+    """Terminal-based viewer for Jeeves"""
     
     COLORS = {
         'reset': '\033[0m',
@@ -57,7 +57,7 @@ class RalphTerminalViewer:
         return f"{self.COLORS[color_name]}{text}{self.COLORS['reset']}"
     
     def get_state(self) -> Dict:
-        """Get current Ralph state"""
+        """Get current Jeeves state"""
         now = time.time()
         if now - self.last_update < 0.3 and self._cache:
             return self._cache
@@ -131,9 +131,22 @@ class RalphTerminalViewer:
         coverage_clean = status.get("coverageClean", False)
         coverage_needs_fix = status.get("coverageNeedsFix", False)
         sonar_clean = status.get("sonarClean", False)
+        tasks = config.get("tasks") or []
+        has_tasks = len(tasks) > 0
+        task_stage = status.get("taskStage") or "implement"
+        tasks_complete = status.get("tasksComplete")
+        if tasks_complete is None and has_tasks:
+            tasks_complete = all((task.get("status") or "pending") == "done" for task in tasks)
+        tasks_complete = bool(tasks_complete) if has_tasks else False
         
         if not config.get("designDocPath"):
             return "design"
+        if has_tasks and not tasks_complete:
+            if task_stage == "spec-review":
+                return "task-spec-review"
+            if task_stage == "quality-review":
+                return "task-quality-review"
+            return "task-implement"
         if not (implemented and pr_created and pr_desc_ready):
             return "implement"
         if not review_clean:
@@ -178,7 +191,7 @@ class RalphTerminalViewer:
         
         # Header
         print(self.color("╔" + "═" * 76 + "╗", "bold"))
-        title = "🤖 Ralph Terminal Viewer"
+        title = "🤖 Jeeves Terminal Viewer"
         padding = " " * ((78 - len(title)) // 2)
         print(self.color("║", "bold") + padding + self.color(title, "bold") + padding + self.color("║", "bold"))
         print(self.color("╚" + "═" * 76 + "╝", "bold"))
@@ -281,7 +294,7 @@ class RalphTerminalViewer:
     
     def run(self):
         """Run the terminal viewer loop"""
-        print(f"\n🔍 Starting Ralph Terminal Viewer...")
+        print(f"\n🔍 Starting Jeeves Terminal Viewer...")
         print(f"📁 State directory: {self.state_dir}")
         print(f"   Press Ctrl+C to stop\n")
         
@@ -295,17 +308,17 @@ class RalphTerminalViewer:
 
 
 def find_state_dir() -> Optional[str]:
-    """Find Ralph state directory"""
+    """Find Jeeves state directory"""
     cwd = Path.cwd()
     
     # Check current directory
-    state_dir = cwd / "ralph"
+    state_dir = cwd / "jeeves"
     if state_dir.exists():
         return str(state_dir)
     
     # Check parent directories
     for parent in [cwd] + list(cwd.parents):
-        state_dir = parent / "ralph"
+        state_dir = parent / "jeeves"
         if state_dir.exists():
             return str(state_dir)
     
@@ -313,17 +326,17 @@ def find_state_dir() -> Optional[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ralph Terminal Viewer")
-    parser.add_argument("--state-dir", "-s", type=str, help="Path to Ralph state directory")
+    parser = argparse.ArgumentParser(description="Jeeves Terminal Viewer")
+    parser.add_argument("--state-dir", "-s", type=str, help="Path to Jeeves state directory")
     args = parser.parse_args()
     
     state_dir = args.state_dir or find_state_dir()
     if not state_dir:
-        print("Error: Could not find Ralph state directory")
+        print("Error: Could not find Jeeves state directory")
         print("Run this from your project directory or specify --state-dir")
         return 1
     
-    viewer = RalphTerminalViewer(state_dir)
+    viewer = JeevesTerminalViewer(state_dir)
     return viewer.run()
 
 

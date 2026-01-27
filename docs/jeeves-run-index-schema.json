@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Jeeves Run Index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runId",
+    "schema",
+    "mode",
+    "runner",
+    "endedAt",
+    "duration_s",
+    "exitCode",
+    "files"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "jeeves.debug.v1"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "issue",
+        "prd"
+      ]
+    },
+    "runner": {
+      "type": "string"
+    },
+    "startedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "endedAt": {
+      "type": "string"
+    },
+    "duration_s": {
+      "type": "integer"
+    },
+    "exitCode": {
+      "type": "integer"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "file",
+          "eventCount"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "eventCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

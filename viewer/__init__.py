@@ -1,2 +1,2 @@
-"""Ralph viewer package (tests + helper imports)."""
+"""Jeeves viewer package (tests + helper imports)."""
 

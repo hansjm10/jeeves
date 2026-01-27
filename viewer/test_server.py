@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 
-from viewer.server import RalphPromptManager, RalphRunManager, RalphState, RalphViewerHandler, ThreadingHTTPServer
+from viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -78,10 +78,10 @@ class ViewerRunApiTests(unittest.TestCase):
 
         subprocess.run(["git", "checkout", "-b", "issue/test"], cwd=self.repo_dir, check=True, capture_output=True, text=True)
 
-        self.state_dir = self.repo_dir / "ralph"
+        self.state_dir = self.repo_dir / "jeeves"
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
-        self.tools_dir = tmp_path / "ralph_tools"
+        self.tools_dir = tmp_path / "jeeves_tools"
         self.tools_dir.mkdir(parents=True, exist_ok=True)
 
         (self.tools_dir / "prompt.md").write_text("# Prompt\nHello\n")
@@ -114,39 +114,39 @@ echo \"[INFO] Wrote $STATE_DIR/issue.json\"
 """,
         )
 
-        self.dummy_script = tmp_path / "dummy_ralph.sh"
+        self.dummy_script = tmp_path / "dummy_jeeves.sh"
         _write_executable(
             self.dummy_script,
             """#!/usr/bin/env bash
 set -euo pipefail
 
-echo "dummy ralph: starting"
-echo "runner=${RALPH_RUNNER:-}"
-echo "mode=${RALPH_MODE:-}"
-echo "work_dir=${RALPH_WORK_DIR:-}"
-echo "state_dir=${RALPH_STATE_DIR:-}"
+echo "dummy jeeves: starting"
+echo "runner=${JEEVES_RUNNER:-}"
+echo "mode=${JEEVES_MODE:-}"
+echo "work_dir=${JEEVES_WORK_DIR:-}"
+echo "state_dir=${JEEVES_STATE_DIR:-}"
 
-if [[ -n "${RALPH_PROMPT_APPEND_FILE:-}" && -f "${RALPH_PROMPT_APPEND_FILE:-}" ]]; then
-  echo "prompt_append_file=${RALPH_PROMPT_APPEND_FILE}"
+if [[ -n "${JEEVES_PROMPT_APPEND_FILE:-}" && -f "${JEEVES_PROMPT_APPEND_FILE:-}" ]]; then
+  echo "prompt_append_file=${JEEVES_PROMPT_APPEND_FILE}"
   echo "prompt_append_begin"
-  cat "${RALPH_PROMPT_APPEND_FILE}"
+  cat "${JEEVES_PROMPT_APPEND_FILE}"
   echo "prompt_append_end"
 fi
 
-mkdir -p "${RALPH_STATE_DIR}"
-echo "dummy log line 1" >> "${RALPH_STATE_DIR}/last-run.log"
+mkdir -p "${JEEVES_STATE_DIR}"
+echo "dummy log line 1" >> "${JEEVES_STATE_DIR}/last-run.log"
 sleep 5
-echo "dummy log line 2" >> "${RALPH_STATE_DIR}/last-run.log"
-echo "dummy ralph: done"
+echo "dummy log line 2" >> "${JEEVES_STATE_DIR}/last-run.log"
+echo "dummy jeeves: done"
 """,
         )
 
-        state = RalphState(str(self.state_dir))
-        run_manager = RalphRunManager(state_dir=self.state_dir, ralph_script=self.dummy_script, work_dir=self.repo_dir)
-        prompt_manager = RalphPromptManager(self.tools_dir)
+        state = JeevesState(str(self.state_dir))
+        run_manager = JeevesRunManager(state_dir=self.state_dir, jeeves_script=self.dummy_script, work_dir=self.repo_dir)
+        prompt_manager = JeevesPromptManager(self.tools_dir)
 
         def handler(*args, **kwargs):
-            return RalphViewerHandler(
+            return JeevesViewerHandler(
                 *args,
                 state=state,
                 run_manager=run_manager,
@@ -199,10 +199,10 @@ echo "dummy ralph: done"
                 status, data = _request_json(conn, "GET", "/api/run/logs")
                 self.assertEqual(status, 200)
                 logs = data.get("logs", []) if isinstance(data, dict) else []
-                if any("dummy ralph: starting" in line for line in logs):
+                if any("dummy jeeves: starting" in line for line in logs):
                     break
                 time.sleep(0.05)
-            self.assertTrue(any("dummy ralph: starting" in line for line in logs))
+            self.assertTrue(any("dummy jeeves: starting" in line for line in logs))
 
             status, data = _request_json(conn, "POST", "/api/run/stop", {})
             self.assertEqual(status, 200)
@@ -263,7 +263,7 @@ echo "dummy ralph: done"
         issue_json.write_text(
             json.dumps(
                 {
-                    "project": "Ralph Test Project",
+                    "project": "Jeeves Test Project",
                     "branchName": "issue/1-test-branch",
                     "issue": {"number": 1, "repo": "example/repo"},
                     "designDocPath": "docs/design-document-template.md",

@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Jeeves Debug JSONL Event",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "event",
+    "ts",
+    "runId",
+    "mode",
+    "runner",
+    "phase",
+    "seq",
+    "event_id"
+  ],
+  "properties": {
+    "schema": {
+      "const": "jeeves.debug.v1",
+      "description": "Debug event schema version."
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "debug_run_start",
+        "debug_run_end",
+        "debug_iteration_start",
+        "debug_iteration_end",
+        "debug_runner_invoke",
+        "debug_log_line"
+      ],
+      "description": "Event type."
+    },
+    "ts": {
+      "type": "string",
+      "description": "UTC timestamp when the event was emitted."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Run identifier (also used in per-run directory name)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "issue",
+        "prd"
+      ]
+    },
+    "runner": {
+      "type": "string",
+      "description": "Runner used for the iteration (codex|claude|opencode)."
+    },
+    "workDir": {
+      "type": "string"
+    },
+    "stateDir": {
+      "type": "string"
+    },
+    "phase": {
+      "type": "string",
+      "description": "Phase at the start of the iteration."
+    },
+    "iteration": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic sequence number for this run."
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Stable event id in the form <runId>:<seq>."
+    },
+    "outputMode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "stream",
+        "compact",
+        null
+      ]
+    },
+    "maxIterations": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "debugTrace": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "full",
+        "summary",
+        null
+      ]
+    },
+    "prompt": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appendFile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "appendBytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "runnerStats": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "logBytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "logLines": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lastMessageBytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "execCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fileUpdateCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "attempt": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "line_no": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "exec",
+        "file_update",
+        "warn",
+        "error",
+        "other",
+        null
+      ]
+    },
+    "raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completed": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "completionReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exitCode": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "duration_s": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  }
+}

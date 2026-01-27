@@ -7,7 +7,7 @@ usage() {
 Fetch SonarCloud issues for a branch or pull request and print the raw JSON response.
 
 Usage:
-  ./scripts/ralph/sonarcloud-issues.sh [--branch <name> | --pull-request <id>] [--out <file>] [--host <url>]
+  ./scripts/jeeves/sonarcloud-issues.sh [--branch <name> | --pull-request <id>] [--out <file>] [--host <url>]
 
 Defaults:
   - If neither --branch nor --pull-request is provided, uses the current git branch.
@@ -16,8 +16,8 @@ Defaults:
   - Host defaults to https://sonarcloud.io
 
 Examples:
-  ./scripts/ralph/sonarcloud-issues.sh --branch issue/590-rng-prd --out ralph/sonar-issues.json
-  ./scripts/ralph/sonarcloud-issues.sh --pull-request 1234
+  ./scripts/jeeves/sonarcloud-issues.sh --branch issue/590-rng-prd --out jeeves/sonar-issues.json
+  ./scripts/jeeves/sonarcloud-issues.sh --pull-request 1234
 EOF
 }
 

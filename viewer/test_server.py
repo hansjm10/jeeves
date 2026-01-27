@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import stat
@@ -12,6 +13,23 @@ from typing import Any, Dict, Optional, Tuple
 
 
 from viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
+
+
+class ArgumentParserTests(unittest.TestCase):
+    """Tests for CLI argument parsing via --help output."""
+
+    def test_work_dir_in_help(self):
+        """Test that --work-dir and -w appear in help text."""
+        result = subprocess.run(
+            ["python", "-c", "import viewer.server; viewer.server.main()", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+        # Help should exit with 0 and show the work-dir option
+        self.assertEqual(result.returncode, 0, f"Help failed: {result.stderr}")
+        self.assertIn("--work-dir", result.stdout, "Missing --work-dir in help")
+        self.assertIn("-w", result.stdout, "Missing -w in help")
 
 
 def _write_executable(path: Path, content: str) -> None:

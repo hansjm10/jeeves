@@ -1425,6 +1425,11 @@ def main():
         action="store_true",
         help="Allow run control, init, and prompt edits from non-localhost clients (unsafe on untrusted networks).",
     )
+    parser.add_argument(
+        "--work-dir", "-w",
+        type=str,
+        help="Project working directory (defaults to state-dir parent)"
+    )
     args = parser.parse_args()
 
     env_allow_remote = str(os.environ.get("JEEVES_VIEWER_ALLOW_REMOTE_RUN", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -1443,24 +1448,32 @@ def main():
         print(f"Error: Could not create state directory: {state_dir}")
         print(f"Reason: {e}")
         return 1
-    
+
+    # Determine work_dir: use explicit --work-dir if provided, else derive from state_dir parent
+    if args.work_dir:
+        work_dir = Path(args.work_dir).resolve()
+    else:
+        work_dir = Path(state_dir).resolve().parent
+
     print("")
     print("  Jeeves Real-time Viewer")
     print("  " + "=" * 40)
     print(f"  State directory: {state_dir}")
+    print(f"  Work directory:  {work_dir}")
     print(f"  Server: http://localhost:{args.port}")
     print("")
     print("  Press Ctrl+C to stop")
     print("")
-    
+
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
+
     state = JeevesState(state_dir)
     jeeves_root = Path(__file__).resolve().parent.parent
+
     run_manager = JeevesRunManager(
         state_dir=Path(state_dir),
         jeeves_script=(jeeves_root / "bin" / "jeeves.sh"),
-        work_dir=Path(state_dir).resolve().parent,
+        work_dir=work_dir,
     )
     prompt_manager = JeevesPromptManager(jeeves_root / "prompts")
     init_issue_script = jeeves_root / "bin" / "init-issue.sh"

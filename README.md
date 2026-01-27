@@ -37,20 +37,20 @@ Modern AI coding assistants are powerful but stateless. They lose context betwee
 ```bash
 # Clone Jeeves into your project
 git clone https://github.com/hansjm10/jeeves.git scripts/jeeves
-chmod +x scripts/jeeves/jeeves.sh
+chmod +x scripts/jeeves/bin/*.sh
 ```
 
 ### Basic Usage
 
 ```bash
 # Initialize from a GitHub issue
-./scripts/jeeves/init-issue.sh --issue 42
+./scripts/jeeves/bin/init-issue.sh --issue 42
 
 # Run Jeeves (default: 10 iterations)
-./scripts/jeeves/jeeves.sh
+./scripts/jeeves/bin/jeeves.sh
 
 # Or specify max iterations
-./scripts/jeeves/jeeves.sh --max-iterations 20
+./scripts/jeeves/bin/jeeves.sh --max-iterations 20
 ```
 
 ## Workflow Phases
@@ -152,7 +152,7 @@ Each iteration spawns a fresh agent session with clean context. Memory persists 
 ```yaml
 - name: Run Jeeves
   run: |
-    ./scripts/jeeves/jeeves.sh --max-iterations 5
+    ./scripts/jeeves/bin/jeeves.sh --max-iterations 5
   env:
     JEEVES_RUNNER: claude
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

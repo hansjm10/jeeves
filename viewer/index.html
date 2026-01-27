@@ -1951,30 +1951,30 @@
             if (state.mode !== 'issue') return null;
             const phase = (state.status && state.status.phase) ? state.status.phase : 'implement';
             const map = {
-                'design': 'prompt.issue.design.md',
-                'task-implement': 'prompt.issue.task.implement.md',
-                'task-spec-review': 'prompt.issue.task.spec-review.md',
-                'task-quality-review': 'prompt.issue.task.quality-review.md',
-                'implement': 'prompt.issue.implement.md',
-                'review': 'prompt.issue.review.md',
-                'questions': 'prompt.issue.questions.md',
-                'ci': 'prompt.issue.ci.md',
-                'coverage': 'prompt.issue.coverage.md',
-                'coverage-fix': 'prompt.issue.coverage.fix.md',
-                'sonar': 'prompt.issue.sonar.md',
-                'complete': 'prompt.issue.sonar.md'
+                'design': 'design.md',
+                'task-implement': 'task/implement.md',
+                'task-spec-review': 'task/spec-review.md',
+                'task-quality-review': 'task/quality-review.md',
+                'implement': 'implement.md',
+                'review': 'review.md',
+                'questions': 'questions.md',
+                'ci': 'ci.md',
+                'coverage': 'coverage.md',
+                'coverage-fix': 'coverage-fix.md',
+                'sonar': 'sonar.md',
+                'complete': 'sonar.md'
             };
-            return map[phase] || 'prompt.issue.implement.md';
+            return map[phase] || 'implement.md';
         }
 
         function promptTabLabel(promptId) {
             if (!promptId) return '';
             if (promptId === 'prompt.md') return 'prd';
             let label = promptId;
-            if (label.startsWith('prompt.issue.')) label = label.slice('prompt.issue.'.length);
-            else if (label.startsWith('prompt.')) label = label.slice('prompt.'.length);
+            // Handle task/ subdirectory prompts
+            if (label.startsWith('task/')) label = 'task ' + label.slice(5);
             if (label.endsWith('.md')) label = label.slice(0, -3);
-            return label.replace(/\./g, ' / ');
+            return label.replace(/\//g, ' / ');
         }
 
         function updatePromptTabsActive() {

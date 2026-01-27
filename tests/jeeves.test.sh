@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-JEEVES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$JEEVES_DIR/../.." && pwd))"
-JEEVES_SH="$JEEVES_DIR/jeeves.sh"
+TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JEEVES_DIR="$(cd "$TESTS_DIR/.." && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$JEEVES_DIR/.." && pwd))"
+JEEVES_SH="$JEEVES_DIR/bin/jeeves.sh"
 RUN_DIR=""
 TMP_ROOT=""
 
@@ -352,7 +353,7 @@ test_issue_open_questions_selects_questions_prompt() {
   local output
   output="$(cat "$tmp_root/out-questions.txt")"
   assert_contains "$output" "[DEBUG] Phase: questions"
-  assert_contains "$output" "prompt.issue.questions.md"
+  assert_contains "$output" "prompts/questions.md"
 }
 
 test_issue_missing_design_doc_selects_design_prompt() {
@@ -380,7 +381,7 @@ test_issue_missing_design_doc_selects_design_prompt() {
   local output
   output="$(cat "$tmp_root/out-missing-design-doc.txt")"
   assert_contains "$output" "[DEBUG] Phase: design"
-  assert_contains "$output" "prompt.issue.design.md"
+  assert_contains "$output" "prompts/design.md"
 }
 
 test_issue_tasks_select_task_implement_prompt() {
@@ -408,7 +409,7 @@ test_issue_tasks_select_task_implement_prompt() {
   local output
   output="$(cat "$tmp_root/out-task-implement.txt")"
   assert_contains "$output" "[DEBUG] Phase: task-implement"
-  assert_contains "$output" "prompt.issue.task.implement.md"
+  assert_contains "$output" "prompts/task/implement.md"
 }
 
 test_issue_tasks_select_task_spec_review_prompt() {
@@ -436,7 +437,7 @@ test_issue_tasks_select_task_spec_review_prompt() {
   local output
   output="$(cat "$tmp_root/out-task-spec-review.txt")"
   assert_contains "$output" "[DEBUG] Phase: task-spec-review"
-  assert_contains "$output" "prompt.issue.task.spec-review.md"
+  assert_contains "$output" "prompts/task/spec-review.md"
 }
 
 test_issue_tasks_select_task_quality_review_prompt() {
@@ -464,7 +465,7 @@ test_issue_tasks_select_task_quality_review_prompt() {
   local output
   output="$(cat "$tmp_root/out-task-quality-review.txt")"
   assert_contains "$output" "[DEBUG] Phase: task-quality-review"
-  assert_contains "$output" "prompt.issue.task.quality-review.md"
+  assert_contains "$output" "prompts/task/quality-review.md"
 }
 
 test_issue_pr_description_not_ready_selects_implement_prompt() {
@@ -492,7 +493,7 @@ test_issue_pr_description_not_ready_selects_implement_prompt() {
   local output
   output="$(cat "$tmp_root/out-pr-description-not-ready.txt")"
   assert_contains "$output" "[DEBUG] Phase: implement"
-  assert_contains "$output" "prompt.issue.implement.md"
+  assert_contains "$output" "prompts/implement.md"
 }
 
 test_issue_pr_description_ready_selects_review_prompt() {
@@ -520,7 +521,7 @@ test_issue_pr_description_ready_selects_review_prompt() {
   local output
   output="$(cat "$tmp_root/out-pr-description-ready.txt")"
   assert_contains "$output" "[DEBUG] Phase: review"
-  assert_contains "$output" "prompt.issue.review.md"
+  assert_contains "$output" "prompts/review.md"
 }
 
 test_issue_review_clean_selects_coverage_prompt() {
@@ -548,7 +549,7 @@ test_issue_review_clean_selects_coverage_prompt() {
   local output
   output="$(cat "$tmp_root/out-review-clean.txt")"
   assert_contains "$output" "[DEBUG] Phase: coverage"
-  assert_contains "$output" "prompt.issue.coverage.md"
+  assert_contains "$output" "prompts/coverage.md"
 }
 
 test_issue_sonar_clean_selects_ci_prompt() {
@@ -576,7 +577,7 @@ test_issue_sonar_clean_selects_ci_prompt() {
   local output
   output="$(cat "$tmp_root/out-ci-clean.txt")"
   assert_contains "$output" "[DEBUG] Phase: ci"
-  assert_contains "$output" "prompt.issue.ci.md"
+  assert_contains "$output" "prompts/ci.md"
 }
 
 test_issue_coverage_needs_fix_selects_coverage_fix_prompt() {
@@ -604,7 +605,7 @@ test_issue_coverage_needs_fix_selects_coverage_fix_prompt() {
   local output
   output="$(cat "$tmp_root/out-coverage-needs-fix.txt")"
   assert_contains "$output" "[DEBUG] Phase: coverage-fix"
-  assert_contains "$output" "prompt.issue.coverage.fix.md"
+  assert_contains "$output" "prompts/coverage-fix.md"
 }
 
 test_issue_coverage_failures_file_selects_coverage_fix_prompt() {
@@ -633,7 +634,7 @@ test_issue_coverage_failures_file_selects_coverage_fix_prompt() {
   local output
   output="$(cat "$tmp_root/out-coverage-failures-file.txt")"
   assert_contains "$output" "[DEBUG] Phase: coverage-fix"
-  assert_contains "$output" "prompt.issue.coverage.fix.md"
+  assert_contains "$output" "prompts/coverage-fix.md"
 }
 
 test_issue_coverage_clean_selects_sonar_prompt() {
@@ -661,7 +662,7 @@ test_issue_coverage_clean_selects_sonar_prompt() {
   local output
   output="$(cat "$tmp_root/out-coverage-clean.txt")"
   assert_contains "$output" "[DEBUG] Phase: sonar"
-  assert_contains "$output" "prompt.issue.sonar.md"
+  assert_contains "$output" "prompts/sonar.md"
 }
 
 test_metrics_are_written_by_default() {

@@ -43,14 +43,16 @@ class JeevesPromptManager:
     def list_prompts(self) -> List[Dict]:
         prompts: List[Dict] = []
         try:
-            for path in sorted(self.prompt_dir.glob("prompt*.md")):
+            for path in sorted(self.prompt_dir.glob("**/*.md")):
                 if not path.is_file():
                     continue
                 stat = path.stat()
+                # Use relative path from prompt_dir as ID
+                rel_path = path.relative_to(self.prompt_dir)
                 prompts.append(
                     {
-                        "id": path.name,
-                        "name": path.name,
+                        "id": str(rel_path),
+                        "name": str(rel_path),
                         "mtime": stat.st_mtime,
                         "size": stat.st_size,
                     }
@@ -98,9 +100,10 @@ class JeevesPromptManager:
     def _resolve_prompt_id(self, prompt_id: str) -> Path:
         if not isinstance(prompt_id, str) or not prompt_id:
             raise ValueError("prompt id is required")
-        if "/" in prompt_id or "\\" in prompt_id:
+        # Disallow backslashes and parent directory traversal
+        if "\\" in prompt_id or ".." in prompt_id:
             raise ValueError("invalid prompt id")
-        if not prompt_id.startswith("prompt") or not prompt_id.endswith(".md"):
+        if not prompt_id.endswith(".md"):
             raise ValueError("invalid prompt id")
 
         path = (self.prompt_dir / prompt_id).resolve()
@@ -1398,14 +1401,14 @@ def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     
     state = JeevesState(state_dir)
+    jeeves_root = Path(__file__).resolve().parent.parent
     run_manager = JeevesRunManager(
         state_dir=Path(state_dir),
-        jeeves_script=(Path(__file__).resolve().parent.parent / "jeeves.sh"),
+        jeeves_script=(jeeves_root / "bin" / "jeeves.sh"),
         work_dir=Path(state_dir).resolve().parent,
     )
-    jeeves_dir = Path(__file__).resolve().parent.parent
-    prompt_manager = JeevesPromptManager(jeeves_dir)
-    init_issue_script = jeeves_dir / "init-issue.sh"
+    prompt_manager = JeevesPromptManager(jeeves_root / "prompts")
+    init_issue_script = jeeves_root / "bin" / "init-issue.sh"
     
     def handler(*args_handler, **kwargs_handler):
         return JeevesViewerHandler(

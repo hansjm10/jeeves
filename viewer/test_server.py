@@ -84,8 +84,13 @@ class ViewerRunApiTests(unittest.TestCase):
         self.tools_dir = tmp_path / "jeeves_tools"
         self.tools_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create prompts directory structure matching new layout
+        self.prompts_dir = self.tools_dir / "prompts"
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (self.prompts_dir / "task").mkdir(parents=True, exist_ok=True)
+
         (self.tools_dir / "prompt.md").write_text("# Prompt\nHello\n")
-        (self.tools_dir / "prompt.issue.design.md").write_text("# Design Prompt\n")
+        (self.prompts_dir / "design.md").write_text("# Design Prompt\n")
 
         self.init_script = self.tools_dir / "init-issue.sh"
         _write_executable(
@@ -143,7 +148,7 @@ echo "dummy jeeves: done"
 
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir, jeeves_script=self.dummy_script, work_dir=self.repo_dir)
-        prompt_manager = JeevesPromptManager(self.tools_dir)
+        prompt_manager = JeevesPromptManager(self.prompts_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(

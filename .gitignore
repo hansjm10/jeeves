@@ -3,7 +3,8 @@ prd.json
 issue.json
 progress.txt
 .last-branch
-review.md
+/review.md
+jeeves/review.md
 sonar-issues.json
 last-message.txt
 open-questions.md

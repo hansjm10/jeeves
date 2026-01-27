@@ -32,6 +32,84 @@ class ArgumentParserTests(unittest.TestCase):
         self.assertIn("-w", result.stdout, "Missing -w in help")
 
 
+class WorkDirLogicTests(unittest.TestCase):
+    """Tests for --work-dir logic in JeevesRunManager and argument parsing."""
+
+    def _create_parser(self) -> argparse.ArgumentParser:
+        """Create an argument parser matching the one in main()."""
+        parser = argparse.ArgumentParser(description="Jeeves Real-time Viewer")
+        parser.add_argument("--port", "-p", type=int, default=8080)
+        parser.add_argument("--state-dir", "-s", type=str)
+        parser.add_argument("--allow-remote-run", action="store_true")
+        parser.add_argument("--work-dir", "-w", type=str)
+        return parser
+
+    def test_work_dir_long_form_recognized(self):
+        """Test that --work-dir long form is recognized."""
+        parser = self._create_parser()
+        args = parser.parse_args(["--work-dir", "/custom/path"])
+        self.assertEqual(args.work_dir, "/custom/path")
+
+    def test_work_dir_short_form_recognized(self):
+        """Test that -w short form is recognized."""
+        parser = self._create_parser()
+        args = parser.parse_args(["-w", "/custom/path"])
+        self.assertEqual(args.work_dir, "/custom/path")
+
+    def test_work_dir_default_is_none(self):
+        """Test that work_dir defaults to None when not provided."""
+        parser = self._create_parser()
+        args = parser.parse_args([])
+        self.assertIsNone(args.work_dir)
+
+    def test_work_dir_override_logic(self):
+        """Test that --work-dir overrides the default state_dir.parent derivation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "project" / "jeeves"
+            state_dir.mkdir(parents=True)
+            custom_work_dir = Path(tmp) / "custom_work"
+            custom_work_dir.mkdir()
+
+            # With explicit work_dir, should use that
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=Path("/nonexistent/jeeves.sh"),
+                work_dir=custom_work_dir,
+            )
+            self.assertEqual(run_manager.work_dir, custom_work_dir.resolve())
+
+    def test_work_dir_default_derives_from_state_dir_parent(self):
+        """Test that default behavior derives work_dir from state_dir.parent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "project" / "jeeves"
+            state_dir.mkdir(parents=True)
+
+            # Without explicit work_dir, should derive from state_dir.parent
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=Path("/nonexistent/jeeves.sh"),
+                work_dir=None,
+            )
+            expected = state_dir.resolve().parent
+            self.assertEqual(run_manager.work_dir, expected)
+
+    def test_work_dir_with_both_forms(self):
+        """Test that both short and long forms work with other arguments."""
+        parser = self._create_parser()
+
+        # Long form with other args
+        args = parser.parse_args(["-s", "/state/dir", "--work-dir", "/work/dir", "-p", "9000"])
+        self.assertEqual(args.state_dir, "/state/dir")
+        self.assertEqual(args.work_dir, "/work/dir")
+        self.assertEqual(args.port, 9000)
+
+        # Short form with other args
+        args = parser.parse_args(["--state-dir", "/state/dir", "-w", "/work/dir", "--port", "9000"])
+        self.assertEqual(args.state_dir, "/state/dir")
+        self.assertEqual(args.work_dir, "/work/dir")
+        self.assertEqual(args.port, 9000)
+
+
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)
     path.chmod(path.stat().st_mode | stat.S_IEXEC)

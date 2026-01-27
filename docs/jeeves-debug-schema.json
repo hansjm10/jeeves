@@ -27,7 +27,9 @@
         "debug_iteration_start",
         "debug_iteration_end",
         "debug_runner_invoke",
-        "debug_log_line"
+        "debug_log_line",
+        "debug_sdk_tool_use",
+        "debug_sdk_message"
       ],
       "description": "Event type."
     },
@@ -48,7 +50,7 @@
     },
     "runner": {
       "type": "string",
-      "description": "Runner used for the iteration (codex|claude|opencode)."
+      "description": "Runner used for the iteration (codex|claude|opencode|sdk)."
     },
     "workDir": {
       "type": "string"
@@ -240,6 +242,49 @@
         "integer",
         "null"
       ]
+    },
+    "sdk": {
+      "type": ["object", "null"],
+      "description": "SDK-specific data (present when runner=sdk).",
+      "properties": {
+        "sessionId": {
+          "type": ["string", "null"],
+          "description": "SDK session identifier."
+        },
+        "messageType": {
+          "type": ["string", "null"],
+          "enum": ["system", "user", "assistant", "tool_result", "result", null],
+          "description": "Type of SDK message."
+        },
+        "toolName": {
+          "type": ["string", "null"],
+          "description": "Tool name for tool_use events."
+        },
+        "toolUseId": {
+          "type": ["string", "null"],
+          "description": "Unique identifier for tool call."
+        },
+        "toolInput": {
+          "type": ["object", "null"],
+          "description": "Tool input parameters."
+        },
+        "toolDurationMs": {
+          "type": ["integer", "null"],
+          "description": "Tool execution duration in milliseconds."
+        },
+        "isError": {
+          "type": ["boolean", "null"],
+          "description": "Whether the tool call resulted in an error."
+        },
+        "messageCount": {
+          "type": ["integer", "null"],
+          "description": "Total number of messages at this point."
+        },
+        "toolCallCount": {
+          "type": ["integer", "null"],
+          "description": "Total number of tool calls at this point."
+        }
+      }
     }
   }
 }

@@ -586,7 +586,196 @@
             min-height: 0;
             resize: none;
         }
-        
+
+        /* SDK Output Panel */
+        .sdk-panel {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+        }
+
+        .sdk-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .sdk-stats {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .sdk-stat {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .sdk-stat-label {
+            color: var(--text-muted);
+        }
+
+        .sdk-status-success {
+            color: var(--accent-green);
+            font-weight: 600;
+        }
+
+        .sdk-status-error {
+            color: var(--accent-red);
+            font-weight: 600;
+        }
+
+        .sdk-status-pending {
+            color: var(--text-muted);
+        }
+
+        .sdk-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .sdk-content {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sdk-conversation {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+        }
+
+        .sdk-message {
+            margin-bottom: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 3px solid transparent;
+        }
+
+        .sdk-message.system {
+            background: rgba(163, 113, 247, 0.1);
+            border-left-color: var(--accent-purple);
+        }
+
+        .sdk-message.user {
+            background: rgba(88, 166, 255, 0.1);
+            border-left-color: var(--accent-blue);
+        }
+
+        .sdk-message.assistant {
+            background: rgba(63, 185, 80, 0.08);
+            border-left-color: var(--accent-green);
+        }
+
+        .sdk-message.tool_result {
+            background: rgba(219, 109, 40, 0.1);
+            border-left-color: var(--accent-orange);
+            font-size: 11px;
+        }
+
+        .sdk-message.result {
+            background: rgba(88, 166, 255, 0.15);
+            border-left-color: var(--accent-blue);
+            border-width: 4px;
+        }
+
+        .sdk-message-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .sdk-message-type {
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .sdk-message-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-primary);
+        }
+
+        .sdk-tool-use {
+            margin-top: 8px;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .sdk-tool-name {
+            color: var(--accent-yellow);
+            font-weight: 600;
+        }
+
+        .sdk-tool-input {
+            margin-top: 4px;
+            color: var(--text-secondary);
+            max-height: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .sdk-timeline {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            background: var(--bg-primary);
+            border-radius: 8px;
+        }
+
+        .sdk-timeline-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+        }
+
+        .sdk-timeline-bar {
+            width: 100px;
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .sdk-timeline-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 3px;
+        }
+
+        .sdk-timeline-name {
+            flex: 1;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .sdk-timeline-duration {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
         .log-line {
             padding: 2px 8px;
             margin: 1px 0;
@@ -1010,6 +1199,7 @@
                 <div class="panel-left">
                     <div class="panel-tabs">
                         <button class="tab-btn active" id="tabLogs">Logs</button>
+                        <button class="tab-btn" id="tabSdk">SDK</button>
                         <button class="tab-btn" id="tabPrompts">Prompts</button>
                     </div>
                     <span class="log-count" id="logCount">0 lines</span>
@@ -1046,6 +1236,31 @@
                 <textarea class="control-textarea editor-textarea prompt-editor" id="promptEditor" placeholder="Select a prompt file..."></textarea>
                 <div class="control-status" id="promptStatusText"></div>
             </div>
+            <div class="sdk-panel" id="sdkBody" style="display: none;">
+                <div class="sdk-toolbar">
+                    <div class="sdk-stats" id="sdkStats">
+                        <span class="sdk-stat"><span class="sdk-stat-label">Session:</span> <span id="sdkSessionId">-</span></span>
+                        <span class="sdk-stat"><span class="sdk-stat-label">Messages:</span> <span id="sdkMessageCount">0</span></span>
+                        <span class="sdk-stat"><span class="sdk-stat-label">Tool calls:</span> <span id="sdkToolCount">0</span></span>
+                        <span class="sdk-stat"><span class="sdk-stat-label">Duration:</span> <span id="sdkDuration">-</span></span>
+                        <span class="sdk-stat"><span class="sdk-stat-label">Status:</span> <span id="sdkStatus" class="sdk-status-pending">-</span></span>
+                    </div>
+                    <div class="sdk-controls">
+                        <button class="log-btn" id="btnSdkRefresh">Refresh</button>
+                        <button class="log-btn" id="btnSdkTimeline">Timeline</button>
+                    </div>
+                </div>
+                <div class="sdk-content" id="sdkContent">
+                    <div class="sdk-conversation" id="sdkConversation">
+                        <div class="log-empty">
+                            <div class="log-empty-icon">&#128172;</div>
+                            <div>No SDK output available</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output</div>
+                        </div>
+                    </div>
+                    <div class="sdk-timeline" id="sdkTimeline" style="display: none;"></div>
+                </div>
+            </div>
         </section>
     </main>
     
@@ -1072,6 +1287,175 @@
         let promptListPromise = null;
         let mainTab = 'logs';
         let promptFiles = [];
+        let sdkOutput = null;
+        let sdkShowTimeline = false;
+
+        // SDK output functions
+        async function loadSdkOutput() {
+            try {
+                const response = await fetch('/api/sdk-output', { cache: 'no-store' });
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        sdkOutput = null;
+                        renderSdkOutput();
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                if (data.ok && data.output) {
+                    sdkOutput = data.output;
+                    renderSdkOutput();
+                }
+            } catch (e) {
+                console.error('Failed to load SDK output:', e);
+            }
+        }
+
+        function renderSdkOutput() {
+            const sessionEl = document.getElementById('sdkSessionId');
+            const msgCountEl = document.getElementById('sdkMessageCount');
+            const toolCountEl = document.getElementById('sdkToolCount');
+            const durationEl = document.getElementById('sdkDuration');
+            const statusEl = document.getElementById('sdkStatus');
+            const convEl = document.getElementById('sdkConversation');
+            const timelineEl = document.getElementById('sdkTimeline');
+
+            if (!sdkOutput) {
+                sessionEl.textContent = '-';
+                msgCountEl.textContent = '0';
+                toolCountEl.textContent = '0';
+                durationEl.textContent = '-';
+                statusEl.textContent = '-';
+                statusEl.className = 'sdk-status-pending';
+                convEl.innerHTML = `
+                    <div class="log-empty">
+                        <div class="log-empty-icon">&#128172;</div>
+                        <div>No SDK output available</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output</div>
+                    </div>
+                `;
+                timelineEl.innerHTML = '';
+                return;
+            }
+
+            // Update stats
+            sessionEl.textContent = sdkOutput.session_id ? sdkOutput.session_id.substring(0, 12) + '...' : '-';
+            msgCountEl.textContent = String(sdkOutput.stats?.message_count || sdkOutput.messages?.length || 0);
+            toolCountEl.textContent = String(sdkOutput.stats?.tool_call_count || sdkOutput.tool_calls?.length || 0);
+
+            const duration = sdkOutput.stats?.duration_seconds;
+            durationEl.textContent = duration ? `${duration.toFixed(1)}s` : '-';
+
+            if (sdkOutput.success) {
+                statusEl.textContent = 'Success';
+                statusEl.className = 'sdk-status-success';
+            } else if (sdkOutput.error) {
+                statusEl.textContent = 'Error';
+                statusEl.className = 'sdk-status-error';
+            } else {
+                statusEl.textContent = 'Running';
+                statusEl.className = 'sdk-status-pending';
+            }
+
+            // Render conversation view
+            if (sdkShowTimeline) {
+                convEl.style.display = 'none';
+                timelineEl.style.display = 'block';
+                renderSdkTimeline();
+            } else {
+                convEl.style.display = 'block';
+                timelineEl.style.display = 'none';
+                renderSdkConversation();
+            }
+        }
+
+        function renderSdkConversation() {
+            const convEl = document.getElementById('sdkConversation');
+            if (!sdkOutput || !sdkOutput.messages || sdkOutput.messages.length === 0) {
+                convEl.innerHTML = `
+                    <div class="log-empty">
+                        <div class="log-empty-icon">&#128172;</div>
+                        <div>No messages</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const html = sdkOutput.messages.map(msg => {
+                const type = msg.type || 'unknown';
+                const timestamp = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
+                let contentHtml = '';
+
+                if (msg.content) {
+                    contentHtml = `<div class="sdk-message-content">${escapeHtml(truncateText(msg.content, 1000))}</div>`;
+                }
+
+                let toolHtml = '';
+                if (msg.tool_use) {
+                    const inputStr = JSON.stringify(msg.tool_use.input || {}, null, 2);
+                    toolHtml = `
+                        <div class="sdk-tool-use">
+                            <span class="sdk-tool-name">${escapeHtml(msg.tool_use.name)}</span>
+                            <div class="sdk-tool-input">${escapeHtml(truncateText(inputStr, 300))}</div>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="sdk-message ${type}">
+                        <div class="sdk-message-header">
+                            <span class="sdk-message-type">${type}${msg.subtype ? ` (${msg.subtype})` : ''}</span>
+                            <span>${timestamp}</span>
+                        </div>
+                        ${contentHtml}
+                        ${toolHtml}
+                    </div>
+                `;
+            }).join('');
+
+            convEl.innerHTML = html;
+        }
+
+        function renderSdkTimeline() {
+            const timelineEl = document.getElementById('sdkTimeline');
+            if (!sdkOutput || !sdkOutput.tool_calls || sdkOutput.tool_calls.length === 0) {
+                timelineEl.innerHTML = `
+                    <div class="log-empty">
+                        <div class="log-empty-icon">&#9202;</div>
+                        <div>No tool calls</div>
+                    </div>
+                `;
+                return;
+            }
+
+            // Find max duration for scaling
+            const maxDuration = Math.max(...sdkOutput.tool_calls.map(t => t.duration_ms || 0), 1);
+
+            const html = sdkOutput.tool_calls.map(call => {
+                const duration = call.duration_ms || 0;
+                const percent = Math.min(100, (duration / maxDuration) * 100);
+                const durationStr = duration >= 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`;
+
+                return `
+                    <div class="sdk-timeline-item">
+                        <div class="sdk-timeline-name">${escapeHtml(call.name)}</div>
+                        <div class="sdk-timeline-bar">
+                            <div class="sdk-timeline-fill" style="width: ${percent}%"></div>
+                        </div>
+                        <div class="sdk-timeline-duration">${durationStr}</div>
+                    </div>
+                `;
+            }).join('');
+
+            timelineEl.innerHTML = html;
+        }
+
+        function truncateText(text, maxLen) {
+            if (!text) return '';
+            if (text.length <= maxLen) return text;
+            return text.substring(0, maxLen) + '...';
+        }
 
         async function resyncLogs() {
             try {
@@ -1162,8 +1546,12 @@
         const logsSearchContainer = document.getElementById('logsSearchContainer');
         const logsBody = document.getElementById('logsBody');
         const promptsBody = document.getElementById('promptsBody');
+        const sdkBody = document.getElementById('sdkBody');
         const tabLogs = document.getElementById('tabLogs');
+        const tabSdk = document.getElementById('tabSdk');
         const tabPrompts = document.getElementById('tabPrompts');
+        const btnSdkRefresh = document.getElementById('btnSdkRefresh');
+        const btnSdkTimeline = document.getElementById('btnSdkTimeline');
         const btnAutoScroll = document.getElementById('btnAutoScroll');
         const btnClear = document.getElementById('btnClear');
         const btnHideDiffs = document.getElementById('btnHideDiffs');
@@ -1275,9 +1663,12 @@
         }
 
         function setMainTab(tab) {
-            mainTab = tab === 'prompts' ? 'prompts' : 'logs';
+            if (tab === 'prompts') mainTab = 'prompts';
+            else if (tab === 'sdk') mainTab = 'sdk';
+            else mainTab = 'logs';
 
             if (tabLogs) tabLogs.classList.toggle('active', mainTab === 'logs');
+            if (tabSdk) tabSdk.classList.toggle('active', mainTab === 'sdk');
             if (tabPrompts) tabPrompts.classList.toggle('active', mainTab === 'prompts');
 
             if (logsSearchContainer) logsSearchContainer.style.display = mainTab === 'logs' ? 'block' : 'none';
@@ -1288,6 +1679,9 @@
             if (promptsBody) promptsBody.style.display = mainTab === 'prompts' ? 'flex' : 'none';
             if (mainTab === 'prompts' && promptEditor) promptEditor.focus();
 
+            if (sdkBody) sdkBody.style.display = mainTab === 'sdk' ? 'flex' : 'none';
+            if (mainTab === 'sdk') loadSdkOutput();
+
             try {
                 localStorage.setItem('jeeves_viewer_main_tab', mainTab);
             } catch (e) {
@@ -1296,7 +1690,16 @@
         }
 
         if (tabLogs) tabLogs.addEventListener('click', () => setMainTab('logs'));
+        if (tabSdk) tabSdk.addEventListener('click', () => setMainTab('sdk'));
         if (tabPrompts) tabPrompts.addEventListener('click', () => setMainTab('prompts'));
+
+        if (btnSdkRefresh) btnSdkRefresh.addEventListener('click', () => loadSdkOutput());
+        if (btnSdkTimeline) btnSdkTimeline.addEventListener('click', () => {
+            sdkShowTimeline = !sdkShowTimeline;
+            btnSdkTimeline.classList.toggle('active', sdkShowTimeline);
+            btnSdkTimeline.textContent = sdkShowTimeline ? 'Conversation' : 'Timeline';
+            renderSdkOutput();
+        });
 
         try {
             const savedTab = localStorage.getItem('jeeves_viewer_main_tab');

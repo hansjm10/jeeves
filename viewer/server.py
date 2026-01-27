@@ -541,8 +541,8 @@ class JeevesRunManager:
             if not self.jeeves_script.exists():
                 raise FileNotFoundError(f"jeeves.sh not found at {self.jeeves_script}")
 
-            if runner not in {"auto", "codex", "claude", "opencode"}:
-                raise ValueError("runner must be one of: auto, codex, claude, opencode")
+            if runner not in {"auto", "codex", "claude", "opencode", "sdk"}:
+                raise ValueError("runner must be one of: auto, codex, claude, opencode, sdk")
 
             try:
                 max_iterations_int = int(max_iterations)
@@ -726,6 +726,12 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._send_json({"logs": self.run_manager.get_viewer_logs_tail(500)})
         elif path == "/api/init/issue/script":
             self._handle_init_issue_script_info()
+        elif path == "/api/sdk-output":
+            self._handle_sdk_output()
+        elif path == "/api/sdk-output/messages":
+            self._handle_sdk_output_messages()
+        elif path == "/api/sdk-output/tool-calls":
+            self._handle_sdk_output_tool_calls()
         else:
             super().do_GET()
 
@@ -1220,7 +1226,56 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             },
             status=200 if proc.returncode == 0 else 400,
         )
-    
+
+    def _get_sdk_output_path(self) -> Path:
+        """Get the SDK output file path."""
+        return self.state.state_dir / "sdk-output.json"
+
+    def _read_sdk_output(self) -> Optional[Dict]:
+        """Read and parse SDK output JSON file."""
+        sdk_path = self._get_sdk_output_path()
+        if not sdk_path.exists():
+            return None
+        try:
+            with open(sdk_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _handle_sdk_output(self):
+        """Handle GET /api/sdk-output - Return full SDK output."""
+        data = self._read_sdk_output()
+        if data is None:
+            self._send_json({"ok": False, "error": "SDK output not found"}, status=404)
+            return
+        self._send_json({"ok": True, "output": data})
+
+    def _handle_sdk_output_messages(self):
+        """Handle GET /api/sdk-output/messages - Return just the messages array."""
+        data = self._read_sdk_output()
+        if data is None:
+            self._send_json({"ok": False, "error": "SDK output not found"}, status=404)
+            return
+        messages = data.get("messages", [])
+        self._send_json({"ok": True, "messages": messages})
+
+    def _handle_sdk_output_tool_calls(self):
+        """Handle GET /api/sdk-output/tool-calls - Return tool call summary."""
+        data = self._read_sdk_output()
+        if data is None:
+            self._send_json({"ok": False, "error": "SDK output not found"}, status=404)
+            return
+        tool_calls = data.get("tool_calls", [])
+        stats = data.get("stats", {})
+        self._send_json({
+            "ok": True,
+            "tool_calls": tool_calls,
+            "stats": {
+                "tool_call_count": stats.get("tool_call_count", len(tool_calls)),
+                "duration_seconds": stats.get("duration_seconds", 0),
+            }
+        })
+
     def _send_json(self, data: Dict, status: int = 200):
         """Send JSON response"""
         body = json.dumps(data).encode()

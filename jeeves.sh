@@ -1,6 +1,6 @@
 #!/bin/bash
 # Jeeves Wiggum - Long-running AI agent loop
-# Usage: ./jeeves.sh [--runner codex|claude] [--codex|--claude] [--max-iterations N] [max_iterations]
+# Usage: ./jeeves.sh [--runner sdk|codex|claude] [--codex|--claude] [--max-iterations N] [max_iterations]
 
 set -e
 
@@ -975,7 +975,7 @@ print_usage() {
 Usage: $0 [OPTIONS] [max_iterations]
 
 Options:
-    --runner RUNNER      Set runner to 'codex', 'claude', or 'opencode' (overrides JEEVES_RUNNER)
+    --runner RUNNER      Set runner to 'sdk' (default), 'codex', 'claude', or 'opencode' (overrides JEEVES_RUNNER)
      --codex              Use Codex runner (same as --runner codex)
      --claude             Use Claude runner (same as --runner claude)
      --opencode           Use Opencode runner (same as --runner opencode)
@@ -1012,7 +1012,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --runner)
             if [[ -z $2 ]]; then
-                echo "Error: --runner requires an argument (codex|claude|opencode)" >&2
+                echo "Error: --runner requires an argument (sdk|codex|claude|opencode)" >&2
                 exit 1
             fi
             RUNNER_ARG="$2"
@@ -1561,17 +1561,25 @@ select_issue_phase() {
 # Runner selection
 RUNNER="${JEEVES_RUNNER:-auto}"
 if [ "$RUNNER" = "auto" ]; then
-  if command -v codex >/dev/null 2>&1; then
+  # SDK runner is the default (requires Python + claude-agent-sdk)
+  if python3 -c "import claude_agent_sdk" 2>/dev/null; then
+    RUNNER="sdk"
+  elif command -v codex >/dev/null 2>&1; then
     RUNNER="codex"
   elif command -v claude >/dev/null 2>&1; then
     RUNNER="claude"
   elif command -v opencode >/dev/null 2>&1; then
     RUNNER="opencode"
   else
-    echo "[ERROR] No supported agent runner found. Install Codex CLI (\`codex\`), Claude CLI (\`claude\`), or Opencode CLI (\`opencode\`)."
+    echo "[ERROR] No supported agent runner found."
+    echo "  - Install claude-agent-sdk: pip install claude-agent-sdk (recommended)"
+    echo "  - Or install Codex CLI, Claude CLI, or Opencode CLI"
     exit 1
   fi
 fi
+
+# SDK runner settings (used when RUNNER=sdk)
+SDK_OUTPUT_FILE="${JEEVES_SDK_OUTPUT:-$JEEVES_STATE_DIR/sdk-output.json}"
 
 CODEX_APPROVAL_POLICY="${JEEVES_CODEX_APPROVAL_POLICY:-never}"
 CODEX_SANDBOX="${JEEVES_CODEX_SANDBOX:-danger-full-access}"
@@ -1608,6 +1616,8 @@ if [ "$RUNNER" = "codex" ]; then
 elif [ "$RUNNER" = "claude" ]; then
   echo "[DEBUG] Claude sandbox: $CLAUDE_SANDBOX"
   echo "[DEBUG] Claude dangerous skip permissions: $CLAUDE_DANGEROUS_SKIP_PERMISSIONS"
+elif [ "$RUNNER" = "sdk" ]; then
+  echo "[DEBUG] SDK output file: $SDK_OUTPUT_FILE"
 fi
 if [ "$OUTPUT_MODE" != "stream" ]; then
   echo "[DEBUG] Runner log file: $LAST_RUN_LOG_FILE"
@@ -1886,6 +1896,28 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 	      debug_write_runner_invoke "$i" "$DEBUG_PHASE_KEY" "$RUNNER_CALLS"
 	      (cd "$WORK_DIR" && $OPENCODE_CMD run "$(cat "$PROMPT_FILE_TO_USE")" > "$LAST_RUN_LOG_FILE" 2>&1) || true
 	    fi
+  elif [ "$RUNNER" = "sdk" ]; then
+    # SDK runner using claude-agent-sdk (Python)
+    rm -f "$LAST_RUN_LOG_FILE" 2>/dev/null || true
+    : > "$LAST_RUN_LOG_FILE"
+    RUNNER_CALLS=$((RUNNER_CALLS + 1))
+    debug_write_runner_invoke "$i" "$DEBUG_PHASE_KEY" "$RUNNER_CALLS"
+
+    SDK_RUNNER_CMD="python -m jeeves.runner.sdk_runner"
+    SDK_ARGS=(
+      --prompt "$PROMPT_FILE_TO_USE"
+      --output "$SDK_OUTPUT_FILE"
+      --text-output "$LAST_RUN_LOG_FILE"
+      --work-dir "$WORK_DIR"
+      --state-dir "$JEEVES_STATE_DIR"
+    )
+
+    if [ "$OUTPUT_MODE" = "stream" ]; then
+      # In stream mode, tee output to stderr for real-time viewing
+      (cd "$WORK_DIR" && $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+    else
+      (cd "$WORK_DIR" && $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+    fi
   else
     echo "[ERROR] Unsupported runner: $RUNNER"
     exit 1

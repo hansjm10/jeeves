@@ -109,6 +109,84 @@ class WorkDirLogicTests(unittest.TestCase):
         self.assertEqual(args.work_dir, "/work/dir")
         self.assertEqual(args.port, 9000)
 
+    def test_work_dir_relative_path_resolved_to_absolute(self):
+        """Test that relative paths are resolved to absolute paths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir(parents=True)
+            relative_work_dir = Path(tmp) / "project"
+            relative_work_dir.mkdir()
+
+            # Save current dir and change to tmp to make relative path meaningful
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                # JeevesRunManager should resolve relative paths to absolute
+                run_manager = JeevesRunManager(
+                    state_dir=state_dir,
+                    jeeves_script=Path("/nonexistent/jeeves.sh"),
+                    work_dir=Path("project"),  # relative path
+                )
+                # Should be resolved to absolute
+                self.assertTrue(run_manager.work_dir.is_absolute())
+                self.assertEqual(run_manager.work_dir, relative_work_dir.resolve())
+            finally:
+                os.chdir(original_cwd)
+
+    def test_work_dir_nonexistent_path_accepted(self):
+        """Test that non-existent paths are accepted (not validated at init time)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir(parents=True)
+            nonexistent_path = Path(tmp) / "does_not_exist"
+
+            # JeevesRunManager should accept non-existent paths without error
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=Path("/nonexistent/jeeves.sh"),
+                work_dir=nonexistent_path,
+            )
+            self.assertEqual(run_manager.work_dir, nonexistent_path.resolve())
+            self.assertFalse(run_manager.work_dir.exists())
+
+    def test_work_dir_symlink_resolved(self):
+        """Test that symlink paths are resolved to their real paths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir(parents=True)
+            real_dir = Path(tmp) / "real_project"
+            real_dir.mkdir()
+            symlink_dir = Path(tmp) / "symlink_project"
+            symlink_dir.symlink_to(real_dir)
+
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=Path("/nonexistent/jeeves.sh"),
+                work_dir=symlink_dir,
+            )
+            # resolve() follows symlinks, so work_dir should point to real path
+            self.assertEqual(run_manager.work_dir, real_dir.resolve())
+
+    def test_work_dir_empty_string_treated_as_current_dir(self):
+        """Test that empty string is treated as current directory (resolves to cwd)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir(parents=True)
+
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                # Empty string path when resolved should give current directory
+                run_manager = JeevesRunManager(
+                    state_dir=state_dir,
+                    jeeves_script=Path("/nonexistent/jeeves.sh"),
+                    work_dir=Path(""),  # empty string path
+                )
+                # Path("").resolve() returns the current working directory
+                self.assertEqual(run_manager.work_dir, Path(tmp).resolve())
+            finally:
+                os.chdir(original_cwd)
+
 
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)

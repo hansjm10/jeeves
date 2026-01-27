@@ -1560,9 +1560,18 @@ select_issue_phase() {
 
 # Runner selection
 RUNNER="${JEEVES_RUNNER:-auto}"
+
+# SDK Python: prefer venv if available, else system python
+SDK_VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+if [ -x "$SDK_VENV_PYTHON" ]; then
+  SDK_PYTHON="$SDK_VENV_PYTHON"
+else
+  SDK_PYTHON="python3"
+fi
+
 if [ "$RUNNER" = "auto" ]; then
   # SDK runner is the default (requires Python + claude-agent-sdk)
-  if python3 -c "import claude_agent_sdk" 2>/dev/null; then
+  if "$SDK_PYTHON" -c "import claude_agent_sdk" 2>/dev/null; then
     RUNNER="sdk"
   elif command -v codex >/dev/null 2>&1; then
     RUNNER="codex"
@@ -1572,7 +1581,7 @@ if [ "$RUNNER" = "auto" ]; then
     RUNNER="opencode"
   else
     echo "[ERROR] No supported agent runner found."
-    echo "  - Install claude-agent-sdk: pip install claude-agent-sdk (recommended)"
+    echo "  - Create venv: python3 -m venv .venv && .venv/bin/pip install claude-agent-sdk"
     echo "  - Or install Codex CLI, Claude CLI, or Opencode CLI"
     exit 1
   fi
@@ -1903,7 +1912,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     RUNNER_CALLS=$((RUNNER_CALLS + 1))
     debug_write_runner_invoke "$i" "$DEBUG_PHASE_KEY" "$RUNNER_CALLS"
 
-    SDK_RUNNER_CMD="python -m jeeves.runner.sdk_runner"
+    SDK_RUNNER_CMD="$SDK_PYTHON -m jeeves.runner.sdk_runner"
     SDK_ARGS=(
       --prompt "$PROMPT_FILE_TO_USE"
       --output "$SDK_OUTPUT_FILE"

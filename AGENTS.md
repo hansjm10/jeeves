@@ -7,12 +7,6 @@ Jeeves is an autonomous AI agent loop that runs **fresh agent runner sessions** 
 ## Commands
 
 ```bash
-# Run the flowchart dev server
-cd flowchart && npm run dev
-
-# Build the flowchart
-cd flowchart && npm run build
-
 # Run Jeeves (from your project that has `jeeves/issue.json`)
 ./jeeves.sh [--runner codex|claude|opencode] [--max-iterations N] [max_iterations]
 
@@ -26,20 +20,8 @@ python3 viewer/server.py --allow-remote-run
 ## Key Files
 
 - `jeeves.sh` - The bash loop that spawns fresh runner sessions (`--runner codex|claude|opencode`)
-- `prompt.issue.*.md` - Issue-mode phase prompts (design/implement/review/coverage/sonar/etc.)
+- `prompt.issue.*.md` - Phase prompts (design/implement/review/coverage/sonar/etc.)
 - `viewer/` - Real-time web dashboard for monitoring Jeeves runs
-- `flowchart/` - Interactive React Flow diagram explaining how Jeeves works
-
-## Flowchart
-
-The `flowchart/` directory contains an interactive visualization built with React Flow. It's designed for presentations - click through to reveal each step with animations.
-
-To run locally:
-```bash
-cd flowchart
-npm install
-npm run dev
-```
 
 ## Real-time Viewer
 
@@ -77,5 +59,4 @@ Use the viewer while running Jeeves to see what's happening without scrolling th
 - For issue CI polling, prefer `gh pr checks --watch --interval 15` to avoid burning iterations on pending checks (use `--required` only if you intentionally want required checks)
 - Keep `pnpm coverage:md` in the coverage phase (avoid running it during implement/review)
 - Prefer `git commit --no-verify` in automation after running explicit checks (repo hooks can add ~5–10 minutes per commit)
-- `docs/design-document-template.md` is synced from `/work/Idle-Game-Engine/docs/design-document-template.md`
 - Always update AGENTS.md with discovered patterns for future iterations

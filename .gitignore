@@ -25,3 +25,8 @@ __pycache__/
 
 # Claude
 .claude/
+
+
+# Added by cargo
+
+/target

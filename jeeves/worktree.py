@@ -3,11 +3,12 @@
 This module handles creating and managing git worktrees for isolated issue work.
 """
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .paths import get_worktree_path, get_repo_path, ensure_directory
+from .paths import get_worktree_path, get_repo_path, get_issue_state_dir, ensure_directory
 from .repo import run_git, RepoError, get_default_branch
 
 
@@ -96,7 +97,50 @@ def create_worktree(
             shutil.rmtree(worktree_path, ignore_errors=True)
         raise WorktreeError(f"Failed to create worktree: {e}") from e
 
+    # Create symlink from worktree/jeeves -> state_dir
+    # This allows prompts to use relative paths like `jeeves/issue.json`
+    _create_state_symlink(worktree_path, owner, repo, issue_number)
+
     return worktree_path
+
+
+def _create_state_symlink(
+    worktree_path: Path,
+    owner: str,
+    repo: str,
+    issue_number: int,
+) -> None:
+    """Create a symlink from worktree/.jeeves to the state directory.
+
+    This enables prompts to use relative paths like `.jeeves/issue.json`
+    while the actual state is stored in the centralized location.
+
+    Note: We use `.jeeves` (with dot) because some repos may have a `jeeves/`
+    directory (like this one - the Python package).
+
+    Args:
+        worktree_path: Path to the worktree.
+        owner: Repository owner.
+        repo: Repository name.
+        issue_number: Issue number.
+    """
+    state_dir = get_issue_state_dir(owner, repo, issue_number)
+    symlink_path = worktree_path / ".jeeves"
+
+    # Remove existing symlink if it exists
+    if symlink_path.is_symlink():
+        symlink_path.unlink()
+    elif symlink_path.exists():
+        # Don't overwrite an actual directory
+        return
+
+    try:
+        # Create symlink
+        symlink_path.symlink_to(state_dir)
+    except OSError:
+        # Symlinks may not work on all systems (e.g., Windows without admin)
+        # Fall back to no symlink - prompts will need to use $JEEVES_STATE_DIR
+        pass
 
 
 def remove_worktree(

@@ -4,17 +4,17 @@ You are an autonomous coding agent working on a software project.
 
 ## Inputs
 
-- Issue config: `jeeves/issue.json`
-- Progress log: `jeeves/progress.txt`
-- Design document: path in `jeeves/issue.json` (`designDocPath`)
-- Task list: `jeeves/issue.json.tasks`
+- Issue config: `.jeeves/issue.json`
+- Progress log: `.jeeves/progress.txt`
+- Design document: path in `.jeeves/issue.json` (`designDocPath`)
+- Task list: `.jeeves/issue.json.tasks`
 
 ## Your Task
 
-1. Read `jeeves/issue.json` and `jeeves/progress.txt`.
-2. Check out the configured branch from `jeeves/issue.json.branchName` (create from `main` if needed).
+1. Read `.jeeves/issue.json` and `.jeeves/progress.txt`.
+2. Check out the configured branch from `.jeeves/issue.json.branchName` (create from `main` if needed).
 3. Identify the current task:
-   - Use `jeeves/issue.json.status.currentTaskId`.
+   - Use `.jeeves/issue.json.status.currentTaskId`.
    - If missing, pick the first task with `status != done` and set `currentTaskId`.
 4. Implement **only** the current task using TDD:
    - Write a failing test first.
@@ -25,14 +25,14 @@ You are an autonomous coding agent working on a software project.
 7. Ensure a PR exists and its description is compliant (only if not already done):
    - If `status.prCreated` is not `true`, push the branch and create a PR targeting `main`.
    - Ensure the PR body includes a short summary and a closing line `Fixes #<issueNumber>`.
-8. Update `jeeves/issue.json`:
+8. Update `.jeeves/issue.json`:
    - See "Task Review Skipping" below to decide `taskStage`.
    - Preserve `status.currentTaskId`.
-9. Append a progress entry to `jeeves/progress.txt` summarizing what changed, tests run, and the task id.
+9. Append a progress entry to `.jeeves/progress.txt` summarizing what changed, tests run, and the task id.
 
 ## Task Review Skipping
 
-Check if `jeeves/issue.json.config.autoSkipTaskReviews` is `true`. If so, assess whether this task needs review phases:
+Check if `.jeeves/issue.json.config.autoSkipTaskReviews` is `true`. If so, assess whether this task needs review phases:
 
 **Skip reviews (set `taskStage=implement` and advance to next pending task, or mark `tasksComplete` if none remain) if ALL of:**
 - Task is low-risk: documentation, config changes, simple wiring, straightforward CRUD

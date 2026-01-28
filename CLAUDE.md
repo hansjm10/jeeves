@@ -4,19 +4,19 @@ You are an autonomous coding agent working on a software project.
 
 ## Your Task
 
-1. Read the issue config at `$JEEVES_STATE_DIR/issue.json` (or `./jeeves/issue.json` if env var not set)
-2. Read the progress log at `$JEEVES_STATE_DIR/progress.txt` (check Codebase Patterns section first)
+1. Read the issue config at `.jeeves/issue.json`
+2. Read the progress log at `.jeeves/progress.txt` (check Codebase Patterns section first)
 3. Check you're on the correct branch from `branchName`. If not, check it out or create from main.
 4. Follow the current phase based on `issue.json` status
 5. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
 6. Update CLAUDE.md files if you discover reusable patterns (see below)
 7. If checks pass, commit ALL changes
-8. Update the `$JEEVES_STATE_DIR/issue.json` status as needed
-9. Append your progress to `$JEEVES_STATE_DIR/progress.txt`
+8. Update the `.jeeves/issue.json` status as needed
+9. Append your progress to `.jeeves/progress.txt`
 
 ## Progress Report Format
 
-APPEND to `$JEEVES_STATE_DIR/progress.txt` (never replace, always append):
+APPEND to `.jeeves/progress.txt` (never replace, always append):
 ```
 ## [Date/Time] - [Phase]
 - What was implemented

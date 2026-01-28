@@ -7,6 +7,14 @@ review.md
 sonar-issues.json
 last-message.txt
 open-questions.md
+task-*.md
+
+# Jeeves state files (should not be tracked)
+last-run.log
+metrics.jsonl
+current-run.json
+viewer-run.log
+.runs/
 
 # Secrets
 .env.sonarcloud

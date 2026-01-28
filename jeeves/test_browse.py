@@ -68,6 +68,18 @@ class TestPromptChoice:
 
             assert result == 1
 
+    def test_handles_empty_input_then_valid(self):
+        """Should re-prompt when user enters empty string."""
+        # Simulate: empty string, then valid selection
+        inputs = iter(["", "", "1"])
+
+        with mock.patch("builtins.input", side_effect=lambda _: next(inputs)):
+            options = ["Option A", "Option B"]
+            with mock.patch("sys.stdout", StringIO()):
+                result = prompt_choice(options, "Select:")
+
+            assert result == 0  # First option selected
+
     def test_raises_on_keyboard_interrupt(self):
         """Should raise BrowseError on keyboard interrupt."""
         with mock.patch("builtins.input", side_effect=KeyboardInterrupt):

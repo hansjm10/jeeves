@@ -296,3 +296,94 @@ class TestSelectRepositoryWithRecent:
                 call_args = mock_prompt.call_args
                 options = call_args[0][0]
                 assert len(options) == 2
+
+
+class TestLoadRecentSelectionsEdgeCases:
+    """Edge case tests for load_recent_selections function."""
+
+    def test_returns_default_when_file_contains_non_dict(self):
+        """Should return default structure when file contains a list instead of dict."""
+        from jeeves.browse import load_recent_selections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recent_file = Path(tmpdir) / "recent.json"
+            # Write a valid JSON but not a dict
+            recent_file.write_text(json.dumps(["not", "a", "dict"]))
+
+            with mock.patch("jeeves.browse.get_data_dir", return_value=Path(tmpdir)):
+                result = load_recent_selections()
+
+        assert result == {"repos": [], "maxRecent": 10}
+
+    def test_returns_default_when_file_missing_repos_key(self):
+        """Should return default structure when file is dict but missing 'repos' key."""
+        from jeeves.browse import load_recent_selections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recent_file = Path(tmpdir) / "recent.json"
+            # Write a dict but missing the 'repos' key
+            recent_file.write_text(json.dumps({"maxRecent": 10, "otherKey": "value"}))
+
+            with mock.patch("jeeves.browse.get_data_dir", return_value=Path(tmpdir)):
+                result = load_recent_selections()
+
+        assert result == {"repos": [], "maxRecent": 10}
+
+
+class TestSelectRepositoryLongDescriptions:
+    """Tests for select_repository with long description truncation."""
+
+    def test_truncates_long_descriptions(self):
+        """Should truncate descriptions longer than 50 characters."""
+        from jeeves.browse import select_repository
+
+        mock_repos = [
+            {
+                "name": "my-repo",
+                "owner": "testuser",
+                "description": "This is a very long description that exceeds fifty characters and should be truncated with ellipsis",
+                "updatedAt": None
+            },
+        ]
+
+        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+                        select_repository()
+
+        # Check that prompt_choice was called with truncated description
+        call_args = mock_prompt.call_args
+        options = call_args[0][0]
+        assert len(options) == 1
+        # Description should be truncated with "..."
+        assert "..." in options[0]
+        # The option should not contain the full long description
+        assert "should be truncated with ellipsis" not in options[0]
+
+    def test_does_not_truncate_short_descriptions(self):
+        """Should not truncate descriptions 50 characters or shorter."""
+        from jeeves.browse import select_repository
+
+        mock_repos = [
+            {
+                "name": "my-repo",
+                "owner": "testuser",
+                "description": "Short description under fifty chars",
+                "updatedAt": None
+            },
+        ]
+
+        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+                        select_repository()
+
+        call_args = mock_prompt.call_args
+        options = call_args[0][0]
+        assert len(options) == 1
+        # Short description should not be truncated
+        assert "Short description under fifty chars" in options[0]
+        # Should not have ellipsis
+        assert "..." not in options[0]

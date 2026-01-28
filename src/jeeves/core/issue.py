@@ -62,6 +62,7 @@ class IssueState:
     issue: GitHubIssue
     branch: str
     phase: str = "design"
+    workflow: str = "default"
     design_doc_path: Optional[str] = None
     notes: str = ""
 
@@ -104,6 +105,7 @@ class IssueState:
             "issue": issue_dict,
             "branch": self.branch,
             "phase": self.phase,
+            "workflow": self.workflow,
             "notes": self.notes,
         }
         if self.design_doc_path:
@@ -137,6 +139,7 @@ class IssueState:
 
         branch = data.get("branch") or data.get("branchName") or f"issue/{issue.number}"
         phase = data.get("phase") or "design"
+        workflow = data.get("workflow", "default")
 
         return cls(
             owner=owner,
@@ -144,6 +147,7 @@ class IssueState:
             issue=issue,
             branch=branch,
             phase=phase,
+            workflow=workflow,
             design_doc_path=data.get("designDocPath") or data.get("designDoc"),
             notes=data.get("notes", ""),
         )
@@ -212,6 +216,7 @@ def create_issue_state(
     issue_number: int,
     branch: Optional[str] = None,
     design_doc: Optional[str] = None,
+    workflow: str = "default",
     fetch_metadata: bool = True,
     force: bool = False,
 ) -> IssueState:
@@ -239,6 +244,7 @@ def create_issue_state(
         issue=issue,
         branch=branch,
         phase="design",
+        workflow=workflow,
         design_doc_path=design_doc,
     )
     state._state_dir = state_dir

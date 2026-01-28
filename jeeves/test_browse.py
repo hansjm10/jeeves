@@ -100,8 +100,10 @@ class TestSelectRepository:
         ]
 
         with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.prompt_choice", return_value=0):
-                owner, repo = select_repository()
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+                        owner, repo = select_repository()
 
         assert owner == "testuser"
         assert repo == "my-project"
@@ -113,8 +115,10 @@ class TestSelectRepository:
         ]
 
         with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos) as mock_list:
-            with mock.patch("jeeves.browse.prompt_choice", return_value=0):
-                select_repository()
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+                        select_repository()
 
         mock_list.assert_called_once()
 
@@ -125,8 +129,10 @@ class TestSelectRepository:
         ]
 
         with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
-                select_repository()
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+                        select_repository()
 
         # Check that prompt_choice was called with formatted options
         call_args = mock_prompt.call_args
@@ -137,8 +143,9 @@ class TestSelectRepository:
     def test_raises_on_no_repos_found(self):
         """Should raise BrowseError when no repositories are found."""
         with mock.patch("jeeves.browse.list_user_repos", return_value=[]):
-            with pytest.raises(BrowseError) as exc_info:
-                select_repository()
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with pytest.raises(BrowseError) as exc_info:
+                    select_repository()
 
         assert "no repositories" in str(exc_info.value).lower()
 
@@ -149,8 +156,10 @@ class TestSelectRepository:
         ]
 
         with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.prompt_choice", return_value=0):
-                owner, repo = select_repository()
+            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.browse.record_recent_repo"):
+                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+                        owner, repo = select_repository()
 
         assert repo == "no-desc"
 

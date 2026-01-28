@@ -64,9 +64,11 @@ class TestPromptsDirectory:
             assert not file_path.exists(), f"Old prompt file should not exist at {file_path}"
 
     def test_prompts_directory_has_correct_count(self):
-        """Verify prompts/ directory has exactly 11 prompt files."""
+        """Verify prompts/ directory has the expected number of prompt files."""
         repo_root = get_repo_root()
         prompts_dir = repo_root / "prompts"
 
         prompt_files = list(prompts_dir.glob("*.md"))
-        assert len(prompt_files) == 11, f"Expected 11 prompt files, found {len(prompt_files)}: {prompt_files}"
+        # 11 original + 6 workflow prompts (design.draft, design.review, design.edit,
+        # implement, review.evaluate, review.fix)
+        assert len(prompt_files) == 17, f"Expected 17 prompt files, found {len(prompt_files)}: {prompt_files}"

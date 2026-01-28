@@ -80,13 +80,13 @@ class ClaudeSDKProvider(OutputProvider):
     def supports_tokens(self) -> bool:
         """Whether this provider reports token usage.
 
-        The Claude Agent SDK currently does not expose token usage
-        information through its streaming interface.
+        The Claude Agent SDK provides token usage information in the
+        ResultMessage at the end of a run.
 
         Returns:
-            False - token tracking not supported yet.
+            True - token tracking is supported via ResultMessage.usage.
         """
-        return False
+        return True
 
     def parse_event(self, event: Any) -> Message:
         """Parse a Claude SDK event into a Message.

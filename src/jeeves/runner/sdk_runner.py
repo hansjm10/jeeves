@@ -80,6 +80,31 @@ class SDKRunner:
             self._log_file.write(line + "\n")
             self._log_file.flush()
 
+    def _log_usage_summary(self) -> None:
+        """Log a friendly usage summary."""
+        total = self.output.input_tokens + self.output.output_tokens
+        self._log(
+            f"[USAGE] Tokens: {self.output.input_tokens:,} in / "
+            f"{self.output.output_tokens:,} out ({total:,} total)"
+        )
+        if self.output.cache_creation_tokens > 0 or self.output.cache_read_tokens > 0:
+            self._log(
+                f"[USAGE] Cache: {self.output.cache_creation_tokens:,} created / "
+                f"{self.output.cache_read_tokens:,} read"
+            )
+        # Calculate context percentage
+        total_input = (
+            self.output.input_tokens
+            + self.output.cache_creation_tokens
+            + self.output.cache_read_tokens
+        )
+        if self.output.context_window_size > 0:
+            context_pct = (total_input / self.output.context_window_size) * 100
+            window_k = self.output.context_window_size // 1000
+            self._log(f"[USAGE] Context: {context_pct:.1f}% of {window_k}K")
+        if self.output.total_cost_usd is not None:
+            self._log(f"[USAGE] Cost: ${self.output.total_cost_usd:.4f}")
+
     async def run(self) -> SDKOutput:
         """Run the agent with the given prompt and collect output."""
         # Open log file for streaming
@@ -289,7 +314,24 @@ class SDKRunner:
                 )
 
         elif isinstance(message, ResultMessage):
-            # Final result message
+            # Final result message - extract token usage and cost
+            if message.usage:
+                self.output.input_tokens = message.usage.get("input_tokens", 0)
+                self.output.output_tokens = message.usage.get("output_tokens", 0)
+                self.output.cache_creation_tokens = message.usage.get(
+                    "cache_creation_input_tokens", 0
+                )
+                self.output.cache_read_tokens = message.usage.get(
+                    "cache_read_input_tokens", 0
+                )
+
+            if message.total_cost_usd is not None:
+                self.output.total_cost_usd = message.total_cost_usd
+
+            # Log usage summary after setting all fields
+            if message.usage:
+                self._log_usage_summary()
+
             subtype = message.subtype
             result = message.result
             self._log("")

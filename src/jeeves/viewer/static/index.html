@@ -635,6 +635,38 @@
             color: var(--text-muted);
         }
 
+        /* Context bar for token usage */
+        .context-bar-container {
+            display: inline-block;
+            width: 50px;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            vertical-align: middle;
+            margin: 0 4px;
+        }
+
+        .context-bar {
+            display: block;
+            height: 100%;
+            width: 0%;
+            border-radius: 4px;
+            transition: width 0.3s ease-out, background 0.3s;
+        }
+
+        .context-bar.context-low {
+            background: var(--accent-green);
+        }
+
+        .context-bar.context-medium {
+            background: var(--accent-yellow);
+        }
+
+        .context-bar.context-high {
+            background: var(--accent-red);
+        }
+
         .sdk-controls {
             display: flex;
             gap: 8px;
@@ -1213,7 +1245,8 @@
                         <span class="sdk-stat"><span class="sdk-stat-label">Messages:</span> <span id="sdkMessageCount">0</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Tool calls:</span> <span id="sdkToolCount">0</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Duration:</span> <span id="sdkDuration">-</span></span>
-                        <span class="sdk-stat" id="sdkTokensStat" style="display: none;"><span class="sdk-stat-label">Tokens:</span> <span id="sdkInputTokens">0</span> in / <span id="sdkOutputTokens">0</span> out</span>
+                        <span class="sdk-stat" id="sdkTokensStat" style="display: none;"><span class="sdk-stat-label">Tokens:</span> <span id="sdkInputTokens">0</span> in / <span id="sdkOutputTokens">0</span> out <span class="context-bar-container"><span class="context-bar" id="sdkContextBar"></span></span> <span id="sdkContextPct">0%</span></span>
+                        <span class="sdk-stat" id="sdkCostStat" style="display: none;"><span class="sdk-stat-label">Cost:</span> <span id="sdkCost">-</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Status:</span> <span id="sdkStatus" class="sdk-status-pending">-</span></span>
                     </div>
                     <div class="sdk-controls">
@@ -1296,6 +1329,9 @@
                         message_count: data.summary?.message_count || (data.conversation?.length || 0),
                         tool_call_count: data.summary?.tool_call_count || (data.tool_calls?.length || 0),
                         duration_seconds: data.summary?.duration_seconds || 0,
+                        context_percentage: data.summary?.context_percentage,
+                        context_window_size: data.summary?.context_window_size,
+                        cost_usd: data.summary?.cost_usd,
                     },
                     // Token tracking (when provider supports it)
                     tokens: tokens,
@@ -1311,16 +1347,18 @@
                 // v1 schema (default): uses session_id, messages, stats directly
                 // Extract token counts from stats.tokens when available
                 const tokens = data.stats?.tokens || null;
+                // Copy stats but ensure we have all the fields we need
+                const stats = data.stats ? { ...data.stats } : {
+                    message_count: data.messages?.length || 0,
+                    tool_call_count: data.tool_calls?.length || 0,
+                    duration_seconds: 0,
+                };
                 return {
                     schemaVersion: 'v1',
                     session_id: data.session_id || null,
                     messages: data.messages || [],
                     tool_calls: data.tool_calls || [],
-                    stats: data.stats || {
-                        message_count: data.messages?.length || 0,
-                        tool_call_count: data.tool_calls?.length || 0,
-                        duration_seconds: 0,
-                    },
+                    stats: stats,
                     // Token tracking (when provider supports it)
                     tokens: tokens,
                     success: data.success,
@@ -1369,16 +1407,26 @@
             const tokensStatEl = document.getElementById('sdkTokensStat');
             const inputTokensEl = document.getElementById('sdkInputTokens');
             const outputTokensEl = document.getElementById('sdkOutputTokens');
+            const contextBarEl = document.getElementById('sdkContextBar');
+            const contextPctEl = document.getElementById('sdkContextPct');
+            const costStatEl = document.getElementById('sdkCostStat');
+            const costEl = document.getElementById('sdkCost');
 
             if (!sdkOutput) {
                 if (providerStatEl) providerStatEl.style.display = 'none';
                 if (tokensStatEl) tokensStatEl.style.display = 'none';
+                if (costStatEl) costStatEl.style.display = 'none';
                 sessionEl.textContent = '-';
                 msgCountEl.textContent = '0';
                 toolCountEl.textContent = '0';
                 durationEl.textContent = '-';
                 statusEl.textContent = '-';
                 statusEl.className = 'sdk-status-pending';
+                if (contextBarEl) {
+                    contextBarEl.style.width = '0%';
+                    contextBarEl.className = 'context-bar';
+                }
+                if (contextPctEl) contextPctEl.textContent = '0%';
                 convEl.innerHTML = `
                     <div class="log-empty">
                         <div class="log-empty-icon">&#128172;</div>
@@ -1413,8 +1461,35 @@
                 inputTokensEl.textContent = sdkOutput.tokens.input.toLocaleString();
                 outputTokensEl.textContent = sdkOutput.tokens.output.toLocaleString();
                 if (tokensStatEl) tokensStatEl.style.display = 'inline';
+
+                // Update context bar
+                const contextPct = sdkOutput.stats?.context_percentage || 0;
+                if (contextBarEl) {
+                    contextBarEl.style.width = `${Math.min(contextPct, 100)}%`;
+                    // Color based on usage level
+                    contextBarEl.className = 'context-bar ' + (
+                        contextPct >= 80 ? 'context-high' :
+                        contextPct >= 50 ? 'context-medium' : 'context-low'
+                    );
+                }
+                if (contextPctEl) {
+                    contextPctEl.textContent = `${contextPct.toFixed(1)}%`;
+                }
             } else {
                 if (tokensStatEl) tokensStatEl.style.display = 'none';
+                if (contextBarEl) {
+                    contextBarEl.style.width = '0%';
+                    contextBarEl.className = 'context-bar';
+                }
+                if (contextPctEl) contextPctEl.textContent = '0%';
+            }
+
+            // Show cost when available
+            if (sdkOutput.stats?.cost_usd !== undefined && sdkOutput.stats?.cost_usd !== null) {
+                costEl.textContent = `$${sdkOutput.stats.cost_usd.toFixed(4)}`;
+                if (costStatEl) costStatEl.style.display = 'inline';
+            } else {
+                if (costStatEl) costStatEl.style.display = 'none';
             }
 
             // Handle v2 session.status or v1 success/error

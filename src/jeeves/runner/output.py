@@ -86,6 +86,10 @@ class SDKOutput:
     # Token usage tracking (when provider supports it)
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    total_cost_usd: Optional[float] = None
+    context_window_size: int = 200_000  # Default for Claude Sonnet
 
     # Error info
     error: Optional[str] = None
@@ -131,7 +135,19 @@ class SDKOutput:
             stats["tokens"] = {
                 "input": self.input_tokens,
                 "output": self.output_tokens,
+                "cache_creation": self.cache_creation_tokens,
+                "cache_read": self.cache_read_tokens,
             }
+            # Calculate context percentage
+            total_input = self.input_tokens + self.cache_creation_tokens + self.cache_read_tokens
+            if self.context_window_size > 0:
+                stats["context_percentage"] = round(
+                    (total_input / self.context_window_size) * 100, 1
+                )
+            stats["context_window_size"] = self.context_window_size
+        # Include cost when available
+        if self.total_cost_usd is not None:
+            stats["cost_usd"] = self.total_cost_usd
         return {
             "schema": self.schema,
             "session_id": self.session_id,
@@ -193,6 +209,28 @@ class SDKOutput:
                     lines.append("")
                     lines.append("--- Final Result ---")
                     lines.append(msg.content)
+
+        # Append usage summary if token data is available
+        if self.input_tokens > 0 or self.output_tokens > 0:
+            lines.append("")
+            lines.append("--- Usage Summary ---")
+            total_tokens = self.input_tokens + self.output_tokens
+            lines.append(
+                f"Tokens: {self.input_tokens:,} in / {self.output_tokens:,} out ({total_tokens:,} total)"
+            )
+            if self.cache_creation_tokens > 0 or self.cache_read_tokens > 0:
+                lines.append(
+                    f"Cache: {self.cache_creation_tokens:,} created / {self.cache_read_tokens:,} read"
+                )
+            # Calculate context percentage
+            total_input = self.input_tokens + self.cache_creation_tokens + self.cache_read_tokens
+            if self.context_window_size > 0:
+                context_pct = (total_input / self.context_window_size) * 100
+                lines.append(
+                    f"Context: {context_pct:.1f}% of {self.context_window_size:,}"
+                )
+            if self.total_cost_usd is not None:
+                lines.append(f"Cost: ${self.total_cost_usd:.4f}")
 
         return "\n".join(lines)
 

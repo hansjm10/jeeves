@@ -6,8 +6,8 @@ import pytest
 from click.testing import CliRunner
 
 from jeeves.cli import main
-from jeeves.browse import BrowseError
-from jeeves.repo import AuthenticationError
+from jeeves.core.browse import BrowseError
+from jeeves.core.repo import AuthenticationError
 
 
 class TestInitBrowseFlag:

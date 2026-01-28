@@ -35,4 +35,5 @@ include = ["jeeves*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["jeeves"]
+testpaths = ["tests"]
+pythonpath = ["src"]

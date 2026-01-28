@@ -3,7 +3,7 @@
 from unittest import mock
 import pytest
 
-from jeeves.issue import IssueError
+from jeeves.core.issue import IssueError
 
 
 class TestListGithubIssues:
@@ -11,14 +11,14 @@ class TestListGithubIssues:
 
     def test_returns_list_of_issues(self):
         """Should return a list of issue dictionaries."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
         mock_output = """[
             {"number": 1, "title": "First issue", "labels": [{"name": "bug"}], "assignees": [{"login": "user1"}]},
             {"number": 2, "title": "Second issue", "labels": [], "assignees": []}
         ]"""
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout=mock_output, returncode=0)
             issues = list_github_issues("owner", "repo")
 
@@ -30,9 +30,9 @@ class TestListGithubIssues:
 
     def test_calls_gh_with_correct_args(self):
         """Should call gh issue list with --repo, --json, and --limit flags."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             list_github_issues("testowner", "testrepo", limit=50)
 
@@ -48,9 +48,9 @@ class TestListGithubIssues:
 
     def test_uses_state_parameter(self):
         """Should pass the state parameter to filter issues."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             list_github_issues("owner", "repo", state="closed")
 
@@ -60,9 +60,9 @@ class TestListGithubIssues:
 
     def test_respects_limit_parameter(self):
         """Should pass the limit parameter to gh command."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             list_github_issues("owner", "repo", limit=25)
 
@@ -71,9 +71,9 @@ class TestListGithubIssues:
 
     def test_returns_empty_list_when_no_issues(self):
         """Should return empty list when repository has no issues."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             issues = list_github_issues("owner", "repo")
 
@@ -81,10 +81,10 @@ class TestListGithubIssues:
 
     def test_raises_issue_error_on_failure(self):
         """Should raise IssueError when gh command fails."""
-        from jeeves.issue import list_github_issues
-        from jeeves.repo import RepoError
+        from jeeves.core.issue import list_github_issues
+        from jeeves.core.repo import RepoError
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.side_effect = RepoError("gh command failed")
 
             with pytest.raises(IssueError):
@@ -92,13 +92,13 @@ class TestListGithubIssues:
 
     def test_normalizes_labels_to_list_of_names(self):
         """Should convert label objects to list of label names."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
         mock_output = """[
             {"number": 1, "title": "Issue with labels", "labels": [{"name": "bug"}, {"name": "urgent"}], "assignees": []}
         ]"""
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout=mock_output, returncode=0)
             issues = list_github_issues("owner", "repo")
 
@@ -106,13 +106,13 @@ class TestListGithubIssues:
 
     def test_normalizes_assignees_to_list_of_logins(self):
         """Should convert assignee objects to list of login names."""
-        from jeeves.issue import list_github_issues
+        from jeeves.core.issue import list_github_issues
 
         mock_output = """[
             {"number": 1, "title": "Issue with assignees", "labels": [], "assignees": [{"login": "user1"}, {"login": "user2"}]}
         ]"""
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout=mock_output, returncode=0)
             issues = list_github_issues("owner", "repo")
 
@@ -124,13 +124,13 @@ class TestListAssignedIssues:
 
     def test_returns_list_of_assigned_issues(self):
         """Should return issues assigned to current user."""
-        from jeeves.issue import list_assigned_issues
+        from jeeves.core.issue import list_assigned_issues
 
         mock_output = """[
             {"number": 5, "title": "My assigned issue", "labels": [{"name": "feature"}], "assignees": [{"login": "me"}]}
         ]"""
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout=mock_output, returncode=0)
             issues = list_assigned_issues("owner", "repo")
 
@@ -140,9 +140,9 @@ class TestListAssignedIssues:
 
     def test_calls_gh_with_assignee_me_flag(self):
         """Should call gh issue list with --assignee @me flag."""
-        from jeeves.issue import list_assigned_issues
+        from jeeves.core.issue import list_assigned_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             list_assigned_issues("owner", "repo")
 
@@ -153,9 +153,9 @@ class TestListAssignedIssues:
 
     def test_returns_empty_list_when_no_assigned_issues(self):
         """Should return empty list when no issues are assigned to user."""
-        from jeeves.issue import list_assigned_issues
+        from jeeves.core.issue import list_assigned_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             issues = list_assigned_issues("owner", "repo")
 
@@ -163,9 +163,9 @@ class TestListAssignedIssues:
 
     def test_uses_repo_parameter(self):
         """Should pass the owner/repo to gh command."""
-        from jeeves.issue import list_assigned_issues
+        from jeeves.core.issue import list_assigned_issues
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.return_value = mock.Mock(stdout="[]", returncode=0)
             list_assigned_issues("myowner", "myrepo")
 
@@ -175,10 +175,10 @@ class TestListAssignedIssues:
 
     def test_raises_issue_error_on_failure(self):
         """Should raise IssueError when gh command fails."""
-        from jeeves.issue import list_assigned_issues
-        from jeeves.repo import RepoError
+        from jeeves.core.issue import list_assigned_issues
+        from jeeves.core.repo import RepoError
 
-        with mock.patch("jeeves.issue.run_gh") as mock_run_gh:
+        with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.side_effect = RepoError("gh command failed")
 
             with pytest.raises(IssueError):

@@ -137,7 +137,7 @@ class TestBrowseFlowIntegration:
         ]
 
         # Mock subprocess calls and input
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=repos, issues=issues)):
                 # Mock user input: select repo 1, then issue 1
                 with mock.patch("builtins.input", side_effect=["1", "1"]):
@@ -185,7 +185,7 @@ class TestBrowseIssuesFlowIntegration:
             {"number": 456, "title": "Fix critical bug", "labels": [{"name": "bug"}], "assignees": []},
         ]
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, issues=issues)):
                 with mock.patch("builtins.input", return_value="1"):
                     with mock.patch("sys.stdout", StringIO()):
@@ -220,9 +220,9 @@ class TestBrowseIssuesFlowIntegration:
             captured_options.extend(options)
             return 0  # Select first option
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, issues=issues, assigned_issues=assigned_issues)):
-                with mock.patch("jeeves.browse.prompt_choice", side_effect=capture_prompt_choice):
+                with mock.patch("jeeves.core.browse.prompt_choice", side_effect=capture_prompt_choice):
                     with mock.patch("jeeves.cli.ensure_repo", return_value=temp_data_dir / "repo"):
                         mock_state = mock.MagicMock()
                         mock_state.state_dir = temp_data_dir / "state"
@@ -268,7 +268,7 @@ class TestInteractiveFlowIntegration:
             {"number": 99, "title": "Interactive task", "labels": [], "assignees": []}
         ]
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=repos, issues=issues)):
                 with mock.patch("builtins.input", side_effect=["1", "1"]):
                     with mock.patch("sys.stdout", StringIO()):
@@ -297,7 +297,7 @@ class TestInteractiveFlowIntegration:
             select_repository_called = True
             return ("should", "not_be_called")
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, issues=issues)):
                 with mock.patch("builtins.input", return_value="1"):
                     with mock.patch("sys.stdout", StringIO()):
@@ -327,7 +327,7 @@ class TestInteractiveFlowIntegration:
             select_issue_called = True
             return 999
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=repos)):
                 with mock.patch("builtins.input", return_value="1"):
                     with mock.patch("sys.stdout", StringIO()):
@@ -369,7 +369,7 @@ class TestNoReposOrIssuesEdgeCases:
 
     def test_browse_with_no_repos_shows_error(self, runner, temp_data_dir):
         """Should show helpful error when user has no repositories."""
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=[])):
                 result = runner.invoke(main, ["init", "--browse"])
 
@@ -378,7 +378,7 @@ class TestNoReposOrIssuesEdgeCases:
 
     def test_browse_issues_with_no_issues_shows_error(self, runner, temp_data_dir):
         """Should show helpful error when repo has no open issues."""
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, issues=[])):
                 result = runner.invoke(main, ["init", "--repo", "owner/repo", "--browse-issues"])
 
@@ -402,7 +402,7 @@ class TestRecentCacheIntegration:
 
     def test_browse_records_selection_to_recent(self, runner, temp_data_dir):
         """Should record selected repo to recent cache."""
-        from jeeves.browse import load_recent_selections
+        from jeeves.core.browse import load_recent_selections
 
         repos = [
             {"name": "selected-project", "owner": {"login": "selected-org"}, "description": "A project", "updatedAt": "2026-01-28T00:00:00Z"}
@@ -411,7 +411,7 @@ class TestRecentCacheIntegration:
             {"number": 1, "title": "First issue", "labels": [], "assignees": []}
         ]
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=repos, issues=issues)):
                 with mock.patch("builtins.input", side_effect=["1", "1"]):
                     with mock.patch("sys.stdout", StringIO()):
@@ -432,7 +432,7 @@ class TestRecentCacheIntegration:
 
     def test_browse_shows_recent_repos_first(self, runner, temp_data_dir):
         """Should show recently selected repos first in the list."""
-        from jeeves.browse import save_recent_selections
+        from jeeves.core.browse import save_recent_selections
 
         repos = [
             {"name": "new-repo", "owner": {"login": "new-owner"}, "description": "New repo", "updatedAt": "2026-01-28T00:00:00Z"}
@@ -447,7 +447,7 @@ class TestRecentCacheIntegration:
             captured_options.extend(options)
             return 0
 
-        with mock.patch("jeeves.browse.get_data_dir", return_value=temp_data_dir):
+        with mock.patch("jeeves.core.browse.get_data_dir", return_value=temp_data_dir):
             # Pre-populate recent cache
             save_recent_selections({
                 "repos": [{"owner": "recent-owner", "repo": "recent-repo", "lastUsed": "2026-01-28T00:00:00Z"}],
@@ -455,7 +455,7 @@ class TestRecentCacheIntegration:
             })
 
             with mock.patch("subprocess.run", side_effect=mock_gh_responses(auth_status=True, repos=repos, issues=issues)):
-                with mock.patch("jeeves.browse.prompt_choice", side_effect=capture_prompt_choice):
+                with mock.patch("jeeves.core.browse.prompt_choice", side_effect=capture_prompt_choice):
                     with mock.patch("jeeves.cli.ensure_repo", return_value=temp_data_dir / "repo"):
                         mock_state = mock.MagicMock()
                         mock_state.state_dir = temp_data_dir / "state"

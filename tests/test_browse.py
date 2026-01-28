@@ -5,7 +5,7 @@ from io import StringIO
 from unittest import mock
 import pytest
 
-from jeeves.browse import (
+from jeeves.core.browse import (
     prompt_choice,
     select_repository,
     select_issue,
@@ -111,10 +111,10 @@ class TestSelectRepository:
             {"name": "my-project", "owner": "testuser", "description": "A project", "updatedAt": "2026-01-28T00:00:00Z"},
         ]
 
-        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
-                with mock.patch("jeeves.browse.record_recent_repo"):
-                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+        with mock.patch("jeeves.core.browse.list_user_repos", return_value=mock_repos):
+            with mock.patch("jeeves.core.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.core.browse.record_recent_repo"):
+                    with mock.patch("jeeves.core.browse.prompt_choice", return_value=0):
                         owner, repo = select_repository()
 
         assert owner == "testuser"
@@ -126,10 +126,10 @@ class TestSelectRepository:
             {"name": "repo1", "owner": "user", "description": None, "updatedAt": None},
         ]
 
-        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos) as mock_list:
-            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
-                with mock.patch("jeeves.browse.record_recent_repo"):
-                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+        with mock.patch("jeeves.core.browse.list_user_repos", return_value=mock_repos) as mock_list:
+            with mock.patch("jeeves.core.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.core.browse.record_recent_repo"):
+                    with mock.patch("jeeves.core.browse.prompt_choice", return_value=0):
                         select_repository()
 
         mock_list.assert_called_once()
@@ -140,10 +140,10 @@ class TestSelectRepository:
             {"name": "cool-project", "owner": "dev", "description": "A cool thing", "updatedAt": None},
         ]
 
-        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
-                with mock.patch("jeeves.browse.record_recent_repo"):
-                    with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+        with mock.patch("jeeves.core.browse.list_user_repos", return_value=mock_repos):
+            with mock.patch("jeeves.core.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.core.browse.record_recent_repo"):
+                    with mock.patch("jeeves.core.browse.prompt_choice", return_value=0) as mock_prompt:
                         select_repository()
 
         # Check that prompt_choice was called with formatted options
@@ -154,8 +154,8 @@ class TestSelectRepository:
 
     def test_raises_on_no_repos_found(self):
         """Should raise BrowseError when no repositories are found."""
-        with mock.patch("jeeves.browse.list_user_repos", return_value=[]):
-            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
+        with mock.patch("jeeves.core.browse.list_user_repos", return_value=[]):
+            with mock.patch("jeeves.core.browse.get_recent_repos", return_value=[]):
                 with pytest.raises(BrowseError) as exc_info:
                     select_repository()
 
@@ -167,10 +167,10 @@ class TestSelectRepository:
             {"name": "no-desc", "owner": "user", "description": None, "updatedAt": None},
         ]
 
-        with mock.patch("jeeves.browse.list_user_repos", return_value=mock_repos):
-            with mock.patch("jeeves.browse.get_recent_repos", return_value=[]):
-                with mock.patch("jeeves.browse.record_recent_repo"):
-                    with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+        with mock.patch("jeeves.core.browse.list_user_repos", return_value=mock_repos):
+            with mock.patch("jeeves.core.browse.get_recent_repos", return_value=[]):
+                with mock.patch("jeeves.core.browse.record_recent_repo"):
+                    with mock.patch("jeeves.core.browse.prompt_choice", return_value=0):
                         owner, repo = select_repository()
 
         assert repo == "no-desc"
@@ -185,9 +185,9 @@ class TestSelectIssue:
             {"number": 42, "title": "Fix the bug", "labels": [], "assignees": []},
         ]
 
-        with mock.patch("jeeves.browse.list_github_issues", return_value=mock_issues):
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=[]):
-                with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=mock_issues):
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=[]):
+                with mock.patch("jeeves.core.browse.prompt_choice", return_value=0):
                     issue_num = select_issue("owner", "repo")
 
         assert issue_num == 42
@@ -198,9 +198,9 @@ class TestSelectIssue:
             {"number": 1, "title": "Issue", "labels": [], "assignees": []},
         ]
 
-        with mock.patch("jeeves.browse.list_github_issues", return_value=mock_issues) as mock_list:
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=[]):
-                with mock.patch("jeeves.browse.prompt_choice", return_value=0):
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=mock_issues) as mock_list:
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=[]):
+                with mock.patch("jeeves.core.browse.prompt_choice", return_value=0):
                     select_issue("myowner", "myrepo")
 
         mock_list.assert_called_once()
@@ -214,9 +214,9 @@ class TestSelectIssue:
             {"number": 123, "title": "Improve performance", "labels": ["enhancement"], "assignees": []},
         ]
 
-        with mock.patch("jeeves.browse.list_github_issues", return_value=mock_issues):
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=[]):
-                with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=mock_issues):
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=[]):
+                with mock.patch("jeeves.core.browse.prompt_choice", return_value=0) as mock_prompt:
                     select_issue("owner", "repo")
 
         call_args = mock_prompt.call_args
@@ -227,8 +227,8 @@ class TestSelectIssue:
 
     def test_raises_on_no_issues_found(self):
         """Should raise BrowseError when no issues are found."""
-        with mock.patch("jeeves.browse.list_github_issues", return_value=[]):
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=[]):
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=[]):
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=[]):
                 with pytest.raises(BrowseError) as exc_info:
                     select_issue("owner", "repo")
 
@@ -244,9 +244,9 @@ class TestSelectIssue:
             {"number": 2, "title": "Assigned to me", "labels": [], "assignees": ["me"]},
         ]
 
-        with mock.patch("jeeves.browse.list_github_issues", return_value=mock_all_issues):
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=mock_assigned):
-                with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=mock_all_issues):
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=mock_assigned):
+                with mock.patch("jeeves.core.browse.prompt_choice", return_value=0) as mock_prompt:
                     select_issue("owner", "repo")
 
         # First option should be the assigned issue
@@ -260,9 +260,9 @@ class TestSelectIssue:
             {"number": 5, "title": "Bug report", "labels": ["bug", "urgent"], "assignees": []},
         ]
 
-        with mock.patch("jeeves.browse.list_github_issues", return_value=mock_issues):
-            with mock.patch("jeeves.browse.list_assigned_issues", return_value=[]):
-                with mock.patch("jeeves.browse.prompt_choice", return_value=0) as mock_prompt:
+        with mock.patch("jeeves.core.browse.list_github_issues", return_value=mock_issues):
+            with mock.patch("jeeves.core.browse.list_assigned_issues", return_value=[]):
+                with mock.patch("jeeves.core.browse.prompt_choice", return_value=0) as mock_prompt:
                     select_issue("owner", "repo")
 
         call_args = mock_prompt.call_args

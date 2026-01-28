@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 
-from viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
+from jeeves.viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -901,8 +901,8 @@ class SDKDefaultTabTests(unittest.TestCase):
     def test_frontend_default_tab_is_sdk(self):
         """Frontend index.html initializes mainTab to 'sdk' by default."""
         # Read the frontend HTML
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         self.assertTrue(index_html.exists(), "index.html should exist")
 
         content = index_html.read_text()
@@ -913,8 +913,8 @@ class SDKDefaultTabTests(unittest.TestCase):
 
     def test_frontend_fallback_tab_is_sdk(self):
         """Frontend falls back to 'sdk' when localStorage has no saved tab."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that the fallback in setMainTab call is 'sdk'
@@ -923,8 +923,8 @@ class SDKDefaultTabTests(unittest.TestCase):
 
     def test_frontend_error_fallback_tab_is_sdk(self):
         """Frontend falls back to 'sdk' when localStorage throws error."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that the catch block falls back to 'sdk'
@@ -934,8 +934,8 @@ class SDKDefaultTabTests(unittest.TestCase):
 
     def test_frontend_preserves_localstorage_key(self):
         """Frontend still uses 'jeeves_viewer_main_tab' localStorage key."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that localStorage key is preserved for user preferences
@@ -946,8 +946,8 @@ class SDKDefaultTabTests(unittest.TestCase):
 
     def test_frontend_logs_tab_still_accessible(self):
         """Frontend still allows switching to logs tab via click."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that logs tab click handler exists
@@ -1145,13 +1145,13 @@ class OutputProviderBaseTests(unittest.TestCase):
 
     def test_providers_package_exists(self):
         """jeeves/runner/providers/__init__.py should exist."""
-        providers_init = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "__init__.py"
+        providers_init = Path(__file__).parent.parent / "src" / "jeeves" / "runner" / "providers" / "__init__.py"
         self.assertTrue(providers_init.exists(),
             f"Providers package __init__.py should exist at {providers_init}")
 
     def test_base_module_exists(self):
         """jeeves/runner/providers/base.py should exist."""
-        base_module = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "base.py"
+        base_module = Path(__file__).parent.parent / "src" / "jeeves" / "runner" / "providers" / "base.py"
         self.assertTrue(base_module.exists(),
             f"Base module should exist at {base_module}")
 
@@ -1258,7 +1258,7 @@ class ClaudeSDKProviderTests(unittest.TestCase):
 
     def test_claude_sdk_module_exists(self):
         """jeeves/runner/providers/claude_sdk.py should exist."""
-        claude_sdk_module = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "claude_sdk.py"
+        claude_sdk_module = Path(__file__).parent.parent / "src" / "jeeves" / "runner" / "providers" / "claude_sdk.py"
         self.assertTrue(claude_sdk_module.exists(),
             f"ClaudeSDKProvider module should exist at {claude_sdk_module}")
 
@@ -1816,8 +1816,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_has_detect_schema_version_function(self):
         """Frontend index.html should have detectSchemaVersion function."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         self.assertIn("function detectSchemaVersion(data)", content,
@@ -1825,8 +1825,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_detect_v1_schema(self):
         """Frontend should detect v1 schema from 'schema' field."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v1 detection logic exists
@@ -1835,8 +1835,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_detect_v2_schema(self):
         """Frontend should detect v2 schema from 'schema' field."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v2 detection logic exists
@@ -1845,8 +1845,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_has_normalize_sdk_output_function(self):
         """Frontend should have normalizeSdkOutput function for v1/v2 compatibility."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         self.assertIn("function normalizeSdkOutput(data)", content,
@@ -1854,8 +1854,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_normalizes_v2_conversation_to_messages(self):
         """Frontend should convert v2 'conversation' array to 'messages' for rendering."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v2 conversation field is handled
@@ -1864,8 +1864,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_normalizes_v2_session_id(self):
         """Frontend should extract session_id from v2 'session.id'."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v2 session.id is handled
@@ -1874,8 +1874,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_normalizes_v2_summary_to_stats(self):
         """Frontend should convert v2 'summary' to 'stats' for rendering."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v2 summary field is used
@@ -1884,8 +1884,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_shows_provider_info_for_v2(self):
         """Frontend should display provider info for v2 schema."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that provider info display element exists
@@ -1894,8 +1894,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_stats_bar_has_provider_element(self):
         """Frontend SDK stats bar should have element for provider info."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check for provider display in stats bar HTML
@@ -1904,8 +1904,8 @@ class SchemaVersionDetectionTests(unittest.TestCase):
 
     def test_frontend_handles_v2_session_status(self):
         """Frontend should handle v2 session.status enum values."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that v2 status enum values are handled
@@ -1918,8 +1918,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_has_token_display_elements(self):
         """Frontend SDK toolbar should have elements for displaying token counts."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check for token display elements
@@ -1930,8 +1930,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_has_token_stat_container(self):
         """Frontend should have a container for token stats that can be shown/hidden."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check for token stat container
@@ -1940,8 +1940,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_normalizes_v2_token_counts(self):
         """Frontend normalizeSdkOutput should extract tokens from v2 summary."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that tokens are extracted from v2 summary
@@ -1950,8 +1950,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_renders_token_stats_when_available(self):
         """Frontend renderSdkOutput should display token stats when tokens are available."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that token rendering logic exists
@@ -1962,8 +1962,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_hides_tokens_when_not_available(self):
         """Frontend should hide token stat when tokens are not available."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check that token stat visibility is controlled
@@ -1972,8 +1972,8 @@ class TokenTrackingTests(unittest.TestCase):
 
     def test_frontend_formats_token_counts_with_comma_separators(self):
         """Frontend should format large token counts with comma separators."""
-        viewer_dir = Path(__file__).parent
-        index_html = viewer_dir / "index.html"
+        viewer_dir = Path(__file__).parent.parent / "src" / "jeeves" / "viewer"
+        index_html = viewer_dir / "static" / "index.html"
         content = index_html.read_text()
 
         # Check for number formatting with toLocaleString or similar

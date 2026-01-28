@@ -32,7 +32,15 @@ from .paths import (
     parse_issue_ref,
     parse_repo_spec,
 )
-from .repo import RepoError, ensure_repo, fetch_repo, get_default_branch
+from .repo import (
+    AuthenticationError,
+    RepoError,
+    check_gh_auth_for_browse,
+    ensure_repo,
+    fetch_repo,
+    get_default_branch,
+)
+from .browse import BrowseError, select_issue, select_repository
 from .worktree import WorktreeError, create_worktree
 
 
@@ -56,15 +64,21 @@ def main():
 @click.option(
     "--repo",
     "-r",
-    required=True,
+    required=False,
+    default=None,
     help="Repository in owner/repo format.",
 )
 @click.option(
     "--issue",
-    "-i",
-    required=True,
+    required=False,
+    default=None,
     type=int,
     help="Issue number to work on.",
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    help="Interactively browse and select repository and issue.",
 )
 @click.option(
     "--branch",
@@ -90,8 +104,9 @@ def main():
     help="Skip fetching issue metadata from GitHub.",
 )
 def init(
-    repo: str,
-    issue: int,
+    repo: Optional[str],
+    issue: Optional[int],
+    browse: bool,
     branch: Optional[str],
     design_doc: Optional[str],
     force: bool,
@@ -107,12 +122,42 @@ def init(
     \b
     Examples:
         jeeves init --repo anthropics/claude-code --issue 123
-        jeeves init -r owner/repo -i 456 --branch feature/my-feature
+        jeeves init -r owner/repo --issue 456 --branch feature/my-feature
+        jeeves init --browse
     """
-    try:
-        owner, repo_name = parse_repo_spec(repo)
-    except ValueError as e:
-        raise click.ClickException(str(e))
+    # Handle --browse mode
+    if browse:
+        # Cannot use --browse with --repo
+        if repo:
+            raise click.ClickException("Cannot use --browse with --repo. Use --browse alone to select both repository and issue.")
+
+        try:
+            check_gh_auth_for_browse()
+        except AuthenticationError as e:
+            raise click.ClickException(str(e))
+
+        try:
+            owner, repo_name = select_repository()
+            click.echo(f"Selected repository: {owner}/{repo_name}")
+        except BrowseError as e:
+            raise click.ClickException(str(e))
+
+        try:
+            issue = select_issue(owner, repo_name)
+            click.echo(f"Selected issue: #{issue}")
+        except BrowseError as e:
+            raise click.ClickException(str(e))
+    else:
+        # Traditional mode - require --repo and --issue
+        if not repo:
+            raise click.ClickException("Missing option '--repo' or use '--browse' for interactive selection.")
+        if issue is None:
+            raise click.ClickException("Missing option '--issue' or use '--browse' for interactive selection.")
+
+        try:
+            owner, repo_name = parse_repo_spec(repo)
+        except ValueError as e:
+            raise click.ClickException(str(e))
 
     click.echo(f"Initializing issue #{issue} for {owner}/{repo_name}...")
 

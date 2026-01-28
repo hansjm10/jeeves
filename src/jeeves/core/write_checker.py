@@ -1,33 +1,40 @@
 # src/jeeves/core/write_checker.py
-"""Check for forbidden file writes in evaluate phases."""
+"""Write checker for evaluate phases.
 
-import fnmatch
+Detects forbidden file modifications during evaluate (read-only) phases.
+"""
+from fnmatch import fnmatch
 from typing import List
 
 
 def check_forbidden_writes(
     changed_files: List[str],
-    allowed_patterns: List[str],
+    allowed_patterns: List[str]
 ) -> List[str]:
-    """Check if any changed files violate the allowed patterns.
+    """Check for forbidden file writes.
 
     Args:
         changed_files: List of file paths that were modified
-        allowed_patterns: Glob patterns for allowed modifications
+        allowed_patterns: Glob patterns for allowed writes
 
     Returns:
         List of file paths that were modified but not allowed
     """
-    violations = []
+    forbidden = []
 
     for file_path in changed_files:
-        is_allowed = False
+        # .jeeves/ is always allowed
+        if file_path.startswith(".jeeves/"):
+            continue
+
+        # Check against allowed patterns
+        allowed = False
         for pattern in allowed_patterns:
-            if fnmatch.fnmatch(file_path, pattern):
-                is_allowed = True
+            if fnmatch(file_path, pattern):
+                allowed = True
                 break
 
-        if not is_allowed:
-            violations.append(file_path)
+        if not allowed:
+            forbidden.append(file_path)
 
-    return violations
+    return forbidden

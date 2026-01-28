@@ -1,38 +1,35 @@
 # tests/test_write_checker.py
+"""Tests for write checker module."""
 import pytest
-from pathlib import Path
 from jeeves.core.write_checker import check_forbidden_writes
 
 
 class TestWriteChecker:
+    """Tests for check_forbidden_writes function."""
+
     def test_allowed_write_jeeves_dir(self):
-        allowed = [".jeeves/*"]
-        changed_files = [".jeeves/issue.json", ".jeeves/progress.txt"]
-
-        violations = check_forbidden_writes(changed_files, allowed)
-
-        assert violations == []
+        """Writing to .jeeves/ is always allowed."""
+        changed = [".jeeves/issue.json", ".jeeves/progress.txt"]
+        forbidden = check_forbidden_writes(changed, allowed_patterns=[])
+        assert forbidden == []
 
     def test_forbidden_write_src(self):
-        allowed = [".jeeves/*"]
-        changed_files = [".jeeves/issue.json", "src/main.py"]
-
-        violations = check_forbidden_writes(changed_files, allowed)
-
-        assert "src/main.py" in violations
+        """Writing to src/ is forbidden without explicit allow."""
+        changed = ["src/app.py", "tests/test_app.py"]
+        forbidden = check_forbidden_writes(changed, allowed_patterns=[])
+        assert "src/app.py" in forbidden
+        assert "tests/test_app.py" in forbidden
 
     def test_multiple_allowed_patterns(self):
-        allowed = [".jeeves/*", "docs/plans/*"]
-        changed_files = [".jeeves/issue.json", "docs/plans/design.md"]
-
-        violations = check_forbidden_writes(changed_files, allowed)
-
-        assert violations == []
+        """Multiple allowed patterns work correctly."""
+        changed = ["src/app.py", "docs/readme.md", "config.yaml"]
+        forbidden = check_forbidden_writes(
+            changed,
+            allowed_patterns=["src/**", "docs/**"]
+        )
+        assert forbidden == ["config.yaml"]
 
     def test_empty_changed_files(self):
-        allowed = [".jeeves/*"]
-        changed_files = []
-
-        violations = check_forbidden_writes(changed_files, allowed)
-
-        assert violations == []
+        """Empty changed files returns empty forbidden list."""
+        forbidden = check_forbidden_writes([], allowed_patterns=["src/**"])
+        assert forbidden == []

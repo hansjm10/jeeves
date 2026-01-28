@@ -33,6 +33,9 @@ def __getattr__(name):
     if name in ("list_github_issues", "list_assigned_issues", "IssueError"):
         from . import issue
         return getattr(issue, name)
+    if name in ("prompt_choice", "select_repository", "select_issue", "BrowseError"):
+        from . import browse
+        return getattr(browse, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -53,4 +56,8 @@ __all__ = [
     "list_github_issues",
     "list_assigned_issues",
     "IssueError",
+    "prompt_choice",
+    "select_repository",
+    "select_issue",
+    "BrowseError",
 ]

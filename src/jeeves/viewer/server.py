@@ -787,6 +787,12 @@ class JeevesRunManager:
 
         phase_type = engine.get_phase_type(current_phase)
 
+        # Check for invalid phase
+        if phase_type is None:
+            error_msg = f"[ERROR] Invalid phase '{current_phase}' not found in workflow '{workflow_name}'"
+            self._log_to_file(viewer_log_path, error_msg)
+            return 1
+
         # Handle script phases without spawning AI
         if phase_type == PhaseType.SCRIPT:
             phase = engine.get_phase(current_phase)

@@ -174,7 +174,7 @@ echo "dummy sdk: done"
                 conn,
                 "POST",
                 "/api/run",
-                {"max_turns": 1},
+                {"max_iterations": 1},
             )
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
@@ -199,7 +199,7 @@ echo "dummy sdk: done"
             self.assertTrue(data["run"]["running"])
 
             # Second start should conflict.
-            status, data = _request_json(conn, "POST", "/api/run", {"max_turns": 1})
+            status, data = _request_json(conn, "POST", "/api/run", {"max_iterations": 1})
             self.assertEqual(status, 409)
             self.assertFalse(data["ok"])
 

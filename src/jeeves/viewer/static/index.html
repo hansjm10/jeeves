@@ -2305,10 +2305,11 @@
             btnRun.addEventListener('click', async () => {
                 btnRun.disabled = true;
                 try {
-                    const maxTurns = runMaxTurns ? parseInt(runMaxTurns.value || '10', 10) : 10;
+                    // max_iterations controls fresh-context iteration loop
+                    const maxIterations = runMaxTurns ? parseInt(runMaxTurns.value || '10', 10) : 10;
 
                     const { response, data } = await apiPost('/api/run', {
-                        max_turns: Number.isFinite(maxTurns) ? maxTurns : 10
+                        max_iterations: Number.isFinite(maxIterations) ? maxIterations : 10
                     });
 
                     if (!response.ok) {

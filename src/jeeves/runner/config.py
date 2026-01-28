@@ -32,7 +32,6 @@ class RunnerConfig:
         ]
     )
     permission_mode: str = "bypassPermissions"
-    max_turns: Optional[int] = None
 
     # Hooks
     enable_tool_logging: bool = True
@@ -47,7 +46,6 @@ class RunnerConfig:
         state_dir: Optional[str] = None,
         allowed_tools: Optional[List[str]] = None,
         permission_mode: Optional[str] = None,
-        max_turns: Optional[int] = None,
         enable_tool_logging: bool = True,
     ) -> "RunnerConfig":
         """Create config from command line arguments."""
@@ -59,7 +57,6 @@ class RunnerConfig:
             state_dir=Path(state_dir) if state_dir else None,
             allowed_tools=allowed_tools or cls.__dataclass_fields__["allowed_tools"].default_factory(),
             permission_mode=permission_mode or "bypassPermissions",
-            max_turns=max_turns,
             enable_tool_logging=enable_tool_logging,
         )
 

@@ -73,7 +73,6 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 
 **API parameters:**
 - `max_iterations` (default: 10): Total fresh-context iterations allowed
-- `max_turns` (optional): Per-iteration SDK turn limit
 
 **Why this pattern:**
 1. True fresh context - no context window bloat from retries

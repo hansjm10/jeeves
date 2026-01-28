@@ -547,7 +547,6 @@ class JeevesRunManager:
             "ended_at": None,
             "returncode": None,
             "command": None,
-            "max_turns": None,
             "max_iterations": None,
             "current_iteration": 0,
             "completed_via_promise": False,
@@ -600,13 +599,11 @@ class JeevesRunManager:
     def start(
         self,
         *,
-        max_turns: Optional[int] = None,
         max_iterations: int = 10,
     ) -> Dict:
         """Start the iteration loop - spawns fresh SDK runner each iteration.
 
         Args:
-            max_turns: Maximum SDK turns per iteration (passed to SDK runner)
             max_iterations: Maximum number of fresh-context iterations
 
         The iteration loop runs in a background thread. Each iteration:
@@ -648,7 +645,6 @@ class JeevesRunManager:
                 "ended_at": None,
                 "returncode": None,
                 "command": None,
-                "max_turns": max_turns,
                 "max_iterations": max_iterations,
                 "current_iteration": 0,
                 "completed_via_promise": False,
@@ -660,7 +656,7 @@ class JeevesRunManager:
             # Start iteration loop in background thread
             self._iteration_thread = Thread(
                 target=self._run_iteration_loop,
-                args=(max_turns, max_iterations, viewer_log_path),
+                args=(max_iterations, viewer_log_path),
                 daemon=True,
             )
             self._iteration_thread.start()
@@ -669,7 +665,6 @@ class JeevesRunManager:
 
     def _run_iteration_loop(
         self,
-        max_turns: Optional[int],
         max_iterations: int,
         viewer_log_path: Path,
     ) -> None:
@@ -693,7 +688,7 @@ class JeevesRunManager:
                 self._log_to_file(viewer_log_path, f"{'='*60}")
 
                 # Run a single iteration
-                result = self._run_single_iteration(max_turns, viewer_log_path)
+                result = self._run_single_iteration(viewer_log_path)
 
                 # Check for completion promise in SDK output
                 if self._check_completion_promise():
@@ -729,7 +724,6 @@ class JeevesRunManager:
 
     def _run_single_iteration(
         self,
-        max_turns: Optional[int],
         viewer_log_path: Path,
     ) -> int:
         """Run a single SDK iteration (fresh subprocess, fresh context).
@@ -757,8 +751,6 @@ class JeevesRunManager:
             "--state-dir",
             str(self.state_dir),
         ]
-        if max_turns is not None:
-            cmd += ["--max-turns", str(max_turns)]
 
         with self._lock:
             self._run_info["command"] = cmd
@@ -1019,17 +1011,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"Unsupported field: {unsupported}"}, status=400)
                 return
 
-        max_turns = body.get("max_turns")
-        if max_turns is not None:
-            try:
-                max_turns = int(max_turns)
-            except Exception as e:
-                self._send_json({"ok": False, "error": f"max_turns must be an integer: {e}"}, status=400)
-                return
-            if max_turns < 1:
-                self._send_json({"ok": False, "error": "max_turns must be >= 1"}, status=400)
-                return
-
         # max_iterations controls total fresh-context iterations (Ralph Wiggum pattern)
         max_iterations = body.get("max_iterations", 10)
         try:
@@ -1042,7 +1023,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            run_info = self.run_manager.start(max_turns=max_turns, max_iterations=max_iterations)
+            run_info = self.run_manager.start(max_iterations=max_iterations)
         except RuntimeError as e:
             self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=409)
             return

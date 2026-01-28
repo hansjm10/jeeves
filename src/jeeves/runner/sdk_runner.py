@@ -135,10 +135,6 @@ class SDKRunner:
             include_partial_messages=True,  # Enable streaming
         )
 
-        # Add max_turns if specified
-        if self.config.max_turns:
-            options.max_turns = self.config.max_turns
-
         # Track session initialization
         self._log(f"[SDK] Starting with prompt from {self.config.prompt_file}")
         self.output.add_message(
@@ -484,11 +480,6 @@ def main() -> int:
         help="Jeeves state directory",
     )
     parser.add_argument(
-        "--max-turns",
-        type=int,
-        help="Maximum number of agent turns",
-    )
-    parser.add_argument(
         "--allowed-tools",
         help="Comma-separated list of allowed tools",
     )
@@ -507,7 +498,6 @@ def main() -> int:
         work_dir=args.work_dir,
         state_dir=args.state_dir,
         allowed_tools=allowed_tools,
-        max_turns=args.max_turns,
     )
 
     # Run the agent

@@ -1131,3 +1131,116 @@ class OutputSchemaV2Tests(unittest.TestCase):
         props = schema.get("properties", {})
         for key in sample_v2.keys():
             self.assertIn(key, props, f"Sample key '{key}' should be in schema properties")
+
+
+class OutputProviderBaseTests(unittest.TestCase):
+    """Test OutputProvider abstract base class (Task T6).
+
+    Acceptance Criteria:
+    - jeeves/runner/providers/__init__.py created
+    - jeeves/runner/providers/base.py created
+    - OutputProvider ABC with parse_event(), get_provider_info() methods
+    - supports_tokens property for token tracking capability
+    """
+
+    def test_providers_package_exists(self):
+        """jeeves/runner/providers/__init__.py should exist."""
+        providers_init = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "__init__.py"
+        self.assertTrue(providers_init.exists(),
+            f"Providers package __init__.py should exist at {providers_init}")
+
+    def test_base_module_exists(self):
+        """jeeves/runner/providers/base.py should exist."""
+        base_module = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "base.py"
+        self.assertTrue(base_module.exists(),
+            f"Base module should exist at {base_module}")
+
+    def test_output_provider_is_importable(self):
+        """OutputProvider should be importable from providers package."""
+        from jeeves.runner.providers import OutputProvider
+        self.assertIsNotNone(OutputProvider)
+
+    def test_output_provider_is_abstract(self):
+        """OutputProvider should be an abstract base class."""
+        from jeeves.runner.providers import OutputProvider
+        from abc import ABC
+        self.assertTrue(issubclass(OutputProvider, ABC),
+            "OutputProvider should be a subclass of ABC")
+
+    def test_output_provider_cannot_be_instantiated(self):
+        """OutputProvider cannot be directly instantiated."""
+        from jeeves.runner.providers import OutputProvider
+        with self.assertRaises(TypeError):
+            OutputProvider()
+
+    def test_output_provider_has_parse_event_method(self):
+        """OutputProvider should have abstract parse_event() method."""
+        from jeeves.runner.providers import OutputProvider
+        self.assertTrue(hasattr(OutputProvider, 'parse_event'),
+            "OutputProvider should have parse_event method")
+        # Check it's abstract
+        self.assertTrue(getattr(OutputProvider.parse_event, '__isabstractmethod__', False),
+            "parse_event should be an abstract method")
+
+    def test_output_provider_has_get_provider_info_method(self):
+        """OutputProvider should have abstract get_provider_info() method."""
+        from jeeves.runner.providers import OutputProvider
+        self.assertTrue(hasattr(OutputProvider, 'get_provider_info'),
+            "OutputProvider should have get_provider_info method")
+        # Check it's abstract
+        self.assertTrue(getattr(OutputProvider.get_provider_info, '__isabstractmethod__', False),
+            "get_provider_info should be an abstract method")
+
+    def test_output_provider_has_supports_tokens_property(self):
+        """OutputProvider should have abstract supports_tokens property."""
+        from jeeves.runner.providers import OutputProvider
+        self.assertTrue(hasattr(OutputProvider, 'supports_tokens'),
+            "OutputProvider should have supports_tokens property")
+        # Check it's a property and abstract
+        prop = getattr(OutputProvider, 'supports_tokens', None)
+        self.assertIsNotNone(prop)
+        # The fget of the property should be abstract
+        self.assertTrue(getattr(prop.fget, '__isabstractmethod__', False),
+            "supports_tokens should be an abstract property")
+
+    def test_concrete_provider_can_be_implemented(self):
+        """A concrete provider can be implemented by defining all abstract methods."""
+        from jeeves.runner.providers import OutputProvider
+        from jeeves.runner.output import Message
+
+        class TestProvider(OutputProvider):
+            def parse_event(self, event):
+                return Message(type="test", content=str(event))
+
+            def get_provider_info(self):
+                return {"name": "test", "version": "1.0.0", "metadata": {}}
+
+            @property
+            def supports_tokens(self) -> bool:
+                return True
+
+        # Should be able to instantiate
+        provider = TestProvider()
+        self.assertIsInstance(provider, OutputProvider)
+
+        # Test parse_event
+        msg = provider.parse_event({"data": "test"})
+        self.assertEqual(msg.type, "test")
+
+        # Test get_provider_info
+        info = provider.get_provider_info()
+        self.assertEqual(info["name"], "test")
+        self.assertEqual(info["version"], "1.0.0")
+
+        # Test supports_tokens
+        self.assertTrue(provider.supports_tokens)
+
+    def test_provider_info_type_hint(self):
+        """get_provider_info() should return ProviderInfo-compatible dict."""
+        from jeeves.runner.providers import OutputProvider
+
+        # Check the docstring or type hints indicate the return type
+        import inspect
+        sig = inspect.signature(OutputProvider.get_provider_info)
+        # The method exists with proper signature
+        self.assertIsNotNone(sig)

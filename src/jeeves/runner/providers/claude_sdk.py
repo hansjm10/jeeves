@@ -7,8 +7,8 @@ converting SDK-specific events into the standardized jeeves.output.v2 format.
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from jeeves.runner.output import Message
-from jeeves.runner.providers.base import OutputProvider
+from ..output import Message
+from .base import OutputProvider
 
 
 def _get_claude_sdk_version() -> str:

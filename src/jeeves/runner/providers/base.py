@@ -7,7 +7,7 @@ provider adapters must implement.
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from jeeves.runner.output import Message
+from ..output import Message
 
 
 class OutputProvider(ABC):

@@ -1442,6 +1442,375 @@ class ClaudeSDKProviderTests(unittest.TestCase):
         self.assertIsInstance(msg_dict.get("content"), str)
 
 
+class ClaudeSDKProviderEdgeCaseTests(unittest.TestCase):
+    """Edge case tests for ClaudeSDKProvider to achieve higher coverage.
+
+    These tests target uncovered lines and edge cases in claude_sdk.py:
+    - Non-dict event handling (line 110)
+    - Missing type field (line 114)
+    - Unknown event types (line 129)
+    - String content in assistant events (lines 171-172)
+    - Non-string content in tool_result (lines 193-194)
+    - Regular user messages (lines 204-205)
+    - _extract_text_content edge cases (lines 225-238)
+    """
+
+    def test_parse_event_raises_value_error_for_non_dict_event(self):
+        """parse_event() raises ValueError when event is not a dict."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        # Test with string
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event("not a dict")
+        self.assertIn("Expected dict event", str(ctx.exception))
+        self.assertIn("str", str(ctx.exception))
+
+        # Test with list
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event(["list", "event"])
+        self.assertIn("Expected dict event", str(ctx.exception))
+        self.assertIn("list", str(ctx.exception))
+
+        # Test with None
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event(None)
+        self.assertIn("Expected dict event", str(ctx.exception))
+        self.assertIn("NoneType", str(ctx.exception))
+
+        # Test with integer
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event(42)
+        self.assertIn("Expected dict event", str(ctx.exception))
+        self.assertIn("int", str(ctx.exception))
+
+    def test_parse_event_raises_value_error_for_missing_type(self):
+        """parse_event() raises ValueError when event is missing 'type' field."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        # Empty dict
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event({})
+        self.assertIn("missing 'type' field", str(ctx.exception))
+
+        # Dict without type
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event({"content": "some content"})
+        self.assertIn("missing 'type' field", str(ctx.exception))
+
+        # Dict with None type
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event({"type": None})
+        self.assertIn("missing 'type' field", str(ctx.exception))
+
+        # Dict with empty string type
+        with self.assertRaises(ValueError) as ctx:
+            provider.parse_event({"type": ""})
+        self.assertIn("missing 'type' field", str(ctx.exception))
+
+    def test_parse_event_handles_unknown_event_type_gracefully(self):
+        """parse_event() handles unknown event types with fallback behavior."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        # Unknown event type should return a Message with that type
+        event = {"type": "unknown_custom_type", "data": {"key": "value"}}
+        msg = provider.parse_event(event)
+
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "unknown_custom_type")
+        # Content should be string representation of event
+        self.assertIn("unknown_custom_type", msg.content)
+        self.assertIn("key", msg.content)
+        self.assertIsNotNone(msg.timestamp)
+
+    def test_parse_event_handles_string_content_in_assistant_event(self):
+        """parse_event() handles assistant events with string content directly."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        # Assistant event with string content (not list of blocks)
+        event = {
+            "type": "assistant",
+            "content": "This is a plain string message"
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "assistant")
+        self.assertEqual(msg.content, "This is a plain string message")
+
+    def test_parse_event_handles_non_string_content_in_tool_result(self):
+        """parse_event() handles tool_result with non-string content."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        # Tool result with dict content (will be stringified)
+        event = {
+            "type": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-456",
+                "content": {"result": "success", "data": [1, 2, 3]}
+            }]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "tool_result")
+        self.assertEqual(msg.tool_use_id, "tool-456")
+        # Content should be stringified
+        self.assertIsInstance(msg.content, str)
+        self.assertIn("result", msg.content)
+
+        # Tool result with list content (will be stringified)
+        event2 = {
+            "type": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-789",
+                "content": ["line1", "line2", "line3"]
+            }]
+        }
+
+        msg2 = provider.parse_event(event2)
+        self.assertEqual(msg2.type, "tool_result")
+        self.assertEqual(msg2.tool_use_id, "tool-789")
+        self.assertIsInstance(msg2.content, str)
+
+    def test_parse_event_handles_regular_user_message(self):
+        """parse_event() handles regular user messages (not tool_result)."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        # Regular user message with text blocks
+        event = {
+            "type": "user",
+            "content": [{"type": "text", "text": "Hello from user"}]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "user")
+        self.assertEqual(msg.content, "Hello from user")
+
+        # Regular user message with plain string content
+        event2 = {
+            "type": "user",
+            "content": "Plain user message"
+        }
+
+        msg2 = provider.parse_event(event2)
+        self.assertEqual(msg2.type, "user")
+        self.assertEqual(msg2.content, "Plain user message")
+
+        # User message with empty content list
+        event3 = {
+            "type": "user",
+            "content": []
+        }
+
+        msg3 = provider.parse_event(event3)
+        self.assertEqual(msg3.type, "user")
+        self.assertIsNone(msg3.content)
+
+    def test_extract_text_content_handles_none(self):
+        """_extract_text_content() returns None for None input."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        result = provider._extract_text_content(None)
+        self.assertIsNone(result)
+
+    def test_extract_text_content_handles_string(self):
+        """_extract_text_content() returns string as-is."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        result = provider._extract_text_content("hello world")
+        self.assertEqual(result, "hello world")
+
+        result2 = provider._extract_text_content("")
+        self.assertEqual(result2, "")
+
+    def test_extract_text_content_handles_list_with_text_blocks(self):
+        """_extract_text_content() extracts text from list of text blocks."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        content = [
+            {"type": "text", "text": "First part"},
+            {"type": "text", "text": "Second part"}
+        ]
+        result = provider._extract_text_content(content)
+        self.assertEqual(result, "First part\nSecond part")
+
+    def test_extract_text_content_handles_list_with_strings(self):
+        """_extract_text_content() extracts text from list of strings."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        content = ["Line 1", "Line 2", "Line 3"]
+        result = provider._extract_text_content(content)
+        self.assertEqual(result, "Line 1\nLine 2\nLine 3")
+
+    def test_extract_text_content_handles_mixed_list(self):
+        """_extract_text_content() handles list with mixed content types."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        content = [
+            {"type": "text", "text": "Block text"},
+            "Plain string",
+            {"type": "image", "url": "http://example.com/img.png"}  # Non-text block
+        ]
+        result = provider._extract_text_content(content)
+        self.assertEqual(result, "Block text\nPlain string")
+
+    def test_extract_text_content_handles_empty_list(self):
+        """_extract_text_content() returns None for empty list."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        result = provider._extract_text_content([])
+        self.assertIsNone(result)
+
+    def test_extract_text_content_handles_other_types(self):
+        """_extract_text_content() stringifies other types."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        # Dict input (not list)
+        result = provider._extract_text_content({"key": "value"})
+        self.assertEqual(result, "{'key': 'value'}")
+
+        # Integer input
+        result2 = provider._extract_text_content(42)
+        self.assertEqual(result2, "42")
+
+    def test_parse_event_assistant_with_multiple_text_blocks(self):
+        """parse_event() joins multiple text blocks with newlines."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [
+                {"type": "text", "text": "First paragraph."},
+                {"type": "text", "text": "Second paragraph."},
+                {"type": "text", "text": "Third paragraph."}
+            ]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertEqual(msg.content, "First paragraph.\nSecond paragraph.\nThird paragraph.")
+
+    def test_parse_event_assistant_with_empty_text_block(self):
+        """parse_event() handles text blocks with empty text."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [{"type": "text", "text": ""}]
+        }
+
+        msg = provider.parse_event(event)
+        # Empty string becomes empty string after join
+        self.assertEqual(msg.content, "")
+
+    def test_parse_event_assistant_with_missing_text_key(self):
+        """parse_event() handles text blocks missing 'text' key."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [{"type": "text"}]  # Missing 'text' key
+        }
+
+        msg = provider.parse_event(event)
+        # Should default to empty string
+        self.assertEqual(msg.content, "")
+
+    def test_parse_event_system_with_non_dict_data(self):
+        """parse_event() handles system events with non-dict data."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        # System event with list data instead of dict
+        event = {
+            "type": "system",
+            "subtype": "info",
+            "data": ["item1", "item2"]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertEqual(msg.type, "system")
+        self.assertEqual(msg.subtype, "info")
+        # session_id should be None since data is not a dict
+        self.assertIsNone(msg.session_id)
+
+    def test_parse_event_tool_result_with_none_content(self):
+        """parse_event() handles tool_result with None content."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-abc",
+                "content": None
+            }]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertEqual(msg.type, "tool_result")
+        self.assertEqual(msg.tool_use_id, "tool-abc")
+        self.assertIsNone(msg.content)
+
+    def test_sdk_version_caching(self):
+        """sdk_version property caches the version after first call."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+
+        provider = ClaudeSDKProvider()
+
+        # First access
+        version1 = provider.sdk_version
+        self.assertIsNotNone(version1)
+
+        # Second access should return same cached value
+        version2 = provider.sdk_version
+        self.assertEqual(version1, version2)
+
+        # Internal cache should be set
+        self.assertEqual(provider._sdk_version, version1)
+
+
 class SchemaVersionDetectionTests(unittest.TestCase):
     """Test schema version detection for v1 and v2 output files (Task T8)."""
 

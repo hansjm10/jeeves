@@ -43,26 +43,39 @@ import select
 import subprocess
 
 # Import jeeves.core modules for the new src/ layout
-try:
-    from jeeves.core.paths import (
-        get_data_dir,
-        get_issue_state_dir,
-        get_worktree_path,
-        parse_issue_ref,
-        parse_repo_spec,
-    )
-    from jeeves.core.issue import (
-        IssueError,
-        IssueState,
-        create_issue_state,
-        list_issues as list_issues_from_jeeves,
-    )
-    from jeeves.core.repo import ensure_repo, RepoError
-    from jeeves.core.worktree import create_worktree, WorktreeError
-    from jeeves.core.config import GlobalConfig
-    JEEVES_CLI_AVAILABLE = True
-except ImportError:
-    JEEVES_CLI_AVAILABLE = False
+from jeeves.core.paths import (
+    get_data_dir,
+    get_issue_state_dir,
+    get_worktree_path,
+    parse_issue_ref,
+    parse_repo_spec,
+)
+from jeeves.core.issue import (
+    IssueError,
+    IssueState,
+    create_issue_state,
+    list_issues as list_issues_from_jeeves,
+)
+from jeeves.core.repo import ensure_repo, RepoError
+from jeeves.core.worktree import create_worktree, WorktreeError
+
+PHASE_TO_PROMPT = {
+    "design": "issue.design.md",
+    "implement": "issue.implement.md",
+    "review": "issue.review.md",
+}
+
+
+def resolve_prompt_path(phase: str, prompts_dir: Path) -> Path:
+    if phase == "complete":
+        raise ValueError("Phase is complete; no prompt to run.")
+    prompt_name = PHASE_TO_PROMPT.get(phase)
+    if not prompt_name:
+        raise ValueError(f"Unknown phase: {phase}")
+    prompt_path = (prompts_dir / prompt_name).resolve()
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"Prompt not found: {prompt_path}")
+    return prompt_path
 
 
 class JeevesPromptManager:
@@ -309,9 +322,7 @@ class JeevesState:
         self.issue_file = self.state_dir / "issue.json"
         self.progress_file = self.state_dir / "progress.txt"
         self.last_run_log = self.state_dir / "last-run.log"
-        self.last_message = self.state_dir / "last-message.txt"
-        self.coverage_failures = self.state_dir / "coverage-failures.md"
-        self.open_questions = self.state_dir / "open-questions.md"
+        self.viewer_run_log = self.state_dir / "viewer-run.log"
         
         # State cache
         self.last_update = 0
@@ -330,8 +341,7 @@ class JeevesState:
     
     def _files_changed(self) -> bool:
         """Check if any state files have changed"""
-        files = [self.prd_file, self.issue_file, self.progress_file, 
-                 self.last_run_log, self.coverage_failures, self.open_questions]
+        files = [self.prd_file, self.issue_file, self.progress_file, self.last_run_log, self.viewer_run_log]
         
         for f in files:
             mtime = self._get_mtime(f)
@@ -385,54 +395,15 @@ class JeevesState:
         # Parse status based on mode
         if state["mode"] == "issue":
             config = state["config"]
-            status = config.get("status", {})
-            pr = config.get("pullRequest", {})
             issue = config.get("issue", {})
-
-            has_coverage_failures = self.coverage_failures.exists() and self.coverage_failures.stat().st_size > 0
-            has_open_questions = self.open_questions.exists() and self.open_questions.stat().st_size > 0
-
-            coverage_needs_fix = bool(status.get("coverageNeedsFix", False) or has_coverage_failures)
-            coverage_clean = bool(status.get("coverageClean", False) and not coverage_needs_fix)
-            
-            # Get current task info
-            tasks = config.get("tasks") or []
-            current_task_id = status.get("currentTaskId")
-            current_task = None
-            tasks_done_count = 0
-            for i, t in enumerate(tasks):
-                if (t.get("status") or "pending") == "done":
-                    tasks_done_count += 1
-                if current_task_id and t.get("id") == current_task_id:
-                    current_task = {
-                        "id": t.get("id"),
-                        "index": i + 1,
-                        "title": t.get("title", ""),
-                        "summary": t.get("summary", ""),
-                    }
-
+            phase = config.get("phase", "design")
             state["status"] = {
-                "phase": self._determine_phase(config, status),
-                "implemented": status.get("implemented", False),
-                "pr_created": status.get("prCreated", False) or bool(pr.get("number")),
-                "pr_description_ready": status.get("prDescriptionReady", False),
-                "pr_number": pr.get("number"),
-                "pr_url": pr.get("url"),
-                "review_clean": status.get("reviewClean", False),
-                "ci_clean": status.get("ciClean", False),
-                "coverage_clean": coverage_clean,
-                "coverage_needs_fix": coverage_needs_fix,
-                "sonar_clean": status.get("sonarClean", False),
-                "has_coverage_failures": has_coverage_failures,
-                "has_open_questions": has_open_questions,
+                "phase": phase,
                 "issue_number": issue.get("number") or config.get("issueNumber"),
                 "issue_url": issue.get("url"),
                 "issue_title": issue.get("title", ""),
-                "branch_name": config.get("branchName"),
+                "branch_name": config.get("branch") or config.get("branchName"),
                 "design_doc": config.get("designDocPath") or config.get("designDoc"),
-                "current_task": current_task,
-                "tasks_total": len(tasks),
-                "tasks_done": tasks_done_count,
             }
         elif state["mode"] == "prd":
             config = state["config"]
@@ -459,11 +430,19 @@ class JeevesState:
         
         return state
 
+    def _get_log_path(self) -> Path:
+        if self.last_run_log.exists() and self.last_run_log.stat().st_size > 0:
+            return self.last_run_log
+        if self.viewer_run_log.exists() and self.viewer_run_log.stat().st_size > 0:
+            return self.viewer_run_log
+        return self.last_run_log
+
     def get_recent_logs(self, max_lines: int = 500) -> List[str]:
         """Read last N log lines without affecting SSE streaming cursor."""
-        if not self.last_run_log.exists():
+        log_path = self._get_log_path()
+        if not log_path.exists():
             return []
-        return self._read_lines_tail(self.last_run_log, max_lines)
+        return self._read_lines_tail(log_path, max_lines)
     
     def _parse_iteration(self) -> Optional[Dict]:
         """Parse current iteration from progress file"""
@@ -497,58 +476,7 @@ class JeevesState:
             pass
         return None
     
-    def _determine_phase(self, config: Dict, status: Dict) -> str:
-        """Determine current phase from config"""
-        implemented = status.get("implemented", False)
-        pr_created = status.get("prCreated", False) or config.get("pullRequest", {}).get("number")
-        pr_desc_ready = status.get("prDescriptionReady", False)
-        review_clean = status.get("reviewClean", False)
-        ci_clean = status.get("ciClean", False)
-        has_coverage_failures = self.coverage_failures.exists() and self.coverage_failures.stat().st_size > 0
-        coverage_needs_fix = bool(status.get("coverageNeedsFix", False) or has_coverage_failures)
-        coverage_clean = bool(status.get("coverageClean", False) and not coverage_needs_fix)
-        sonar_clean = status.get("sonarClean", False)
-        has_open_questions = self.open_questions.exists() and self.open_questions.stat().st_size > 0
-        tasks = config.get("tasks") or []
-        has_tasks = len(tasks) > 0
-        task_stage = status.get("taskStage") or "implement"
-        tasks_complete = status.get("tasksComplete")
-        if tasks_complete is None and has_tasks:
-            tasks_complete = all((task.get("status") or "pending") == "done" for task in tasks)
-        tasks_complete = bool(tasks_complete) if has_tasks else False
-
-        # Check if design doc exists on disk (matches jeeves.sh behavior)
-        design_doc = config.get("designDocPath") or config.get("designDoc")
-        has_design_doc = False
-        if design_doc:
-            design_doc_path = Path(design_doc)
-            if not design_doc_path.is_absolute():
-                design_doc_path = self.state_dir.parent / design_doc
-            has_design_doc = design_doc_path.exists()
-
-        if not has_design_doc:
-            return "design"
-        if has_tasks and not tasks_complete:
-            if task_stage == "spec-review":
-                return "task-spec-review"
-            if task_stage == "quality-review":
-                return "task-quality-review"
-            return "task-implement"
-        if implemented and pr_created and pr_desc_ready and has_open_questions:
-            return "questions"
-        if not (implemented and pr_created and pr_desc_ready):
-            return "implement"
-        if not review_clean:
-            return "review"
-        if not ci_clean:
-            return "ci"
-        if coverage_needs_fix:
-            return "coverage-fix"
-        if not coverage_clean:
-            return "coverage"
-        if not sonar_clean:
-            return "sonar"
-        return "complete"
+    # Phase selection is stored directly in issue.json for SDK-only mode.
     
     def _read_json(self, path: Path) -> Optional[Dict]:
         """Read JSON file"""
@@ -569,21 +497,26 @@ class JeevesState:
 
 
 class JeevesRunManager:
-    """Start/stop Jeeves runs from the viewer (single run at a time)."""
+    """Start/stop SDK runs from the viewer (single run at a time)."""
 
-    def __init__(self, *, issue_ref: Optional[str] = None, state_dir: Optional[Path] = None):
-        """Initialize the run manager.
-
-        Args:
-            issue_ref: Issue reference in "owner/repo#123" format.
-            state_dir: State directory (derived from issue_ref if not provided).
-        """
+    def __init__(
+        self,
+        *,
+        issue_ref: Optional[str] = None,
+        state_dir: Optional[Path] = None,
+        prompts_dir: Optional[Path] = None,
+        python_exe: Optional[str] = None,
+        runner_cmd_override: Optional[List[str]] = None,
+    ):
         self.issue_ref = issue_ref
         self._owner: Optional[str] = None
         self._repo: Optional[str] = None
         self._issue_number: Optional[int] = None
+        self.prompts_dir = prompts_dir or (Path(__file__).resolve().parent.parent.parent.parent / "prompts")
+        self.python_exe = python_exe or sys.executable
+        self.runner_cmd_override = runner_cmd_override
 
-        if issue_ref and JEEVES_CLI_AVAILABLE:
+        if issue_ref:
             self._owner, self._repo, self._issue_number = parse_issue_ref(issue_ref)
             self.state_dir = get_issue_state_dir(self._owner, self._repo, self._issue_number)
             self.work_dir = get_worktree_path(self._owner, self._repo, self._issue_number)
@@ -591,7 +524,6 @@ class JeevesRunManager:
             self.state_dir = state_dir.resolve()
             self.work_dir = self.state_dir.parent
         else:
-            # Default empty state for when no issue is selected
             self.state_dir = Path.cwd() / "jeeves"
             self.work_dir = Path.cwd()
 
@@ -604,24 +536,13 @@ class JeevesRunManager:
             "ended_at": None,
             "returncode": None,
             "command": None,
-            "runner": None,
-            "max_iterations": None,
-            "output_mode": None,
-            "prompt_append_file": None,
+            "max_turns": None,
             "viewer_log_file": str(self.state_dir / "viewer-run.log"),
             "last_error": None,
             "issue_ref": issue_ref,
         }
 
     def set_issue(self, issue_ref: str) -> None:
-        """Set the active issue.
-
-        Args:
-            issue_ref: Issue reference in "owner/repo#123" format.
-        """
-        if not JEEVES_CLI_AVAILABLE:
-            raise RuntimeError("Jeeves CLI modules not available")
-
         self._owner, self._repo, self._issue_number = parse_issue_ref(issue_ref)
         self.issue_ref = issue_ref
         self.state_dir = get_issue_state_dir(self._owner, self._repo, self._issue_number)
@@ -653,57 +574,17 @@ class JeevesRunManager:
         except Exception:
             return []
 
-    def _write_prompt_append(self, prompt_append: str) -> Optional[Path]:
-        """Write prompt append content to a state file; returns path or None if empty."""
-        prompt_append = (prompt_append or "").strip()
-        append_path = self.state_dir / "viewer-prompt.append.md"
-        if not prompt_append:
-            try:
-                append_path.unlink(missing_ok=True)  # py3.8+
-            except TypeError:  # pragma: no cover (py37)
-                if append_path.exists():
-                    append_path.unlink()
-            return None
-        append_path.parent.mkdir(parents=True, exist_ok=True)
-        append_path.write_text(prompt_append + "\n")
-        return append_path
-
     def start(
         self,
         *,
-        runner: str = "auto",
-        max_iterations: int = 10,
-        mode: str = "auto",
-        output_mode: str = "stream",
-        print_prompt: bool = False,
-        prompt_append: str = "",
-        env_overrides: Optional[Dict[str, str]] = None,
+        max_turns: Optional[int] = None,
     ) -> Dict:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 raise RuntimeError("Jeeves is already running")
 
-            if not JEEVES_CLI_AVAILABLE:
-                raise RuntimeError("Jeeves CLI modules not available")
-
             if not self.issue_ref:
                 raise ValueError("No issue selected. Use /api/issues/select first.")
-
-            if runner not in {"auto", "codex", "claude", "opencode", "sdk"}:
-                raise ValueError("runner must be one of: auto, codex, claude, opencode, sdk")
-
-            try:
-                max_iterations_int = int(max_iterations)
-            except Exception as e:
-                raise ValueError("max_iterations must be an integer") from e
-            if max_iterations_int < 1 or max_iterations_int > 10_000:
-                raise ValueError("max_iterations must be between 1 and 10000")
-
-            if mode not in {"auto", "issue", "prd"}:
-                raise ValueError("mode must be one of: auto, issue, prd")
-
-            if output_mode not in {"stream", "compact"}:
-                raise ValueError("output_mode must be one of: stream, compact")
 
             # Verify worktree exists
             if not self.work_dir.exists():
@@ -716,48 +597,29 @@ class JeevesRunManager:
             viewer_log_path.parent.mkdir(parents=True, exist_ok=True)
             viewer_log_path.write_text("")
 
-            append_path = self._write_prompt_append(prompt_append)
+            issue_state = IssueState.load(self._owner, self._repo, self._issue_number)
+            prompt_path = resolve_prompt_path(issue_state.phase, self.prompts_dir)
 
             env = os.environ.copy()
-            env["JEEVES_STATE_DIR"] = str(self.state_dir)
-            env["JEEVES_WORK_DIR"] = str(self.work_dir)
-            env["JEEVES_MODE"] = mode
-            env["JEEVES_OUTPUT_MODE"] = output_mode
-            env["JEEVES_PRINT_PROMPT"] = "1" if print_prompt else "0"
-
-            if runner != "auto":
-                env["JEEVES_RUNNER"] = runner
-
-            # Codex often needs fully unsandboxed execution to access installed skills
-            # and repo tooling like `gh`. Default to dangerous mode when using Codex.
-            # (Callers can still override via explicit env_overrides.)
-            if runner in {"auto", "codex"} and "JEEVES_CODEX_DANGEROUS" not in (env_overrides or {}):
-                env["JEEVES_CODEX_DANGEROUS"] = "1"
-
-            if append_path is not None:
-                env["JEEVES_PROMPT_APPEND_FILE"] = str(append_path)
+            cmd: List[str]
+            if self.runner_cmd_override:
+                cmd = list(self.runner_cmd_override)
             else:
-                env.pop("JEEVES_PROMPT_APPEND_FILE", None)
-
-            if env_overrides:
-                for key, value in env_overrides.items():
-                    if not isinstance(key, str) or not isinstance(value, str):
-                        continue
-                    if not key.startswith("JEEVES_"):
-                        continue
-                    env[key] = value
-
-            # Find jeeves.sh in scripts/legacy/
-            # Path from src/jeeves/viewer/server.py -> viewer -> jeeves -> src -> repo_root -> scripts/legacy
-            jeeves_sh = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "legacy" / "jeeves.sh"
-            if not jeeves_sh.exists():
-                raise FileNotFoundError(f"jeeves.sh not found at {jeeves_sh}")
-
-            # Build command using jeeves.sh directly
-            # The env vars JEEVES_STATE_DIR and JEEVES_WORK_DIR tell it where to run
-            cmd: List[str] = [str(jeeves_sh), "--max-iterations", str(max_iterations_int)]
-            if runner != "auto":
-                cmd += ["--runner", runner]
+                cmd = [self.python_exe, "-m", "jeeves.runner.sdk_runner"]
+            cmd += [
+                "--prompt",
+                str(prompt_path),
+                "--output",
+                str(self.state_dir / "sdk-output.json"),
+                "--text-output",
+                str(self.state_dir / "last-run.log"),
+                "--work-dir",
+                str(self.work_dir),
+                "--state-dir",
+                str(self.state_dir),
+            ]
+            if max_turns is not None:
+                cmd += ["--max-turns", str(max_turns)]
 
             started_at = datetime.now().isoformat()
 
@@ -783,10 +645,7 @@ class JeevesRunManager:
                 "ended_at": None,
                 "returncode": None,
                 "command": cmd,
-                "runner": runner,
-                "max_iterations": max_iterations_int,
-                "output_mode": output_mode,
-                "prompt_append_file": str(append_path) if append_path else None,
+                "max_turns": max_turns,
                 "viewer_log_file": str(viewer_log_path),
                 "last_error": None,
                 "issue_ref": self.issue_ref,
@@ -915,9 +774,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/issue/status":
             self._handle_issue_status_update()
             return
-        if path == "/api/git/update-main":
-            self._handle_git_update_main()
-            return
         if path.startswith("/api/prompts/"):
             self._handle_prompt_save(path[len("/api/prompts/"):])
             return
@@ -981,9 +837,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 self.state.issue_file = self.state.state_dir / "issue.json"
                 self.state.progress_file = self.state.state_dir / "progress.txt"
                 self.state.last_run_log = self.state.state_dir / "last-run.log"
-                self.state.last_message = self.state.state_dir / "last-message.txt"
-                self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
-                self.state.open_questions = self.state.state_dir / "open-questions.md"
+                self.state.viewer_run_log = self.state.state_dir / "viewer-run.log"
             except ValueError as e:
                 self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=400)
                 return
@@ -991,24 +845,24 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"Failed to select issue: {e}", "run": self.run_manager.get_status()}, status=500)
                 return
 
-        runner = body.get("runner", "auto")
-        max_iterations = body.get("max_iterations", 10)
-        mode = body.get("mode", "auto")
-        output_mode = body.get("output_mode", "stream")
-        print_prompt = bool(body.get("print_prompt", False))
-        prompt_append = body.get("prompt_append", "")
-        env_overrides = body.get("env", None)
+        for unsupported in ("runner", "max_iterations", "mode", "output_mode", "print_prompt", "prompt_append", "env"):
+            if unsupported in body:
+                self._send_json({"ok": False, "error": f"Unsupported field: {unsupported}"}, status=400)
+                return
+
+        max_turns = body.get("max_turns")
+        if max_turns is not None:
+            try:
+                max_turns = int(max_turns)
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"max_turns must be an integer: {e}"}, status=400)
+                return
+            if max_turns < 1:
+                self._send_json({"ok": False, "error": "max_turns must be >= 1"}, status=400)
+                return
 
         try:
-            run_info = self.run_manager.start(
-                runner=runner,
-                max_iterations=max_iterations,
-                mode=mode,
-                output_mode=output_mode,
-                print_prompt=print_prompt,
-                prompt_append=prompt_append,
-                env_overrides=env_overrides,
-            )
+            run_info = self.run_manager.start(max_turns=max_turns)
         except RuntimeError as e:
             self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=409)
             return
@@ -1112,36 +966,10 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             return
 
         body = self._read_json_body()
-        updates = body.get("updates", None)
-        if updates is None:
-            key = body.get("key", None)
-            value = body.get("value", None)
-            if key:
-                updates = {key: value}
-
-        if not isinstance(updates, dict) or not updates:
-            self._send_json({"ok": False, "error": "updates must be a non-empty object."}, status=400)
+        phase = (body.get("phase") or "").strip().lower()
+        if phase not in {"design", "implement", "review", "complete"}:
+            self._send_json({"ok": False, "error": "phase must be one of: design, implement, review, complete"}, status=400)
             return
-
-        allowed = {
-            "implemented",
-            "prCreated",
-            "prDescriptionReady",
-            "reviewClean",
-            "ciClean",
-            "coverageClean",
-            "coverageNeedsFix",
-            "sonarClean",
-        }
-        normalized: Dict[str, bool] = {}
-        for key, value in updates.items():
-            if key not in allowed:
-                self._send_json({"ok": False, "error": f"Unsupported status field: {key}"}, status=400)
-                return
-            if not isinstance(value, bool):
-                self._send_json({"ok": False, "error": f"Status field {key} must be boolean."}, status=400)
-                return
-            normalized[key] = value
 
         try:
             raw = issue_file.read_text(encoding="utf-8")
@@ -1150,39 +978,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": f"Failed to read issue.json: {e}"}, status=500)
             return
 
-        status = data.get("status", {})
-        if not isinstance(status, dict):
-            status = {}
-
-        for key, value in normalized.items():
-            status[key] = value
-
-        # Make coverage toggles "effective" by keeping related signals in sync.
-        if normalized.get("coverageClean") is True:
-            if "coverageNeedsFix" not in normalized:
-                status["coverageNeedsFix"] = False
-            try:
-                self.state.coverage_failures.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception:
-                try:
-                    self.state.coverage_failures.write_text("")
-                except Exception:
-                    pass
-
-        if normalized.get("coverageNeedsFix") is False:
-            try:
-                self.state.coverage_failures.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception:
-                try:
-                    self.state.coverage_failures.write_text("")
-                except Exception:
-                    pass
-
-        data["status"] = status
+        data["phase"] = phase
 
         tmp_path = issue_file.with_suffix(issue_file.suffix + ".tmp")
         try:
@@ -1197,164 +993,16 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
-        self._send_json({"ok": True, "status": status})
-
-    def _handle_git_update_main(self):
-        if not self.allow_remote_run and not self._is_local_request():
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": "Git operations are only allowed from localhost. Restart the viewer with --allow-remote-run to enable it.",
-                },
-                status=403,
-            )
-            return
-
-        if self.run_manager.get_status().get("running"):
-            self._send_json({"ok": False, "error": "Cannot update main while Jeeves is running."}, status=409)
-            return
-
-        body = self._read_json_body()
-        remote = str(body.get("remote", "origin") or "origin").strip()
-        branch = str(body.get("branch", "") or "").strip()
-        force = bool(body.get("force", False))
-
-        work_dir = self.run_manager.work_dir
-        commands: List[Dict] = []
-
-        def run(cmd: List[str], *, timeout_sec: float = 60.0) -> subprocess.CompletedProcess:
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(work_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_sec,
-                )
-            except subprocess.TimeoutExpired as e:
-                commands.append(
-                    {
-                        "cmd": cmd,
-                        "returncode": None,
-                        "stdout": (e.stdout or ""),
-                        "stderr": (e.stderr or ""),
-                        "timeout": True,
-                    }
-                )
-                raise
-            commands.append(
-                {
-                    "cmd": cmd,
-                    "returncode": proc.returncode,
-                    "stdout": proc.stdout or "",
-                    "stderr": proc.stderr or "",
-                }
-            )
-            return proc
-
-        def fail(message: str, *, status: int = 400):
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": message,
-                    "commands": commands,
-                },
-                status=status,
-            )
-
-        try:
-            root = run(["git", "rev-parse", "--show-toplevel"])
-        except subprocess.TimeoutExpired:
-            fail("git command timed out", status=504)
-            return
-        except Exception as e:
-            fail(f"Failed to run git: {e}", status=500)
-            return
-
-        if root.returncode != 0:
-            fail("Not a git repository (or git not available).", status=400)
-            return
-
-        current_branch = ""
-        proc_branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        if proc_branch.returncode == 0:
-            current_branch = (proc_branch.stdout or "").strip()
-
-        if not branch:
-            proc_default = run(["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"])
-            if proc_default.returncode == 0:
-                ref = (proc_default.stdout or "").strip()
-                prefix = f"refs/remotes/{remote}/"
-                if ref.startswith(prefix):
-                    branch = ref[len(prefix):]
-            if not branch:
-                branch = "main"
-
-        proc_remote = run(["git", "remote", "get-url", remote])
-        if proc_remote.returncode != 0:
-            fail(f"Remote '{remote}' not configured.", status=400)
-            return
-
-        proc_dirty = run(["git", "status", "--porcelain"])
-        dirty = bool((proc_dirty.stdout or "").strip())
-        if dirty and not force:
-            fail("Working tree has uncommitted changes; refusing to switch branches.", status=409)
-            return
-
-        proc_fetch = run(["git", "fetch", "--prune", remote])
-        if proc_fetch.returncode != 0:
-            fail(f"Failed to fetch from '{remote}'.", status=400)
-            return
-
-        if current_branch != branch:
-            proc_local = run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"])
-            local_exists = proc_local.returncode == 0
-            proc_remote_ref = run(["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}"])
-            remote_exists = proc_remote_ref.returncode == 0
-
-            if local_exists:
-                proc_checkout = run(["git", "checkout", branch])
-            elif remote_exists:
-                proc_checkout = run(["git", "checkout", "-b", branch, "--track", f"{remote}/{branch}"])
-            else:
-                fail(f"Branch '{branch}' not found locally or on '{remote}'.", status=400)
-                return
-
-            if proc_checkout.returncode != 0:
-                fail(f"Failed to checkout '{branch}'.", status=400)
-                return
-
-        proc_merge = run(["git", "merge", "--ff-only", f"{remote}/{branch}"])
-        if proc_merge.returncode != 0:
-            if force:
-                proc_reset = run(["git", "reset", "--hard", f"{remote}/{branch}"])
-                if proc_reset.returncode != 0:
-                    fail(f"Failed to reset '{branch}' to '{remote}/{branch}'.", status=400)
-                    return
-            else:
-                fail(f"Failed to fast-forward '{branch}' (not a fast-forward?).", status=409)
-                return
-
-        proc_head = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        proc_sha = run(["git", "rev-parse", "HEAD"])
-
-        self._send_json(
-            {
-                "ok": True,
-                "branch": (proc_head.stdout or "").strip() if proc_head.returncode == 0 else None,
-                "commit": (proc_sha.stdout or "").strip() if proc_sha.returncode == 0 else None,
-                "commands": commands,
-            }
-        )
+        self._send_json({"ok": True, "phase": phase})
 
     def _handle_init_issue_script_info(self):
         """Return info about init capability (for backward compatibility)."""
         self._send_json({
             "ok": True,
             "script": {
-                "path": "jeeves.cli",
-                "exists": JEEVES_CLI_AVAILABLE,
-                "method": "python-module"
+                "path": "viewer",
+                "exists": True,
+                "method": "viewer"
             }
         })
 
@@ -1371,10 +1019,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
         if self.run_manager.get_status().get("running"):
             self._send_json({"ok": False, "error": "Cannot init while Jeeves is running."}, status=409)
-            return
-
-        if not JEEVES_CLI_AVAILABLE:
-            self._send_json({"ok": False, "error": "Jeeves CLI modules not available"}, status=500)
             return
 
         body = self._read_json_body()
@@ -1436,10 +1080,10 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 owner=owner,
                 repo=repo_name,
                 issue_number=issue_number,
-                branch=state.branch_name,
+                branch=state.branch,
             )
             output_lines.append(f"  Worktree: {worktree_path}")
-            output_lines.append(f"  Branch: {state.branch_name}")
+            output_lines.append(f"  Branch: {state.branch}")
 
             # Set this as the active issue
             issue_ref = f"{owner}/{repo_name}#{issue_number}"
@@ -1451,19 +1095,17 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self.state.issue_file = self.state.state_dir / "issue.json"
             self.state.progress_file = self.state.state_dir / "progress.txt"
             self.state.last_run_log = self.state.state_dir / "last-run.log"
-            self.state.last_message = self.state.state_dir / "last-message.txt"
-            self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
-            self.state.open_questions = self.state.state_dir / "open-questions.md"
+            self.state.viewer_run_log = self.state.state_dir / "viewer-run.log"
 
             output_lines.append("")
-            output_lines.append(f"Ready! Run: jeeves run {issue_ref}")
+            output_lines.append("Ready! Use the viewer to start the run.")
 
             self._send_json({
                 "ok": True,
                 "issue_ref": issue_ref,
                 "state_dir": str(state.state_dir),
                 "worktree": str(worktree_path),
-                "branch": state.branch_name,
+                "branch": state.branch,
                 "issue_title": state.issue.title,
                 "output": "\n".join(output_lines),
             })
@@ -1516,10 +1158,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Cannot change issue while Jeeves is running."}, status=409)
             return
 
-        if not JEEVES_CLI_AVAILABLE:
-            self._send_json({"ok": False, "error": "Jeeves CLI modules not available"}, status=500)
-            return
-
         body = self._read_json_body()
         issue_ref = body.get("issue_ref", "").strip()
 
@@ -1549,9 +1187,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self.state.issue_file = self.state.state_dir / "issue.json"
             self.state.progress_file = self.state.state_dir / "progress.txt"
             self.state.last_run_log = self.state.state_dir / "last-run.log"
-            self.state.last_message = self.state.state_dir / "last-message.txt"
-            self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
-            self.state.open_questions = self.state.state_dir / "open-questions.md"
+            self.state.viewer_run_log = self.state.state_dir / "viewer-run.log"
 
             # Load issue state to return info
             state = IssueState.load(owner, repo, issue_number)
@@ -1561,7 +1197,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 "issue_ref": issue_ref,
                 "state_dir": str(state_dir),
                 "worktree": str(get_worktree_path(owner, repo, issue_number)),
-                "branch": state.branch_name,
+                "branch": state.branch,
                 "issue_title": state.issue.title,
             })
 
@@ -1623,12 +1259,8 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_list_issues(self):
         """Handle GET /api/issues - List all issues from central data directory."""
-        if JEEVES_CLI_AVAILABLE:
-            issues = list_issues_from_jeeves()
-            data_dir = get_data_dir()
-        else:
-            issues = list_central_issues()
-            data_dir = get_jeeves_data_dir()
+        issues = list_issues_from_jeeves()
+        data_dir = get_data_dir()
         self._send_json({
             "ok": True,
             "issues": issues,
@@ -1639,10 +1271,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_data_dir_info(self):
         """Handle GET /api/data-dir - Get info about the central data directory."""
-        if JEEVES_CLI_AVAILABLE:
-            data_dir = get_data_dir()
-        else:
-            data_dir = get_jeeves_data_dir()
+        data_dir = get_data_dir()
 
         if not data_dir:
             self._send_json({
@@ -1658,7 +1287,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             "repos_dir": str(data_dir / "repos"),
             "worktrees_dir": str(data_dir / "worktrees"),
             "issues_dir": str(data_dir / "issues"),
-            "cli_available": JEEVES_CLI_AVAILABLE,
         }
 
         if data_dir.exists():
@@ -1708,7 +1336,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
         try:
-            current_log_path = self.state.last_run_log
+            current_log_path = self.state._get_log_path()
             log_watcher = LogWatcher(current_log_path)
 
             # SDK output watcher for real-time SDK streaming
@@ -1795,8 +1423,9 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
             while True:
                 # Check if log path changed (issue was changed)
-                if self.state.last_run_log != current_log_path:
-                    current_log_path = self.state.last_run_log
+                next_log_path = self.state._get_log_path()
+                if next_log_path != current_log_path:
+                    current_log_path = next_log_path
                     log_watcher = LogWatcher(current_log_path)
                     # Send all lines from new log file
                     new_logs = log_watcher.get_all_lines(500)
@@ -1910,96 +1539,6 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         if args and '404' in str(args[0]):
             print(f"[404] {args[0]}")
 
-
-def get_jeeves_data_dir() -> Optional[Path]:
-    """Get the central Jeeves data directory using XDG standard.
-
-    Returns:
-        Path to ~/.local/share/jeeves or platform equivalent.
-    """
-    try:
-        import platformdirs
-        return Path(platformdirs.user_data_dir("jeeves", appauthor=False))
-    except ImportError:
-        pass
-
-    # Fallback without platformdirs
-    env_dir = os.environ.get("JEEVES_DATA_DIR")
-    if env_dir:
-        return Path(env_dir).expanduser().resolve()
-
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-        return Path(base) / "jeeves"
-    elif hasattr(os, 'uname') and os.uname().sysname == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "jeeves"
-    else:
-        xdg_data = os.environ.get("XDG_DATA_HOME")
-        if xdg_data:
-            return Path(xdg_data) / "jeeves"
-        return Path.home() / ".local" / "share" / "jeeves"
-
-
-def list_central_issues() -> List[Dict]:
-    """List all issues from the central Jeeves data directory.
-
-    Returns:
-        List of issue info dicts.
-    """
-    data_dir = get_jeeves_data_dir()
-    if not data_dir:
-        return []
-
-    issues_dir = data_dir / "issues"
-    if not issues_dir.exists():
-        return []
-
-    results = []
-
-    for owner_dir in issues_dir.iterdir():
-        if not owner_dir.is_dir():
-            continue
-
-        for repo_dir in owner_dir.iterdir():
-            if not repo_dir.is_dir():
-                continue
-
-            for issue_dir in repo_dir.iterdir():
-                if not issue_dir.is_dir():
-                    continue
-
-                issue_file = issue_dir / "issue.json"
-                if not issue_file.exists():
-                    continue
-
-                try:
-                    with open(issue_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-
-                    issue_data = data.get("issue", {})
-                    if isinstance(issue_data, int):
-                        issue_number = issue_data
-                        issue_title = ""
-                    else:
-                        issue_number = issue_data.get("number", 0)
-                        issue_title = issue_data.get("title", "")
-
-                    results.append({
-                        "owner": owner_dir.name,
-                        "repo": repo_dir.name,
-                        "issue_number": issue_number,
-                        "issue_title": issue_title,
-                        "branch": data.get("branchName", ""),
-                        "state_dir": str(issue_dir),
-                        "status": data.get("status", {}),
-                        "mtime": issue_file.stat().st_mtime,
-                    })
-                except (json.JSONDecodeError, OSError):
-                    continue
-
-    return sorted(results, key=lambda x: x.get("mtime", 0), reverse=True)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Jeeves Real-time Viewer")
     parser.add_argument("--port", "-p", type=int, default=8080, help="Port to serve on")
@@ -2014,11 +1553,6 @@ def main():
     env_allow_remote = str(os.environ.get("JEEVES_VIEWER_ALLOW_REMOTE_RUN", "")).strip().lower() in {"1", "true", "yes", "on"}
     if env_allow_remote:
         args.allow_remote_run = True
-
-    if not JEEVES_CLI_AVAILABLE:
-        print("Error: Jeeves CLI modules not available.")
-        print("Make sure the jeeves package is installed or in PYTHONPATH.")
-        return 1
 
     # Determine initial issue
     issue_ref = args.issue
@@ -2062,7 +1596,6 @@ def main():
     print("")
     print("  Jeeves Real-time Viewer")
     print("  " + "=" * 40)
-    print(f"  CLI available: {JEEVES_CLI_AVAILABLE}")
     print(f"  Data directory: {get_data_dir()}")
     if issue_ref:
         print(f"  Active issue: {issue_ref}")
@@ -2076,11 +1609,11 @@ def main():
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    state = JeevesState(str(state_dir))
-    run_manager = JeevesRunManager(issue_ref=issue_ref)
     # prompts/ directory is at repo root: src/jeeves/viewer/server.py -> src/jeeves/ -> src/ -> repo root
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     prompts_dir = repo_root / "prompts"
+    state = JeevesState(str(state_dir))
+    run_manager = JeevesRunManager(issue_ref=issue_ref, prompts_dir=prompts_dir)
     prompt_manager = JeevesPromptManager(prompts_dir)
 
     def handler(*args_handler, **kwargs_handler):

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 
+from jeeves.core.issue import GitHubIssue, IssueState, create_issue_state
+from jeeves.core.paths import get_issue_state_dir, get_worktree_path
 from jeeves.viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
 
 
@@ -78,71 +80,66 @@ class ViewerRunApiTests(unittest.TestCase):
 
         subprocess.run(["git", "checkout", "-b", "issue/test"], cwd=self.repo_dir, check=True, capture_output=True, text=True)
 
-        self.state_dir = self.repo_dir / "jeeves"
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._old_data_dir = os.environ.get("JEEVES_DATA_DIR")
+        self.data_dir = tmp_path / "data"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["JEEVES_DATA_DIR"] = str(self.data_dir)
 
-        self.tools_dir = tmp_path / "jeeves_tools"
+        self.tools_dir = tmp_path / "prompts"
         self.tools_dir.mkdir(parents=True, exist_ok=True)
+        (self.tools_dir / "issue.design.md").write_text("# Design Prompt\n")
+        (self.tools_dir / "issue.implement.md").write_text("# Implement Prompt\n")
+        (self.tools_dir / "issue.review.md").write_text("# Review Prompt\n")
 
-        (self.tools_dir / "prompt.md").write_text("# Prompt\nHello\n")
-        (self.tools_dir / "prompt.issue.design.md").write_text("# Design Prompt\n")
+        self.owner = "acme"
+        self.repo = "widgets"
+        self.issue_number = 1
+        self.issue_ref = f"{self.owner}/{self.repo}#{self.issue_number}"
 
-        self.init_script = self.tools_dir / "init-issue.sh"
-        _write_executable(
-            self.init_script,
-            """#!/usr/bin/env bash
-set -euo pipefail
-
-STATE_DIR=""
-ISSUE=""
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --state-dir) STATE_DIR="$2"; shift 2 ;;
-    --issue) ISSUE="$2"; shift 2 ;;
-    --design-doc) shift 2 ;;
-    --repo) shift 2 ;;
-    --branch) shift 2 ;;
-    --force) shift 1 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
-  esac
-done
-
-mkdir -p "$STATE_DIR"
-printf '{\"issue\": {\"number\": %s}}\\n' "$ISSUE" > "$STATE_DIR/issue.json"
-echo \"[INFO] Wrote $STATE_DIR/issue.json\"
-""",
+        create_issue_state(
+            owner=self.owner,
+            repo=self.repo,
+            issue_number=self.issue_number,
+            branch="issue/test",
+            design_doc=None,
+            fetch_metadata=False,
+            force=True,
         )
+        self.state_dir = get_issue_state_dir(self.owner, self.repo, self.issue_number)
+        worktree_dir = get_worktree_path(self.owner, self.repo, self.issue_number)
+        worktree_dir.mkdir(parents=True, exist_ok=True)
 
-        self.dummy_script = tmp_path / "dummy_jeeves.sh"
+        self.dummy_script = tmp_path / "dummy_sdk.sh"
         _write_executable(
             self.dummy_script,
             """#!/usr/bin/env bash
 set -euo pipefail
 
-echo "dummy jeeves: starting"
-echo "runner=${JEEVES_RUNNER:-}"
-echo "mode=${JEEVES_MODE:-}"
-echo "work_dir=${JEEVES_WORK_DIR:-}"
-echo "state_dir=${JEEVES_STATE_DIR:-}"
+text_out=""
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--text-output" ]; then
+    j=$((i+1))
+    text_out="${!j}"
+  fi
+done
 
-if [[ -n "${JEEVES_PROMPT_APPEND_FILE:-}" && -f "${JEEVES_PROMPT_APPEND_FILE:-}" ]]; then
-  echo "prompt_append_file=${JEEVES_PROMPT_APPEND_FILE}"
-  echo "prompt_append_begin"
-  cat "${JEEVES_PROMPT_APPEND_FILE}"
-  echo "prompt_append_end"
+echo "dummy sdk: starting"
+if [ -n "$text_out" ]; then
+  mkdir -p "$(dirname "$text_out")"
+  echo "dummy log line 1" >> "$text_out"
+  echo "dummy log line 2" >> "$text_out"
 fi
-
-mkdir -p "${JEEVES_STATE_DIR}"
-echo "dummy log line 1" >> "${JEEVES_STATE_DIR}/last-run.log"
-sleep 5
-echo "dummy log line 2" >> "${JEEVES_STATE_DIR}/last-run.log"
-echo "dummy jeeves: done"
+sleep 1
+echo "dummy sdk: done"
 """,
         )
 
         state = JeevesState(str(self.state_dir))
-        run_manager = JeevesRunManager(state_dir=self.state_dir, jeeves_script=self.dummy_script, work_dir=self.repo_dir)
+        run_manager = JeevesRunManager(
+            issue_ref=self.issue_ref,
+            prompts_dir=self.tools_dir,
+            runner_cmd_override=[str(self.dummy_script)],
+        )
         prompt_manager = JeevesPromptManager(self.tools_dir)
 
         def handler(*args, **kwargs):
@@ -152,7 +149,6 @@ echo "dummy jeeves: done"
                 run_manager=run_manager,
                 prompt_manager=prompt_manager,
                 allow_remote_run=True,
-                init_issue_script=self.init_script,
                 **kwargs,
             )
 
@@ -163,6 +159,10 @@ echo "dummy jeeves: done"
         self._thread.start()
 
     def tearDown(self):
+        if self._old_data_dir is None:
+            os.environ.pop("JEEVES_DATA_DIR", None)
+        else:
+            os.environ["JEEVES_DATA_DIR"] = self._old_data_dir
         self.httpd.shutdown()
         self.httpd.server_close()
         self._tmp.cleanup()
@@ -174,21 +174,19 @@ echo "dummy jeeves: done"
                 conn,
                 "POST",
                 "/api/run",
-                {"runner": "codex", "max_iterations": 1, "output_mode": "stream"},
+                {"max_turns": 1},
             )
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
             self.assertTrue(data["run"]["running"])
             self.assertIsNotNone(data["run"]["pid"])
 
-            self.assertIsNone(data["run"]["prompt_append_file"])
-
             status, data = _request_json(conn, "GET", "/api/run")
             self.assertEqual(status, 200)
             self.assertTrue(data["run"]["running"])
 
             # Second start should conflict.
-            status, data = _request_json(conn, "POST", "/api/run", {"runner": "codex", "max_iterations": 1})
+            status, data = _request_json(conn, "POST", "/api/run", {"max_turns": 1})
             self.assertEqual(status, 409)
             self.assertFalse(data["ok"])
 
@@ -199,10 +197,10 @@ echo "dummy jeeves: done"
                 status, data = _request_json(conn, "GET", "/api/run/logs")
                 self.assertEqual(status, 200)
                 logs = data.get("logs", []) if isinstance(data, dict) else []
-                if any("dummy jeeves: starting" in line for line in logs):
+                if any("dummy sdk: starting" in line for line in logs):
                     break
                 time.sleep(0.05)
-            self.assertTrue(any("dummy jeeves: starting" in line for line in logs))
+            self.assertTrue(any("dummy sdk: starting" in line for line in logs))
 
             status, data = _request_json(conn, "POST", "/api/run/stop", {})
             self.assertEqual(status, 200)
@@ -227,18 +225,18 @@ echo "dummy jeeves: done"
             status, data = _request_json(conn, "GET", "/api/prompts")
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
-            self.assertTrue(any(p.get("id") == "prompt.md" for p in data.get("prompts", [])))
+            self.assertTrue(any(p.get("id") == "issue.design.md" for p in data.get("prompts", [])))
 
-            status, data = _request_json(conn, "GET", "/api/prompts/prompt.md")
+            status, data = _request_json(conn, "GET", "/api/prompts/issue.design.md")
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
-            self.assertIn("Hello", data["prompt"]["content"])
+            self.assertIn("Design Prompt", data["prompt"]["content"])
 
-            status, data = _request_json(conn, "POST", "/api/prompts/prompt.md", {"content": "# Updated\n"})
+            status, data = _request_json(conn, "POST", "/api/prompts/issue.design.md", {"content": "# Updated\n"})
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
 
-            status, data = _request_json(conn, "GET", "/api/prompts/prompt.md")
+            status, data = _request_json(conn, "GET", "/api/prompts/issue.design.md")
             self.assertEqual(status, 200, data)
             self.assertIn("# Updated", data["prompt"]["content"])
         finally:
@@ -247,13 +245,32 @@ echo "dummy jeeves: done"
     def test_init_issue(self):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
-            status, data = _request_json(conn, "POST", "/api/init/issue", {"issue": "123"})
+            from unittest import mock
+
+            fake_state = IssueState(
+                owner="acme",
+                repo="widgets",
+                issue=GitHubIssue(number=123, title="Test Issue", url="https://example.com/issues/123", repo="acme/widgets"),
+                branch="issue/123",
+                phase="design",
+            )
+            fake_state._state_dir = self.data_dir / "issues" / "acme" / "widgets" / "123"
+            fake_state._state_dir.mkdir(parents=True, exist_ok=True)
+            fake_state.save()
+
+            with mock.patch("jeeves.viewer.server.ensure_repo", return_value=self.repo_dir), \
+                mock.patch("jeeves.viewer.server.create_issue_state", return_value=fake_state), \
+                mock.patch("jeeves.viewer.server.create_worktree", return_value=self.repo_dir):
+                status, data = _request_json(
+                    conn,
+                    "POST",
+                    "/api/init/issue",
+                    {"issue": "123", "repo": "acme/widgets"},
+                )
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"], data)
 
-            issue_json = self.state_dir / "issue.json"
-            self.assertTrue(issue_json.exists())
-            payload = json.loads(issue_json.read_text())
+            payload = json.loads((fake_state.state_dir / "issue.json").read_text())
             self.assertEqual(payload.get("issue", {}).get("number"), 123)
         finally:
             conn.close()
@@ -263,30 +280,17 @@ echo "dummy jeeves: done"
         issue_json.write_text(
             json.dumps(
                 {
-                    "project": "Jeeves Test Project",
-                    "branchName": "issue/1-test-branch",
-                    "issue": {"number": 1, "repo": "example/repo"},
+                    "schemaVersion": 1,
+                    "repo": "acme/widgets",
+                    "issue": {"number": 1, "repo": "acme/widgets"},
+                    "branch": "issue/1-test-branch",
+                    "phase": "design",
                     "designDocPath": "docs/design-document-template.md",
-                    "status": {
-                        "implemented": True,
-                        "prCreated": True,
-                        "prDescriptionReady": True,
-                        "reviewClean": True,
-                        "ciClean": False,
-                        "coverageClean": False,
-                        "coverageNeedsFix": True,
-                        "sonarClean": False,
-                    },
-                    "pullRequest": {"number": 1, "url": "https://example.com/pr/1"},
                 },
                 indent=2,
             )
             + "\n"
         )
-
-        coverage_failures = self.state_dir / "coverage-failures.md"
-        coverage_failures.write_text("Failing test: should do something\n")
-        self.assertTrue(coverage_failures.exists())
 
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
@@ -294,53 +298,15 @@ echo "dummy jeeves: done"
                 conn,
                 "POST",
                 "/api/issue/status",
-                {"updates": {"coverageClean": True, "ciClean": True}},
+                {"phase": "review"},
             )
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"], data)
 
             payload = json.loads(issue_json.read_text())
-            status_obj = payload.get("status", {})
-            self.assertTrue(status_obj.get("coverageClean"))
-            self.assertFalse(status_obj.get("coverageNeedsFix"))
-            self.assertTrue(status_obj.get("ciClean"))
-
-            # coverage-failures.md should be cleared so coverage toggles are effective.
-            if coverage_failures.exists():
-                self.assertEqual(coverage_failures.read_text(), "")
+            self.assertEqual(payload.get("phase"), "review")
         finally:
             conn.close()
-
-    def test_git_update_main(self):
-        proc_branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=self.repo_dir,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc_branch.stdout.strip(), "issue/test")
-
-        self.assertEqual((self.repo_dir / "README.md").read_text(), "v1\n")
-
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
-        try:
-            status, data = _request_json(conn, "POST", "/api/git/update-main", {"branch": "main"})
-            self.assertEqual(status, 200, data)
-            self.assertTrue(data["ok"], data)
-
-            proc_branch = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self.repo_dir,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(proc_branch.stdout.strip(), "main")
-            self.assertEqual((self.repo_dir / "README.md").read_text(), "v2\n")
-        finally:
-            conn.close()
-
 
 class SDKOutputWatcherTests(unittest.TestCase):
     """Test SDKOutputWatcher class for incremental SDK output tracking."""
@@ -359,7 +325,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_handles_file_not_found_gracefully(self):
         """SDKOutputWatcher handles missing file without error."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         watcher = SDKOutputWatcher(self.sdk_output_file)
         new_messages, new_tool_calls, has_changes = watcher.get_updates()
@@ -370,7 +336,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_returns_initial_messages_on_first_read(self):
         """SDKOutputWatcher returns all messages on first read."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         initial_data = {
             "schema": "jeeves.sdk.v1",
@@ -394,7 +360,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_returns_only_new_messages_on_subsequent_reads(self):
         """SDKOutputWatcher returns only new messages since last check."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         initial_data = {
             "schema": "jeeves.sdk.v1",
@@ -436,7 +402,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_no_changes_when_file_unchanged(self):
         """SDKOutputWatcher reports no changes when file is unchanged."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         data = {
             "schema": "jeeves.sdk.v1",
@@ -459,7 +425,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_thread_safe_with_lock(self):
         """SDKOutputWatcher is thread-safe with Lock."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         data = {
             "schema": "jeeves.sdk.v1",
@@ -490,7 +456,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_handles_malformed_json_gracefully(self):
         """SDKOutputWatcher handles malformed JSON without crashing."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         self.sdk_output_file.write_text("{invalid json")
 
@@ -503,7 +469,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_reset_clears_tracking_state(self):
         """SDKOutputWatcher.reset() clears message/tool tracking state."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         data = {
             "schema": "jeeves.sdk.v1",
@@ -531,7 +497,7 @@ class SDKOutputWatcherTests(unittest.TestCase):
 
     def test_handles_missing_fields_gracefully(self):
         """SDKOutputWatcher handles SDK output with missing fields."""
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         # SDK output without messages or tool_calls
         data = {
@@ -619,7 +585,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_init_event_sent_on_session_start(self):
         """SSE stream sends sdk-init event when SDK session is detected."""
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         # Create SDK output with session info
         sdk_data = {
@@ -684,7 +650,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_message_event_sent_for_new_messages(self):
         """SSE stream sends sdk-message event for new messages."""
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         # Start with one message
         sdk_data = {
@@ -749,7 +715,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_tool_events_sent_for_tool_calls(self):
         """SSE stream sends sdk-tool-start and sdk-tool-complete events for tool calls."""
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         sdk_data = {
             "schema": "jeeves.sdk.v1",
@@ -829,7 +795,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_complete_event_sent_when_session_ends(self):
         """SSE stream sends sdk-complete event when session is marked complete."""
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         sdk_data = {
             "schema": "jeeves.sdk.v1",
@@ -2085,7 +2051,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         4. Tool calls trigger sdk-tool-start and sdk-tool-complete events
         5. Session completion triggers sdk-complete event
         """
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         # Create SDK output with complete session data
         sdk_data = {
@@ -2188,7 +2154,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         3. No-change reads return empty lists
         4. Reset allows re-reading all messages
         """
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         # Initial SDK output
         initial_data = {
@@ -2246,7 +2212,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         2. v2 schema outputs generate correct SSE events with provider info
         3. Frontend normalization works for both schemas
         """
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         # Test v1 schema
         v1_data = {
@@ -2379,7 +2345,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         Simulates a real scenario where SDK output is updated while
         the SSE connection is active, verifying incremental events.
         """
-        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
 
         # Start with empty session
         initial_data = {
@@ -2487,7 +2453,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         2. Malformed JSON is handled gracefully
         3. SSE stream continues despite file errors
         """
-        from viewer.server import SDKOutputWatcher
+        from jeeves.viewer.server import SDKOutputWatcher
 
         # Test 1: Missing file
         watcher = SDKOutputWatcher(self.sdk_output_file)

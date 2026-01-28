@@ -1,46 +1,13 @@
 {
-  "config": {
-    "reviewCleanPassesRequired": 3,
-    "autoSkipTaskReviews": false
-  },
-  "project": "Idle-Game-Engine",
-  "branchName": "issue/123-example-branch",
+  "schemaVersion": 1,
+  "repo": "owner/repo",
   "issue": {
-    "number": 123,
-    "repo": "hansjm10/Idle-Game-Engine"
+    "number": 42,
+    "title": "Example issue",
+    "url": "https://github.com/owner/repo/issues/42"
   },
-  "designDocPath": "docs/issue-123-design.md",
-  "tasks": [
-    {
-      "id": "T1",
-      "title": "Example task",
-      "summary": "Do the first implementation slice from the design doc.",
-      "acceptanceCriteria": [
-        "Task-specific acceptance criterion"
-      ],
-      "status": "pending"
-    }
-  ],
-  "status": {
-    "implemented": false,
-    "prCreated": false,
-    "prDescriptionReady": false,
-    "taskStage": "implement",
-    "currentTaskId": "T1",
-    "tasksComplete": false,
-    "reviewClean": false,
-    "reviewPasses": 0,
-    "reviewCleanPasses": 0,
-    "ciClean": false,
-    "ciPasses": 0,
-    "coverageClean": false,
-    "coverageNeedsFix": false,
-    "coveragePasses": 0,
-    "sonarClean": false
-  },
-  "pullRequest": {
-    "number": 1234,
-    "url": "https://github.com/hansjm10/Idle-Game-Engine/pull/1234"
-  },
+  "branch": "issue/42-example",
+  "phase": "design",
+  "designDocPath": "docs/issue-42-design.md",
   "notes": ""
 }

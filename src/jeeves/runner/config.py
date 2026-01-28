@@ -1,6 +1,5 @@
 """Configuration handling for the Jeeves SDK Runner."""
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -66,20 +65,4 @@ class RunnerConfig:
 
     @classmethod
     def from_env(cls) -> "RunnerConfig":
-        """Create config from environment variables."""
-        prompt = os.environ.get("JEEVES_SDK_PROMPT", "")
-        output = os.environ.get("JEEVES_SDK_OUTPUT", "sdk-output.json")
-        text_output = os.environ.get("JEEVES_SDK_TEXT_OUTPUT")
-        work_dir = os.environ.get("JEEVES_WORK_DIR", os.getcwd())
-        state_dir = os.environ.get("JEEVES_STATE_DIR")
-        max_turns_str = os.environ.get("JEEVES_SDK_MAX_TURNS")
-        max_turns = int(max_turns_str) if max_turns_str else None
-
-        return cls(
-            prompt_file=Path(prompt) if prompt else Path("prompt.md"),
-            output_file=Path(output),
-            text_output_file=Path(text_output) if text_output else None,
-            work_dir=Path(work_dir),
-            state_dir=Path(state_dir) if state_dir else None,
-            max_turns=max_turns,
-        )
+        raise RuntimeError("from_env is deprecated; use from_args instead.")

@@ -3,8 +3,6 @@
 from unittest import mock
 import pytest
 
-from jeeves.core.issue import IssueError
-
 
 class TestListGithubIssues:
     """Tests for list_github_issues function."""
@@ -83,11 +81,12 @@ class TestListGithubIssues:
         """Should raise IssueError when gh command fails."""
         from jeeves.core.issue import list_github_issues
         from jeeves.core.repo import RepoError
+        from jeeves.core import issue as issue_module
 
         with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.side_effect = RepoError("gh command failed")
 
-            with pytest.raises(IssueError):
+            with pytest.raises(issue_module.IssueError):
                 list_github_issues("owner", "repo")
 
     def test_normalizes_labels_to_list_of_names(self):
@@ -177,9 +176,10 @@ class TestListAssignedIssues:
         """Should raise IssueError when gh command fails."""
         from jeeves.core.issue import list_assigned_issues
         from jeeves.core.repo import RepoError
+        from jeeves.core import issue as issue_module
 
         with mock.patch("jeeves.core.issue.run_gh") as mock_run_gh:
             mock_run_gh.side_effect = RepoError("gh command failed")
 
-            with pytest.raises(IssueError):
+            with pytest.raises(issue_module.IssueError):
                 list_assigned_issues("owner", "repo")

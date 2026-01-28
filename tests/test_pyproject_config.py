@@ -2,9 +2,8 @@
 
 These tests verify that:
 1. pyproject.toml is correctly configured for src/ layout
-2. The old jeeves/ directory is removed
-3. pip install -e . works correctly
-4. CLI entry points work
+2. pip install -e . works correctly
+3. SDK runner entry point is available
 """
 import sys
 from pathlib import Path
@@ -42,13 +41,6 @@ class TestPyprojectConfig:
             "pyproject.toml should have 'include = [\"jeeves*\"]'"
         )
 
-    def test_old_jeeves_directory_removed(self):
-        """The old jeeves/ directory at root should be removed."""
-        old_jeeves = REPO_ROOT / "jeeves"
-        assert not old_jeeves.exists(), (
-            f"Old jeeves/ directory should be removed, but it still exists at {old_jeeves}"
-        )
-
     def test_src_jeeves_directory_exists(self):
         """The new src/jeeves/ directory should exist."""
         src_jeeves = REPO_ROOT / "src" / "jeeves"
@@ -58,16 +50,6 @@ class TestPyprojectConfig:
         """src/jeeves/__init__.py should exist."""
         init_file = REPO_ROOT / "src" / "jeeves" / "__init__.py"
         assert init_file.exists(), f"src/jeeves/__init__.py should exist at {init_file}"
-
-    def test_cli_entry_point_configured(self):
-        """CLI entry point should be configured."""
-        pyproject_path = REPO_ROOT / "pyproject.toml"
-        content = pyproject_path.read_text()
-
-        # jeeves CLI should point to jeeves.cli:main
-        assert 'jeeves = "jeeves.cli:main"' in content, (
-            "Entry point 'jeeves' should be configured to 'jeeves.cli:main'"
-        )
 
     def test_sdk_runner_entry_point_configured(self):
         """SDK runner entry point should be configured."""
@@ -149,15 +131,3 @@ class TestPackageInstallation:
         )
         assert result.returncode == 0, f"Failed to import jeeves.viewer: {result.stderr}"
         assert "jeeves.viewer" in result.stdout, f"Unexpected output: {result.stdout}"
-
-    def test_jeeves_cli_importable(self):
-        """The jeeves.cli module should be importable."""
-        result = subprocess.run(
-            [sys.executable, "-c", "import jeeves.cli; print(jeeves.cli.__name__)"],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
-            env={**dict(subprocess.os.environ), "PYTHONPATH": str(REPO_ROOT / "src")}
-        )
-        assert result.returncode == 0, f"Failed to import jeeves.cli: {result.stderr}"
-        assert "jeeves.cli" in result.stdout, f"Unexpected output: {result.stdout}"

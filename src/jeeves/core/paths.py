@@ -272,24 +272,5 @@ def ensure_directory(path: Path) -> Path:
 
 
 def is_legacy_mode() -> bool:
-    """Check if Jeeves should operate in legacy mode.
-
-    Legacy mode is used when:
-    - JEEVES_WORK_DIR is set
-    - JEEVES_STATE_DIR is set
-    - Running from inside a git repo with ./jeeves/issue.json
-
-    Returns:
-        True if legacy mode should be used.
-    """
-    if os.environ.get("JEEVES_WORK_DIR"):
-        return True
-    if os.environ.get("JEEVES_STATE_DIR"):
-        return True
-
-    # Check for local jeeves state directory
-    cwd = Path.cwd()
-    if (cwd / "jeeves" / "issue.json").exists():
-        return True
-
+    """Legacy mode removed; keep for backward compatibility."""
     return False

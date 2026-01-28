@@ -4,8 +4,7 @@ This package provides tools for managing repository clones, git worktrees,
 and issue state for autonomous coding sessions.
 
 Main modules:
-    - cli: Command-line interface (jeeves command)
-    - core: Core functionality (paths, config, repo, worktree, issue, browse)
+    - core: Core functionality (paths, repo, worktree, issue, browse)
     - runner: SDK-based agent runner
     - viewer: Web viewer for monitoring runs
 """

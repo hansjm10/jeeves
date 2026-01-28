@@ -1,23 +1,20 @@
+<INSTRUCTIONS>
 # Jeeves Agent Instructions
 
 ## Overview
 
-Jeeves is an autonomous AI agent loop that runs **fresh agent runner sessions** repeatedly until the configured work is complete (Codex CLI, Claude CLI, or Opencode CLI). Each iteration is a fresh agent instance with clean context.
+Jeeves is a proof-of-concept, SDK-only agent runner with a real-time viewer. The viewer is the primary interface for init, run control, and prompt editing.
 
 ## Repository Structure
 
 ```
 jeeves/
 ├── src/jeeves/              # Core Python package
-│   ├── cli.py               # Python CLI entry point
 │   ├── core/                # Core logic modules
-│   ├── runner/              # Agent runner implementations
+│   ├── runner/              # SDK runner
 │   └── viewer/              # Web dashboard (server.py, static/)
 ├── prompts/                 # Prompt templates (issue.*.md)
 ├── scripts/                 # Helper scripts
-│   ├── init-issue.sh        # Initialize from GitHub issue
-│   └── legacy/              # Deprecated bash scripts
-│       └── jeeves.sh        # Legacy bash CLI
 ├── tests/                   # All test files
 ├── docs/                    # Documentation
 └── examples/                # Example configurations
@@ -26,61 +23,59 @@ jeeves/
 ## Commands
 
 ```bash
-# Run Jeeves (from your project that has `.jeeves/issue.json`)
-./scripts/legacy/jeeves.sh [--runner codex|claude|opencode] [--max-iterations N] [max_iterations]
-
-# Or use the Python CLI
-jeeves run --max-iterations N
-
 # Start the real-time viewer dashboard
 python -m jeeves.viewer.server
-
-# Start/stop Jeeves from the dashboard (allows non-localhost clients)
-python -m jeeves.viewer.server --allow-remote-run
 ```
 
-## Key Files
+## Viewer
 
-- `src/jeeves/cli.py` - Python CLI entry point
-- `scripts/legacy/jeeves.sh` - Legacy bash loop that spawns fresh runner sessions (`--runner codex|claude|opencode`)
-- `prompts/issue.*.md` - Phase prompts (design/implement/review/coverage/sonar/etc.)
-- `src/jeeves/viewer/` - Real-time web dashboard for monitoring Jeeves runs
+The viewer provides:
+- Run control (SDK-only)
+- Live log output
+- SDK streaming events
+- Prompt template editing
+- Issue init/select
 
-## Real-time Viewer
+## State and Data
 
-The `src/jeeves/viewer/` directory contains a web dashboard for monitoring Jeeves runs in real-time. It shows:
-- Current phase and status indicators
-- Live log output with color coding
-- Progress tracking for issue phases
-- Auto-refreshing updates via Server-Sent Events
-
-To run locally:
-```bash
-# From your project directory
-python -m jeeves.viewer.server
-
-# Then open http://localhost:8080 in your browser
-```
-
-Use the viewer while running Jeeves to see what's happening without scrolling through terminal output.
+- State is stored in the XDG data directory (override with `JEEVES_DATA_DIR`).
+- Issue state lives at `.../issues/<owner>/<repo>/<issue>/issue.json`.
+- Worktrees live under `.../worktrees/<owner>/<repo>/issue-<N>/`.
 
 ## Patterns
 
-- Each iteration spawns a fresh runner session with clean context
-- Memory persists via git history plus state files like `progress.txt` and `issue.json`
-- Viewer can edit prompt templates (`prompts/*.md`) directly from the dashboard (Prompt Templates card)
-- Viewer can run `scripts/init-issue.sh` from the dashboard to generate/update `.jeeves/issue.json` (Init Issue card)
-- Codex needs `JEEVES_CODEX_DANGEROUS=1` to access skills and tools like `gh` (viewer forces this for Codex runs)
-- Viewer streams `.jeeves/last-run.log` (raw runner output); Codex emits `file update:` unified diffs + `exec` tool traces into this log (use the viewer's Hide diffs toggle to reduce noise)
-- Jeeves writes JSONL metrics to `.jeeves/metrics.jsonl` and also per-run under `.jeeves/.runs/<runId>/metrics.jsonl` (latest run pointer: `.jeeves/current-run.json`; disable with `JEEVES_METRICS=0`)
-- Jeeves writes AI-parsable debug logs per phase to `.jeeves/.runs/<runId>/debug-<phase>.jsonl` with a run index at `.jeeves/.runs/<runId>/run-index.json` (disable with `JEEVES_DEBUG=0`, set `JEEVES_DEBUG_TRACE=summary` to skip per-line events)
-- Debug event schema: `docs/jeeves-debug-schema.json` (schema version `jeeves.debug.v1`)
-- Run index schema: `docs/jeeves-run-index-schema.json`
-- Stream output is written to `.jeeves/last-run.log` without storing multi-MB runner output in memory (completion checks read `last-message.txt` / `last-run.log`)
-- Metrics `iteration_end.phase` records the phase that actually ran (captured at iteration start), not the next phase after status refresh
-- Issue phase order runs Sonar before CI (CI comes after Sonar)
-- For issue CI polling, prefer `gh pr checks --watch --interval 15` to avoid burning iterations on pending checks (use `--required` only if you intentionally want required checks)
-- Keep `pnpm coverage:md` in the coverage phase (avoid running it during implement/review)
-- Prefer `git commit --no-verify` in automation after running explicit checks (repo hooks can add ~5–10 minutes per commit)
-- Always update AGENTS.md with discovered patterns for future iterations
-- Worktree CWD can shadow the server `jeeves` package; SDK runner should avoid CWD imports (use `-P` or a runpy wrapper) and explicitly prefer `/work/jeeves` on `PYTHONPATH`.
+- SDK-only runs; no Codex/Claude/Opencode runners.
+- Viewer controls phase selection: `design`, `implement`, `review`, `complete`.
+- Prompts are in `prompts/issue.*.md` and can be edited in the viewer.
+- Minimal run artifacts: `issue.json`, `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
+
+## Skills
+A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
+### Available skills
+- pr-audit: Audit a PR review for false positives, overstated claims, and unsubstantiated assertions. Use when: (1) User runs `/pr-audit`, (2) User asks to "audit" or "check" a review, (3) User wants to find false positives or verify claims in a review, (4) User provides a review and asks if claims are justified. Does NOT re-review the PR; evaluates whether the review's claims are supported by evidence. (file: /codex/skills/pr-audit/SKILL.md)
+- pr-evidence: Extract factual evidence from a PR diff without interpretation or judgment. Use when: (1) User runs `/pr-evidence`, (2) User asks to "extract evidence" from a PR, (3) User wants a facts-only summary of PR changes, (4) User provides a PR reference and asks what changed without asking for review/opinions. Produces an evidence_pack XML artifact with changed files, code changes, design decisions, tests, and docs. (file: /codex/skills/pr-evidence/SKILL.md)
+- pr-requirements: Extract acceptance criteria and requirements from a GitHub issue. Use when: (1) User runs `/pr-requirements`, (2) User asks to "extract requirements" from an issue, (3) User wants to know what a PR should accomplish based on its linked issue, (4) User provides an issue URL and asks what the acceptance criteria are. Produces a requirements_pack XML artifact with acceptance criteria, constraints, and ambiguities. (file: /codex/skills/pr-requirements/SKILL.md)
+- pr-review: Orchestrated PR review workflow producing evidence-based, audited technical reviews. Use when: (1) User requests a PR review with `/pr-review`, (2) User provides a PR URL or reference like `owner/repo#123`, (3) User asks for a "full review" or "technical review" of a pull request. Default output is a human-readable Markdown review + a short plain-text summary (no XML). Use `--show-xml` to also emit XML artifacts for each phase (retrieval_plan, evidence_pack, requirements_pack, draft_review, audit_report, final_review, comment_posted). (file: /codex/skills/pr-review/SKILL.md)
+- pr-review-comment: Convert <final_review> XML from the pr-review workflow into a human-readable Markdown comment and post it to GitHub via gh. Use when: (1) the orchestrator or user requests `/pr-review-comment`, (2) a non-XML PR review comment must be published from a <final_review> payload, or (3) a follow-up step needs to post review results directly to a PR. (file: /codex/skills/pr-review-comment/SKILL.md)
+- pr-review-summary: Produce a short, human-readable, non-XML summary from a <final_review> XML artifact. Use when: (1) a pr-review workflow completes, (2) a user asks for a brief PR review summary without XML, (3) an orchestrator needs a plain-text recap of review outcomes. (file: /codex/skills/pr-review-summary/SKILL.md)
+- sonarqube: Access SonarQube or SonarCloud issues and quality gate data via API using tokens. Use when fetching PR/branch issue lists, leak-period problems, or quality gate status for a project. (file: /codex/skills/sonarqube/SKILL.md)
+- skill-creator: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations. (file: /codex/skills/.system/skill-creator/SKILL.md)
+- skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: /codex/skills/.system/skill-installer/SKILL.md)
+### How to use skills
+- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+- Coordination and sequencing:
+  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+- Context hygiene:
+  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
+  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+</INSTRUCTIONS>

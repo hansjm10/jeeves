@@ -5,9 +5,7 @@ issue.json files.
 """
 
 import json
-import subprocess
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +14,6 @@ from .paths import (
     get_worktree_path,
     ensure_directory,
     parse_repo_spec,
-    is_legacy_mode,
 )
 from .repo import ensure_repo, run_gh, RepoError
 
@@ -25,93 +22,6 @@ class IssueError(Exception):
     """Error during issue operations."""
 
     pass
-
-
-@dataclass
-class IssueStatus:
-    """Status tracking for an issue."""
-
-    implemented: bool = False
-    pr_created: bool = False
-    pr_description_ready: bool = False
-    review_clean: bool = False
-    review_passes: int = 0
-    review_clean_passes: int = 0
-    ci_clean: bool = False
-    ci_passes: int = 0
-    coverage_clean: bool = False
-    coverage_needs_fix: bool = False
-    coverage_passes: int = 0
-    sonar_clean: bool = False
-    current_task_id: Optional[str] = None
-    task_stage: str = "implement"
-    tasks_complete: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary with camelCase keys for JSON."""
-        return {
-            "implemented": self.implemented,
-            "prCreated": self.pr_created,
-            "prDescriptionReady": self.pr_description_ready,
-            "reviewClean": self.review_clean,
-            "reviewPasses": self.review_passes,
-            "reviewCleanPasses": self.review_clean_passes,
-            "ciClean": self.ci_clean,
-            "ciPasses": self.ci_passes,
-            "coverageClean": self.coverage_clean,
-            "coverageNeedsFix": self.coverage_needs_fix,
-            "coveragePasses": self.coverage_passes,
-            "sonarClean": self.sonar_clean,
-            "currentTaskId": self.current_task_id,
-            "taskStage": self.task_stage,
-            "tasksComplete": self.tasks_complete,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IssueStatus":
-        """Create from dictionary."""
-        return cls(
-            implemented=data.get("implemented", False),
-            pr_created=data.get("prCreated", False),
-            pr_description_ready=data.get("prDescriptionReady", False),
-            review_clean=data.get("reviewClean", False),
-            review_passes=data.get("reviewPasses", 0),
-            review_clean_passes=data.get("reviewCleanPasses", 0),
-            ci_clean=data.get("ciClean", False),
-            ci_passes=data.get("ciPasses", 0),
-            coverage_clean=data.get("coverageClean", False),
-            coverage_needs_fix=data.get("coverageNeedsFix", False),
-            coverage_passes=data.get("coveragePasses", 0),
-            sonar_clean=data.get("sonarClean", False),
-            current_task_id=data.get("currentTaskId"),
-            task_stage=data.get("taskStage", "implement"),
-            tasks_complete=data.get("tasksComplete", False),
-        )
-
-
-@dataclass
-class PullRequest:
-    """Pull request information."""
-
-    number: Optional[int] = None
-    url: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        result = {}
-        if self.number is not None:
-            result["number"] = self.number
-        if self.url is not None:
-            result["url"] = self.url
-        return result
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PullRequest":
-        """Create from dictionary."""
-        return cls(
-            number=data.get("number"),
-            url=data.get("url"),
-        )
 
 
 @dataclass
@@ -124,7 +34,6 @@ class GitHubIssue:
     repo: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
         result = {"number": self.number}
         if self.title:
             result["title"] = self.title
@@ -136,7 +45,6 @@ class GitHubIssue:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GitHubIssue":
-        """Create from dictionary."""
         return cls(
             number=data.get("number", 0),
             title=data.get("title"),
@@ -146,166 +54,77 @@ class GitHubIssue:
 
 
 @dataclass
-class Task:
-    """A task within an issue."""
-
-    id: str
-    title: str
-    summary: str = ""
-    status: str = "pending"  # pending, in_progress, done
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "id": self.id,
-            "title": self.title,
-            "summary": self.summary,
-            "status": self.status,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Task":
-        """Create from dictionary."""
-        return cls(
-            id=data.get("id", ""),
-            title=data.get("title", ""),
-            summary=data.get("summary", ""),
-            status=data.get("status", "pending"),
-        )
-
-
-@dataclass
 class IssueState:
-    """Complete issue state.
+    """Minimal issue state for SDK-only viewer."""
 
-    This is the Python representation of issue.json.
-    """
-
-    # Repository information
     owner: str
     repo: str
-
-    # Issue information
     issue: GitHubIssue
-
-    # Branch and paths
-    branch_name: str
+    branch: str
+    phase: str = "design"
     design_doc_path: Optional[str] = None
-
-    # Status
-    status: IssueStatus = field(default_factory=IssueStatus)
-
-    # Pull request
-    pull_request: PullRequest = field(default_factory=PullRequest)
-
-    # Tasks
-    tasks: List[Task] = field(default_factory=list)
-
-    # Notes
     notes: str = ""
 
-    # Project name (legacy)
-    project: Optional[str] = None
-
-    # Paths (populated when loading)
     _state_dir: Optional[Path] = field(default=None, repr=False)
     _worktree_dir: Optional[Path] = field(default=None, repr=False)
 
     @property
     def issue_number(self) -> int:
-        """Get the issue number."""
         return self.issue.number
 
     @property
     def state_dir(self) -> Path:
-        """Get the state directory for this issue."""
         if self._state_dir:
             return self._state_dir
         return get_issue_state_dir(self.owner, self.repo, self.issue.number)
 
     @property
     def worktree_dir(self) -> Path:
-        """Get the worktree directory for this issue."""
         if self._worktree_dir:
             return self._worktree_dir
         return get_worktree_path(self.owner, self.repo, self.issue.number)
 
     @property
     def issue_file(self) -> Path:
-        """Get the path to issue.json."""
         return self.state_dir / "issue.json"
 
     @property
     def progress_file(self) -> Path:
-        """Get the path to progress.txt."""
         return self.state_dir / "progress.txt"
 
-    @property
-    def runs_dir(self) -> Path:
-        """Get the path to .runs directory."""
-        return self.state_dir / ".runs"
-
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        full_repo = f"{self.owner}/{self.repo}"
+        issue_dict = self.issue.to_dict()
+        if issue_dict.get("repo") is None:
+            issue_dict["repo"] = full_repo
+
         result: Dict[str, Any] = {
-            "project": self.project or self.repo,
-            "branchName": self.branch_name,
-            "issue": self.issue.to_dict(),
-            "status": self.status.to_dict(),
+            "schemaVersion": 1,
+            "repo": full_repo,
+            "issue": issue_dict,
+            "branch": self.branch,
+            "phase": self.phase,
             "notes": self.notes,
         }
-
-        # Add repo if it differs from issue.repo
-        full_repo = f"{self.owner}/{self.repo}"
-        if self.issue.repo and self.issue.repo != full_repo:
-            result["issue"]["repo"] = self.issue.repo
-        elif not self.issue.repo:
-            result["issue"]["repo"] = full_repo
-
         if self.design_doc_path:
             result["designDocPath"] = self.design_doc_path
-
-        if self.pull_request.number or self.pull_request.url:
-            result["pullRequest"] = self.pull_request.to_dict()
-
-        if self.tasks:
-            result["tasks"] = [t.to_dict() for t in self.tasks]
-
         return result
 
     @classmethod
-    def from_dict(
-        cls,
-        data: Dict[str, Any],
-        owner: Optional[str] = None,
-        repo: Optional[str] = None,
-    ) -> "IssueState":
-        """Create from dictionary.
-
-        Args:
-            data: Dictionary from issue.json.
-            owner: Repository owner (inferred from data if not provided).
-            repo: Repository name (inferred from data if not provided).
-
-        Returns:
-            IssueState instance.
-        """
-        # Extract issue info
+    def from_dict(cls, data: Dict[str, Any], owner: Optional[str] = None, repo: Optional[str] = None) -> "IssueState":
         issue_data = data.get("issue", {})
         if isinstance(issue_data, int):
             issue_data = {"number": issue_data}
-
         issue = GitHubIssue.from_dict(issue_data)
 
-        # Try to get owner/repo from issue.repo or data
-        if issue.repo:
+        repo_spec = data.get("repo") or issue.repo
+        if repo_spec:
             try:
-                owner, repo = parse_repo_spec(issue.repo)
+                owner, repo = parse_repo_spec(repo_spec)
             except ValueError:
                 pass
 
         if not owner or not repo:
-            # Fallback to project name
             project = data.get("project", "")
             if "/" in project:
                 owner, repo = project.split("/", 1)
@@ -316,46 +135,24 @@ class IssueState:
                 owner = owner or "unknown"
                 repo = repo or "unknown"
 
+        branch = data.get("branch") or data.get("branchName") or f"issue/{issue.number}"
+        phase = data.get("phase") or "design"
+
         return cls(
             owner=owner,
             repo=repo,
             issue=issue,
-            branch_name=data.get("branchName", f"issue/{issue.number}"),
+            branch=branch,
+            phase=phase,
             design_doc_path=data.get("designDocPath") or data.get("designDoc"),
-            status=IssueStatus.from_dict(data.get("status", {})),
-            pull_request=PullRequest.from_dict(data.get("pullRequest", {})),
-            tasks=[Task.from_dict(t) for t in data.get("tasks", [])],
             notes=data.get("notes", ""),
-            project=data.get("project"),
         )
 
     @classmethod
-    def load(
-        cls,
-        owner: str,
-        repo: str,
-        issue_number: int,
-        state_dir: Optional[Path] = None,
-    ) -> "IssueState":
-        """Load issue state from file.
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            issue_number: Issue number.
-            state_dir: Override state directory location.
-
-        Returns:
-            IssueState instance.
-
-        Raises:
-            IssueError: If state file not found or invalid.
-        """
+    def load(cls, owner: str, repo: str, issue_number: int, state_dir: Optional[Path] = None) -> "IssueState":
         if state_dir is None:
             state_dir = get_issue_state_dir(owner, repo, issue_number)
-
         issue_file = state_dir / "issue.json"
-
         if not issue_file.exists():
             raise IssueError(f"Issue state not found: {issue_file}")
 
@@ -369,22 +166,10 @@ class IssueState:
 
         state = cls.from_dict(data, owner=owner, repo=repo)
         state._state_dir = state_dir
-
         return state
 
     @classmethod
     def load_from_path(cls, path: Path) -> "IssueState":
-        """Load issue state from a specific path.
-
-        Args:
-            path: Path to issue.json or directory containing it.
-
-        Returns:
-            IssueState instance.
-
-        Raises:
-            IssueError: If state file not found or invalid.
-        """
         if path.is_dir():
             state_dir = path
             issue_file = path / "issue.json"
@@ -405,16 +190,12 @@ class IssueState:
 
         state = cls.from_dict(data)
         state._state_dir = state_dir
-
         return state
 
     def save(self) -> None:
-        """Save issue state to file."""
         ensure_directory(self.state_dir)
-
         issue_file = self.issue_file
         tmp_file = issue_file.with_suffix(".json.tmp")
-
         try:
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self.to_dict(), f, indent=2)
@@ -434,23 +215,6 @@ def create_issue_state(
     fetch_metadata: bool = True,
     force: bool = False,
 ) -> IssueState:
-    """Create a new issue state.
-
-    Args:
-        owner: Repository owner.
-        repo: Repository name.
-        issue_number: Issue number.
-        branch: Branch name. Auto-generated if not provided.
-        design_doc: Path to design document.
-        fetch_metadata: Whether to fetch issue metadata from GitHub.
-        force: Overwrite existing state.
-
-    Returns:
-        IssueState instance.
-
-    Raises:
-        IssueError: If state already exists (and not force).
-    """
     state_dir = get_issue_state_dir(owner, repo, issue_number)
 
     if state_dir.exists() and (state_dir / "issue.json").exists() and not force:
@@ -459,50 +223,30 @@ def create_issue_state(
             "Use --force to overwrite."
         )
 
-    # Generate branch name if not provided
     if not branch:
         branch = f"issue/{issue_number}"
 
-    # Fetch issue metadata from GitHub
     issue = GitHubIssue(number=issue_number)
-
     if fetch_metadata:
         try:
             issue = fetch_issue_metadata(owner, repo, issue_number)
         except RepoError:
-            # Continue without metadata
             pass
 
     state = IssueState(
         owner=owner,
         repo=repo,
         issue=issue,
-        branch_name=branch,
+        branch=branch,
+        phase="design",
         design_doc_path=design_doc,
-        project=repo,
     )
     state._state_dir = state_dir
-
-    # Save the state
     state.save()
-
     return state
 
 
 def fetch_issue_metadata(owner: str, repo: str, issue_number: int) -> GitHubIssue:
-    """Fetch issue metadata from GitHub.
-
-    Args:
-        owner: Repository owner.
-        repo: Repository name.
-        issue_number: Issue number.
-
-    Returns:
-        GitHubIssue with metadata.
-
-    Raises:
-        RepoError: If fetching fails.
-    """
     result = run_gh(
         [
             "issue",
@@ -531,29 +275,7 @@ def fetch_issue_metadata(owner: str, repo: str, issue_number: int) -> GitHubIssu
         return GitHubIssue(number=issue_number, repo=f"{owner}/{repo}")
 
 
-def list_github_issues(
-    owner: str, repo: str, state: str = "open", limit: int = 50
-) -> List[Dict]:
-    """List issues from GitHub for a repository.
-
-    Fetches issues from a GitHub repository using the gh CLI.
-
-    Args:
-        owner: Repository owner.
-        repo: Repository name.
-        state: Issue state filter ("open", "closed", "all"). Defaults to "open".
-        limit: Maximum number of issues to return. Defaults to 50.
-
-    Returns:
-        List of issue dictionaries with keys:
-        - number: Issue number
-        - title: Issue title
-        - labels: List of label names
-        - assignees: List of assignee logins
-
-    Raises:
-        IssueError: If the gh command fails.
-    """
+def list_github_issues(owner: str, repo: str, state: str = "open", limit: int = 50) -> List[Dict]:
     try:
         result = run_gh([
             "issue", "list",
@@ -562,12 +284,11 @@ def list_github_issues(
             "--json", "number,title,labels,assignees",
             "--limit", str(limit),
         ])
-    except RepoError as e:
+    except Exception as e:
         raise IssueError(f"Failed to list issues for {owner}/{repo}: {e}") from e
 
     issues_data = json.loads(result.stdout)
 
-    # Normalize the output structure
     return [
         {
             "number": issue["number"],
@@ -580,26 +301,6 @@ def list_github_issues(
 
 
 def list_assigned_issues(owner: str, repo: str, limit: int = 50) -> List[Dict]:
-    """List issues assigned to current user.
-
-    Fetches issues from a GitHub repository that are assigned to the
-    currently authenticated user.
-
-    Args:
-        owner: Repository owner.
-        repo: Repository name.
-        limit: Maximum number of issues to return. Defaults to 50.
-
-    Returns:
-        List of issue dictionaries with keys:
-        - number: Issue number
-        - title: Issue title
-        - labels: List of label names
-        - assignees: List of assignee logins
-
-    Raises:
-        IssueError: If the gh command fails.
-    """
     try:
         result = run_gh([
             "issue", "list",
@@ -608,12 +309,11 @@ def list_assigned_issues(owner: str, repo: str, limit: int = 50) -> List[Dict]:
             "--json", "number,title,labels,assignees",
             "--limit", str(limit),
         ])
-    except RepoError as e:
+    except Exception as e:
         raise IssueError(f"Failed to list assigned issues for {owner}/{repo}: {e}") from e
 
     issues_data = json.loads(result.stdout)
 
-    # Normalize the output structure
     return [
         {
             "number": issue["number"],
@@ -626,15 +326,6 @@ def list_assigned_issues(owner: str, repo: str, limit: int = 50) -> List[Dict]:
 
 
 def list_issues(owner: Optional[str] = None, repo: Optional[str] = None) -> List[Dict]:
-    """List all tracked issues.
-
-    Args:
-        owner: Filter by owner. If None, list all.
-        repo: Filter by repo. If None, list all for owner.
-
-    Returns:
-        List of issue info dicts.
-    """
     from .paths import get_issues_dir
 
     issues_dir = get_issues_dir()
@@ -643,7 +334,6 @@ def list_issues(owner: Optional[str] = None, repo: Optional[str] = None) -> List
     if not issues_dir.exists():
         return results
 
-    # Walk the directory structure
     for owner_dir in issues_dir.iterdir():
         if not owner_dir.is_dir():
             continue
@@ -682,9 +372,9 @@ def list_issues(owner: Optional[str] = None, repo: Optional[str] = None) -> List
                             "repo": repo_dir.name,
                             "issue_number": issue_number,
                             "issue_title": issue_title,
-                            "branch": data.get("branchName", ""),
+                            "branch": data.get("branch") or data.get("branchName", ""),
+                            "phase": data.get("phase", "design"),
                             "state_dir": str(issue_dir),
-                            "status": data.get("status", {}),
                         }
                     )
                 except (json.JSONDecodeError, OSError):

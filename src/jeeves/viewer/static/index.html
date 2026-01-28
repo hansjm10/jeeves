@@ -1080,44 +1080,21 @@
                 <div class="card-header">Controls</div>
                 <div class="card-body">
                     <div class="control-row">
-                        <div class="control-label">Runner</div>
-                        <select class="control-input" id="runRunner">
-                            <option value="auto">Auto-detect</option>
-                            <option value="sdk">SDK (default)</option>
-                            <option value="codex">Codex</option>
-                            <option value="claude">Claude</option>
-                            <option value="opencode">Opencode</option>
+                        <div class="control-label">Phase</div>
+                        <select class="control-input" id="runPhase">
+                            <option value="design">Design</option>
+                            <option value="implement">Implement</option>
+                            <option value="review">Review</option>
+                            <option value="complete">Complete</option>
                         </select>
                     </div>
                     <div class="control-row">
-                        <div class="control-label">Max iterations</div>
-                        <input class="control-input" id="runMaxIterations" type="number" min="1" max="10000" value="10" />
-                    </div>
-                    <div class="control-row">
-                        <div class="control-label">Review passes required</div>
-                        <input class="control-input" id="configReviewPasses" type="number" min="1" max="10" value="3" />
-                    </div>
-                    <div class="control-row">
-                        <label class="control-label"><input type="checkbox" id="configAutoSkipTaskReviews" /> Auto-skip low-risk task reviews</label>
+                        <div class="control-label">Max turns</div>
+                        <input class="control-input" id="runMaxTurns" type="number" min="1" max="10000" value="10" />
                     </div>
                     <div class="control-actions">
                         <button class="log-btn active" id="btnRun">Run</button>
                     </div>
-                </div>
-            </div>
-
-            <!-- Git -->
-            <div class="card">
-                <div class="card-header">Git</div>
-                <div class="card-body">
-                    <div class="control-row">
-                        <div class="control-label">Branch</div>
-                        <input class="control-input" id="gitBranch" type="text" value="main" />
-                    </div>
-                    <div class="control-actions">
-                        <button class="log-btn active" id="btnGitUpdateMain">Checkout &amp; Update</button>
-                    </div>
-                    <div class="control-status" id="gitStatusText"></div>
                 </div>
             </div>
 
@@ -1183,15 +1160,6 @@
                 </div>
             </div>
 
-            <!-- Status Checks -->
-            <div class="card" id="checksCard">
-                <div class="card-header">Status Checks</div>
-                <div class="card-body">
-                    <div class="status-checks" id="statusChecks">
-                        <!-- Populated by JS -->
-                    </div>
-                </div>
-            </div>
             </div>
         </aside>
         
@@ -1258,7 +1226,7 @@
                         <div class="log-empty">
                             <div class="log-empty-icon">&#128172;</div>
                             <div>No SDK output available</div>
-                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output (updates in real-time)</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run to see structured output (updates in real-time)</div>
                         </div>
                     </div>
                     <div class="sdk-timeline" id="sdkTimeline" style="display: none;"></div>
@@ -1415,7 +1383,7 @@
                     <div class="log-empty">
                         <div class="log-empty-icon">&#128172;</div>
                         <div>No SDK output available</div>
-                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output (updates in real-time)</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run to see structured output (updates in real-time)</div>
                     </div>
                 `;
                 timelineEl.innerHTML = '';
@@ -1672,17 +1640,11 @@
         const infoGrid = document.getElementById('infoGrid');
         const statusChecks = document.getElementById('statusChecks');
         const checksCard = document.getElementById('checksCard');
-        const runRunner = document.getElementById('runRunner');
-        const runMaxIterations = document.getElementById('runMaxIterations');
-        const configReviewPasses = document.getElementById('configReviewPasses');
-        const configAutoSkipTaskReviews = document.getElementById('configAutoSkipTaskReviews');
+        const runPhase = document.getElementById('runPhase');
+        const runMaxTurns = document.getElementById('runMaxTurns');
         const btnRun = document.getElementById('btnRun');
         const btnStop = document.getElementById('btnStop');
         const runStatusText = document.getElementById('runStatusText');
-
-        const gitBranch = document.getElementById('gitBranch');
-        const btnGitUpdateMain = document.getElementById('btnGitUpdateMain');
-        const gitStatusText = document.getElementById('gitStatusText');
 
         let runIsRunning = false;
 
@@ -1722,23 +1684,14 @@
         // Phase definitions
         const phases = [
             { id: 'design', name: 'Design', desc: 'Create design document' },
-            { id: 'task-implement', name: 'Task Implement', desc: 'Implement current task' },
-            { id: 'task-spec-review', name: 'Task Spec Review', desc: 'Check task spec compliance' },
-            { id: 'task-quality-review', name: 'Task Quality Review', desc: 'Review task code quality' },
-            { id: 'implement', name: 'Implement', desc: 'Build and create PR' },
-            { id: 'questions', name: 'Questions', desc: 'Resolve open questions' },
-            { id: 'review', name: 'Review', desc: 'Address PR feedback' },
-            { id: 'ci', name: 'CI', desc: 'Verify GitHub CI is green' },
-            { id: 'coverage', name: 'Coverage', desc: 'Add test coverage' },
-            { id: 'sonar', name: 'Sonar', desc: 'Fix code quality' },
-            { id: 'complete', name: 'Complete', desc: 'All checks passed' }
+            { id: 'implement', name: 'Implement', desc: 'Implement changes' },
+            { id: 'review', name: 'Review', desc: 'Review and polish' },
+            { id: 'complete', name: 'Complete', desc: 'Done' }
         ];
         
-        const phaseOrder = ['design', 'task-implement', 'task-spec-review', 'task-quality-review', 'implement', 'questions', 'review', 'ci', 'coverage-fix', 'coverage', 'sonar', 'complete'];
+        const phaseOrder = ['design', 'implement', 'review', 'complete'];
         
         function getPhaseIndex(phase) {
-            // Normalize coverage-fix to coverage
-            if (phase === 'coverage-fix') phase = 'coverage';
             return phaseOrder.indexOf(phase);
         }
 
@@ -1998,15 +1951,14 @@
             
             // Update phase timeline
             if (mode === 'issue') {
-                updatePhaseTimeline(status.phase || 'design', status.current_task, status.tasks_total, status.tasks_done);
-                checksCard.style.display = 'block';
-                updateStatusChecks(status);
+                updatePhaseTimeline(status.phase || 'design');
+                if (checksCard) checksCard.style.display = 'none';
             } else if (mode === 'prd') {
                 updatePRDProgress(status);
-                checksCard.style.display = 'none';
+                if (checksCard) checksCard.style.display = 'none';
             } else {
                 phaseTimeline.innerHTML = '<div class="empty-state"><div class="empty-title">No active workflow</div></div>';
-                checksCard.style.display = 'none';
+                if (checksCard) checksCard.style.display = 'none';
             }
             
             // Update info grid
@@ -2030,15 +1982,6 @@
 
                 if (!promptListLoaded) loadPromptList().then(() => chooseAndLoad(activePrompt));
                 else chooseAndLoad(activePrompt);
-            }
-
-            // Prefill config from current state (only when at defaults).
-            const issueConfig = config.config || {};
-            if (configReviewPasses && configReviewPasses.value === '3' && issueConfig.reviewCleanPassesRequired !== undefined) {
-                configReviewPasses.value = String(issueConfig.reviewCleanPassesRequired);
-            }
-            if (configAutoSkipTaskReviews && !configAutoSkipTaskReviews.checked && issueConfig.autoSkipTaskReviews === true) {
-                configAutoSkipTaskReviews.checked = true;
             }
 
             // Prefill init form from current state (only when empty).
@@ -2067,6 +2010,10 @@
             if (run.running && sidebarTab !== 'monitor') {
                 setSidebarTab('monitor');
             }
+
+            if (runPhase && status.phase) {
+                runPhase.value = status.phase;
+            }
         }
 
         function updateRunControls(run) {
@@ -2076,7 +2023,6 @@
 
             if (btnRun) btnRun.disabled = running;
             if (btnStop) btnStop.disabled = !running;
-            if (btnGitUpdateMain) btnGitUpdateMain.disabled = running;
 
             if (running) {
                 runStatusText.textContent = `Running (pid ${run.pid || '?'})\nStarted: ${run.started_at || ''}`;
@@ -2102,42 +2048,13 @@
             return { response, data };
         }
 
-        async function updateIssueStatus(updates) {
-            const { response, data } = await apiPost('/api/issue/status', { updates: updates || {} });
+        async function updateIssueStatus(phase) {
+            const { response, data } = await apiPost('/api/issue/status', { phase: phase });
             if (!response.ok || !data || !data.ok) {
                 const msg = (data && data.error) ? data.error : `Failed to update status (HTTP ${response.status})`;
                 throw new Error(msg);
             }
             return data;
-        }
-
-        if (btnGitUpdateMain) {
-            btnGitUpdateMain.addEventListener('click', async () => {
-                const branch = gitBranch ? (gitBranch.value || '').trim() : 'main';
-                if (!branch) {
-                    alert('Branch is required.');
-                    return;
-                }
-
-                if (!confirm(`Checkout '${branch}' and update it from origin?`)) return;
-
-                btnGitUpdateMain.disabled = true;
-                if (gitStatusText) gitStatusText.textContent = `Updating ${branch}...`;
-                try {
-                    const { response, data } = await apiPost('/api/git/update-main', { branch });
-                    if (!response.ok || !data || !data.ok) {
-                        const msg = (data && data.error) ? data.error : `Git update failed (HTTP ${response.status})`;
-                        if (gitStatusText) gitStatusText.textContent = msg;
-                        return;
-                    }
-                    const shortSha = (data.commit || '').slice(0, 7);
-                    if (gitStatusText) gitStatusText.textContent = `Now on ${data.branch || branch}${shortSha ? ` @ ${shortSha}` : ''}`;
-                } catch (e) {
-                    if (gitStatusText) gitStatusText.textContent = 'Git update failed: ' + e;
-                } finally {
-                    btnGitUpdateMain.disabled = runIsRunning;
-                }
-            });
         }
 
         function promptIdForState(state) {
@@ -2147,17 +2064,8 @@
             const phase = (state.status && state.status.phase) ? state.status.phase : 'implement';
             const map = {
                 'design': 'issue.design.md',
-                'task-implement': 'issue.task.implement.md',
-                'task-spec-review': 'issue.task.spec-review.md',
-                'task-quality-review': 'issue.task.quality-review.md',
                 'implement': 'issue.implement.md',
-                'review': 'issue.review.md',
-                'questions': 'issue.questions.md',
-                'ci': 'issue.ci.md',
-                'coverage': 'issue.coverage.md',
-                'coverage-fix': 'issue.coverage.fix.md',
-                'sonar': 'issue.sonar.md',
-                'complete': 'issue.sonar.md'
+                'review': 'issue.review.md'
             };
             return map[phase] || 'issue.implement.md';
         }
@@ -2322,24 +2230,10 @@
             btnRun.addEventListener('click', async () => {
                 btnRun.disabled = true;
                 try {
-                    const runner = runRunner ? runRunner.value : 'auto';
-                    const maxIterations = runMaxIterations ? parseInt(runMaxIterations.value || '10', 10) : 10;
-                    const reviewPasses = configReviewPasses ? parseInt(configReviewPasses.value || '3', 10) : 3;
-                    const autoSkipTaskReviews = configAutoSkipTaskReviews ? configAutoSkipTaskReviews.checked : false;
-
-                    const envOverrides = {};
-                    if (Number.isFinite(reviewPasses) && reviewPasses >= 1) {
-                        envOverrides['JEEVES_REVIEW_CLEAN_PASSES_REQUIRED'] = String(reviewPasses);
-                    }
-                    if (autoSkipTaskReviews) {
-                        envOverrides['JEEVES_AUTO_SKIP_TASK_REVIEWS'] = 'true';
-                    }
+                    const maxTurns = runMaxTurns ? parseInt(runMaxTurns.value || '10', 10) : 10;
 
                     const { response, data } = await apiPost('/api/run', {
-                        runner: runner,
-                        max_iterations: Number.isFinite(maxIterations) ? maxIterations : 10,
-                        output_mode: 'stream',
-                        env: envOverrides
+                        max_turns: Number.isFinite(maxTurns) ? maxTurns : 10
                     });
 
                     if (!response.ok) {
@@ -2351,6 +2245,18 @@
                     alert('Failed to start: ' + e);
                 } finally {
                     btnRun.disabled = false;
+                }
+            });
+        }
+
+        if (runPhase) {
+            runPhase.addEventListener('change', async () => {
+                if (runIsRunning) return;
+                const phase = runPhase.value;
+                try {
+                    await updateIssueStatus(phase);
+                } catch (e) {
+                    alert((e && e.message) ? e.message : String(e));
                 }
             });
         }
@@ -2407,17 +2313,8 @@
             });
         }
         
-        function updatePhaseTimeline(currentPhase, currentTask, tasksTotal, tasksDone) {
+        function updatePhaseTimeline(currentPhase) {
             const currentIndex = getPhaseIndex(currentPhase);
-
-            // Build task description for task phases
-            const isTaskPhase = (phase) => ['task-implement', 'task-spec-review', 'task-quality-review'].includes(phase);
-            const getTaskDesc = (phase) => {
-                if (!isTaskPhase(phase) || !currentTask) return null;
-                const progress = tasksTotal > 0 ? ` (${tasksDone}/${tasksTotal} done)` : '';
-                const title = currentTask.title || currentTask.id || 'Unknown';
-                return `Task ${currentTask.index}: ${escapeHtml(title)}${progress}`;
-            };
 
             phaseTimeline.innerHTML = phases.map((phase, index) => {
                 const phaseIdx = getPhaseIndex(phase.id);
@@ -2427,18 +2324,9 @@
                 if (phaseIdx < currentIndex || currentPhase === 'complete') {
                     stateClass = 'complete';
                     icon = '&#10003;';
-                } else if (phase.id === currentPhase || (currentPhase === 'coverage-fix' && phase.id === 'coverage')) {
+                } else if (phase.id === currentPhase) {
                     stateClass = 'active';
                     icon = '&#9679;';
-                }
-
-                // Determine description
-                let desc = phase.desc;
-                if (currentPhase === 'coverage-fix' && phase.id === 'coverage') {
-                    desc = 'Fixing test failures';
-                } else if (phase.id === currentPhase && isTaskPhase(phase.id)) {
-                    const taskDesc = getTaskDesc(phase.id);
-                    if (taskDesc) desc = taskDesc;
                 }
 
                 return `
@@ -2446,7 +2334,7 @@
                         <div class="phase-dot">${icon}</div>
                         <div class="phase-content">
                             <div class="phase-name">${phase.name}</div>
-                            <div class="phase-desc">${desc}</div>
+                            <div class="phase-desc">${phase.desc}</div>
                         </div>
                     </div>
                 `;
@@ -2495,13 +2383,6 @@
                     });
                 }
                 
-                if (status.pr_number) {
-                    items.push({ 
-                        label: 'Pull Request', 
-                        value: `<a href="${escapeHtml(status.pr_url || '#')}" target="_blank">#${status.pr_number}</a>`
-                    });
-                }
-                
                 if (status.branch_name) {
                     items.push({ label: 'Branch', value: escapeHtml(status.branch_name) });
                 }
@@ -2526,74 +2407,16 @@
         function formatPhase(phase) {
             const names = {
                 'design': 'Design',
-                'task-implement': 'Task Implement',
-                'task-spec-review': 'Task Spec Review',
-                'task-quality-review': 'Task Quality Review',
                 'implement': 'Implement',
                 'review': 'Review',
-                'ci': 'CI',
-                'coverage': 'Coverage',
-                'coverage-fix': 'Fix Coverage',
-                'sonar': 'Sonar',
                 'complete': 'Complete'
             };
             return names[phase] || phase;
         }
         
         function updateStatusChecks(status) {
-            const checks = [
-                { label: 'Implemented', value: status.implemented, toggleKey: 'implemented' },
-                { label: 'PR Created', value: status.pr_created },
-                { label: 'PR Ready', value: status.pr_description_ready },
-                { label: 'Review Clean', value: status.review_clean, toggleKey: 'reviewClean' },
-                { label: 'CI', value: status.ci_clean, toggleKey: 'ciClean' },
-                { label: 'Coverage', value: status.coverage_clean, toggleKey: 'coverageClean' },
-                { label: 'Sonar', value: status.sonar_clean, toggleKey: 'sonarClean' }
-            ];
-            
-            statusChecks.innerHTML = checks.map(check => {
-                const tag = check.toggleKey ? 'button' : 'div';
-                const className = `status-check${check.toggleKey ? ' toggleable' : ''}`;
-                const disabled = check.toggleKey && runIsRunning ? ' disabled' : '';
-                const attrs = check.toggleKey
-                    ? ` type="button" data-status-key="${check.toggleKey}" data-status-value="${check.value ? '1' : '0'}"${disabled} title="Click to toggle"`
-                    : '';
-
-                return `
-                    <${tag} class="${className}"${attrs}>
-                        <div class="check-icon ${check.value ? 'pass' : 'fail'}">
-                            ${check.value ? '&#10003;' : ''}
-                        </div>
-                        <span>${check.label}</span>
-                    </${tag}>
-                `;
-            }).join('');
-
-            const toggleButtons = Array.from(statusChecks.querySelectorAll('button.status-check.toggleable'));
-            for (const btn of toggleButtons) {
-                btn.addEventListener('click', async () => {
-                    const key = btn.getAttribute('data-status-key');
-                    const current = btn.getAttribute('data-status-value') === '1';
-                    const next = !current;
-
-                    btn.disabled = true;
-                    try {
-                        await updateIssueStatus({ [key]: next });
-
-                        btn.setAttribute('data-status-value', next ? '1' : '0');
-                        const icon = btn.querySelector('.check-icon');
-                        if (icon) {
-                            icon.classList.toggle('pass', next);
-                            icon.classList.toggle('fail', !next);
-                            icon.innerHTML = next ? '&#10003;' : '';
-                        }
-                    } catch (e) {
-                        alert((e && e.message) ? e.message : String(e));
-                    } finally {
-                        btn.disabled = runIsRunning;
-                    }
-                });
-            }
+            if (!statusChecks) return;
+            statusChecks.innerHTML = '';
         }
         
         // Log handling

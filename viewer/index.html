@@ -1256,7 +1256,7 @@
                         <div class="log-empty">
                             <div class="log-empty-icon">&#128172;</div>
                             <div>No SDK output available</div>
-                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output (updates in real-time)</div>
                         </div>
                     </div>
                     <div class="sdk-timeline" id="sdkTimeline" style="display: none;"></div>
@@ -1333,7 +1333,7 @@
                     <div class="log-empty">
                         <div class="log-empty-icon">&#128172;</div>
                         <div>No SDK output available</div>
-                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Run with --runner sdk to see structured output (updates in real-time)</div>
                     </div>
                 `;
                 timelineEl.innerHTML = '';
@@ -1748,7 +1748,92 @@
             eventSource.addEventListener('heartbeat', () => {
                 // Keep-alive received
             });
-            
+
+            // SDK SSE event handlers for real-time SDK output updates
+            eventSource.addEventListener('sdk-init', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    // Initialize or reset SDK output when a new session starts
+                    sdkOutput = {
+                        session_id: data.session_id,
+                        status: data.status || 'running',
+                        messages: [],
+                        tool_calls: [],
+                        stats: { message_count: 0, tool_call_count: 0 }
+                    };
+                    if (mainTab === 'sdk') renderSdkOutput();
+                } catch (e) {
+                    console.error('Failed to parse sdk-init:', e);
+                }
+            });
+
+            eventSource.addEventListener('sdk-message', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!sdkOutput) {
+                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                    }
+                    // Add the new message to the list
+                    if (data.message) {
+                        sdkOutput.messages.push(data.message);
+                        sdkOutput.stats.message_count = sdkOutput.messages.length;
+                    }
+                    if (mainTab === 'sdk') renderSdkOutput();
+                } catch (e) {
+                    console.error('Failed to parse sdk-message:', e);
+                }
+            });
+
+            eventSource.addEventListener('sdk-tool-start', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    // Track tool start (we could show a pending indicator, but for now just log)
+                    console.debug('Tool started:', data.name, data.tool_use_id);
+                } catch (e) {
+                    console.error('Failed to parse sdk-tool-start:', e);
+                }
+            });
+
+            eventSource.addEventListener('sdk-tool-complete', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!sdkOutput) {
+                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                    }
+                    // Add the completed tool call to the list
+                    if (data.tool_use_id) {
+                        sdkOutput.tool_calls.push({
+                            name: data.name,
+                            tool_use_id: data.tool_use_id,
+                            duration_ms: data.duration_ms,
+                            is_error: data.is_error
+                        });
+                        sdkOutput.stats.tool_call_count = sdkOutput.tool_calls.length;
+                    }
+                    if (mainTab === 'sdk') renderSdkOutput();
+                } catch (e) {
+                    console.error('Failed to parse sdk-tool-complete:', e);
+                }
+            });
+
+            eventSource.addEventListener('sdk-complete', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!sdkOutput) {
+                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                    }
+                    // Update session status and final stats
+                    sdkOutput.success = data.status === 'success';
+                    sdkOutput.error = data.status === 'error';
+                    if (data.summary) {
+                        sdkOutput.stats = { ...sdkOutput.stats, ...data.summary };
+                    }
+                    if (mainTab === 'sdk') renderSdkOutput();
+                } catch (e) {
+                    console.error('Failed to parse sdk-complete:', e);
+                }
+            });
+
             eventSource.onerror = () => {
                 updateConnectionStatus(false);
                 reconnectAttempts++;

@@ -222,6 +222,83 @@ class LogWatcher:
             self.last_size = 0
 
 
+class SDKOutputWatcher:
+    """Watch SDK output file for changes and track message/tool call counts.
+
+    Similar to LogWatcher but specialized for sdk-output.json files.
+    Tracks message and tool call counts to return only new items since last check.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.last_mtime: float = 0
+        self.last_size: int = 0
+        self.last_message_count: int = 0
+        self.last_tool_count: int = 0
+        self._lock = Lock()
+
+    def get_updates(self) -> Tuple[List[Dict], List[Dict], bool]:
+        """Get new messages and tool calls since last check.
+
+        Returns:
+            Tuple of (new_messages, new_tool_calls, has_changes)
+        """
+        with self._lock:
+            if not self.path.exists():
+                self.last_mtime = 0
+                self.last_size = 0
+                self.last_message_count = 0
+                self.last_tool_count = 0
+                return [], [], False
+
+            try:
+                stat = self.path.stat()
+                mtime = stat.st_mtime
+                size = stat.st_size
+
+                # No changes to file
+                if mtime == self.last_mtime and size == self.last_size:
+                    return [], [], False
+
+                self.last_mtime = mtime
+                self.last_size = size
+
+                with open(self.path, 'r', errors='replace') as f:
+                    data = json.load(f)
+
+                messages = data.get("messages", [])
+                tool_calls = data.get("tool_calls", [])
+
+                # Get new items since last check
+                new_messages = messages[self.last_message_count:]
+                new_tool_calls = tool_calls[self.last_tool_count:]
+
+                # Update counts
+                prev_msg_count = self.last_message_count
+                prev_tool_count = self.last_tool_count
+                self.last_message_count = len(messages)
+                self.last_tool_count = len(tool_calls)
+
+                # Determine if there are actual changes
+                has_changes = len(new_messages) > 0 or len(new_tool_calls) > 0
+
+                return new_messages, new_tool_calls, has_changes
+
+            except (json.JSONDecodeError, ValueError):
+                # Malformed JSON - return empty but don't crash
+                return [], [], False
+            except Exception:
+                return [], [], False
+
+    def reset(self):
+        """Reset tracking state to start fresh."""
+        with self._lock:
+            self.last_mtime = 0
+            self.last_size = 0
+            self.last_message_count = 0
+            self.last_tool_count = 0
+
+
 class JeevesState:
     """Track Jeeves's current state from files"""
     

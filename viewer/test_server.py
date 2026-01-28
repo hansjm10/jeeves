@@ -340,3 +340,210 @@ echo "dummy jeeves: done"
             self.assertEqual((self.repo_dir / "README.md").read_text(), "v2\n")
         finally:
             conn.close()
+
+
+class SDKOutputWatcherTests(unittest.TestCase):
+    """Test SDKOutputWatcher class for incremental SDK output tracking."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+        self.sdk_output_file = self.tmp_path / "sdk-output.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_sdk_output(self, data: Dict[str, Any]) -> None:
+        """Helper to write SDK output JSON."""
+        self.sdk_output_file.write_text(json.dumps(data))
+
+    def test_handles_file_not_found_gracefully(self):
+        """SDKOutputWatcher handles missing file without error."""
+        from viewer.server import SDKOutputWatcher
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(new_messages, [])
+        self.assertEqual(new_tool_calls, [])
+        self.assertFalse(has_changes)
+
+    def test_returns_initial_messages_on_first_read(self):
+        """SDKOutputWatcher returns all messages on first read."""
+        from viewer.server import SDKOutputWatcher
+
+        initial_data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+            ],
+            "tool_calls": [
+                {"name": "Read", "tool_use_id": "1", "duration_ms": 100}
+            ],
+            "stats": {"message_count": 2, "tool_call_count": 1}
+        }
+        self._write_sdk_output(initial_data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(len(new_messages), 2)
+        self.assertEqual(len(new_tool_calls), 1)
+        self.assertTrue(has_changes)
+
+    def test_returns_only_new_messages_on_subsequent_reads(self):
+        """SDKOutputWatcher returns only new messages since last check."""
+        from viewer.server import SDKOutputWatcher
+
+        initial_data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+            ],
+            "tool_calls": [],
+            "stats": {"message_count": 1, "tool_call_count": 0}
+        }
+        self._write_sdk_output(initial_data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        # First read
+        watcher.get_updates()
+
+        # Add more messages
+        updated_data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"},
+                {"role": "user", "content": "What's up?"},
+            ],
+            "tool_calls": [
+                {"name": "Read", "tool_use_id": "1", "duration_ms": 100}
+            ],
+            "stats": {"message_count": 3, "tool_call_count": 1}
+        }
+        self._write_sdk_output(updated_data)
+
+        # Second read should only return new messages
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(len(new_messages), 2)
+        self.assertEqual(new_messages[0]["content"], "Hi!")
+        self.assertEqual(new_messages[1]["content"], "What's up?")
+        self.assertEqual(len(new_tool_calls), 1)
+        self.assertTrue(has_changes)
+
+    def test_no_changes_when_file_unchanged(self):
+        """SDKOutputWatcher reports no changes when file is unchanged."""
+        from viewer.server import SDKOutputWatcher
+
+        data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_calls": [],
+            "stats": {"message_count": 1, "tool_call_count": 0}
+        }
+        self._write_sdk_output(data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        # First read
+        watcher.get_updates()
+
+        # Second read without file change
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(new_messages, [])
+        self.assertEqual(new_tool_calls, [])
+        self.assertFalse(has_changes)
+
+    def test_thread_safe_with_lock(self):
+        """SDKOutputWatcher is thread-safe with Lock."""
+        from viewer.server import SDKOutputWatcher
+
+        data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_calls": [],
+            "stats": {"message_count": 1, "tool_call_count": 0}
+        }
+        self._write_sdk_output(data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        # Check that watcher has a _lock attribute
+        self.assertTrue(hasattr(watcher, '_lock'))
+
+        # Run concurrent reads
+        results = []
+        def read_updates():
+            msgs, tools, changed = watcher.get_updates()
+            results.append((len(msgs), len(tools), changed))
+
+        threads = [threading.Thread(target=read_updates) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All threads should complete without error
+        self.assertEqual(len(results), 5)
+
+    def test_handles_malformed_json_gracefully(self):
+        """SDKOutputWatcher handles malformed JSON without crashing."""
+        from viewer.server import SDKOutputWatcher
+
+        self.sdk_output_file.write_text("{invalid json")
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(new_messages, [])
+        self.assertEqual(new_tool_calls, [])
+        self.assertFalse(has_changes)
+
+    def test_reset_clears_tracking_state(self):
+        """SDKOutputWatcher.reset() clears message/tool tracking state."""
+        from viewer.server import SDKOutputWatcher
+
+        data = {
+            "schema": "jeeves.sdk.v1",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"},
+            ],
+            "tool_calls": [{"name": "Read", "tool_use_id": "1"}],
+            "stats": {"message_count": 2, "tool_call_count": 1}
+        }
+        self._write_sdk_output(data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        # First read
+        watcher.get_updates()
+
+        # Reset
+        watcher.reset()
+
+        # Should return all messages again after reset
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+        self.assertEqual(len(new_messages), 2)
+        self.assertEqual(len(new_tool_calls), 1)
+        self.assertTrue(has_changes)
+
+    def test_handles_missing_fields_gracefully(self):
+        """SDKOutputWatcher handles SDK output with missing fields."""
+        from viewer.server import SDKOutputWatcher
+
+        # SDK output without messages or tool_calls
+        data = {
+            "schema": "jeeves.sdk.v1",
+            "stats": {}
+        }
+        self._write_sdk_output(data)
+
+        watcher = SDKOutputWatcher(self.sdk_output_file)
+        new_messages, new_tool_calls, has_changes = watcher.get_updates()
+
+        self.assertEqual(new_messages, [])
+        self.assertEqual(new_tool_calls, [])
+        # File exists and was read, but no content - still counts as initial read
+        self.assertFalse(has_changes)

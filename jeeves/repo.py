@@ -16,6 +16,15 @@ class RepoError(Exception):
     pass
 
 
+class AuthenticationError(RepoError):
+    """Error when GitHub authentication is missing or invalid.
+
+    This error provides user-friendly messages with actionable steps.
+    """
+
+    pass
+
+
 def run_git(
     args: list[str],
     cwd: Optional[Path] = None,
@@ -108,6 +117,23 @@ def is_gh_authenticated() -> bool:
         return result.returncode == 0
     except RepoError:
         return False
+
+
+def check_gh_auth_for_browse() -> None:
+    """Verify GitHub CLI authentication before browse operations.
+
+    This function should be called before any operation that requires
+    browsing GitHub repositories or issues. It provides a user-friendly
+    error message with actionable steps if authentication is missing.
+
+    Raises:
+        AuthenticationError: If not authenticated with GitHub CLI.
+    """
+    if not is_gh_authenticated():
+        raise AuthenticationError(
+            "GitHub CLI is not authenticated. "
+            "Please run 'gh auth login' to authenticate with GitHub before browsing repositories or issues."
+        )
 
 
 def ensure_repo(owner: str, repo: str, fetch: bool = True) -> Path:

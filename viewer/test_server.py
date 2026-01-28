@@ -547,3 +547,342 @@ class SDKOutputWatcherTests(unittest.TestCase):
         self.assertEqual(new_tool_calls, [])
         # File exists and was read, but no content - still counts as initial read
         self.assertFalse(has_changes)
+
+
+class SDKSSEEventTests(unittest.TestCase):
+    """Test SDK SSE event streaming in _handle_sse()."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+        self.state_dir = self.tmp_path / "jeeves"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.sdk_output_file = self.state_dir / "sdk-output.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_sdk_output(self, data: Dict[str, Any]) -> None:
+        """Helper to write SDK output JSON."""
+        self.sdk_output_file.write_text(json.dumps(data))
+
+    def _parse_sse_events(self, raw_data: bytes, max_events: int = 10) -> list:
+        """Parse SSE events from raw response data."""
+        events = []
+        lines = raw_data.decode("utf-8", errors="replace").split("\n")
+        current_event = None
+        for line in lines:
+            line = line.strip()
+            if line.startswith("event:"):
+                current_event = line.split(": ", 1)[1] if ": " in line else line[6:]
+            elif line.startswith("data:") and current_event:
+                data_str = line.split(": ", 1)[1] if ": " in line else line[5:]
+                try:
+                    data = json.loads(data_str)
+                    events.append({"event": current_event, "data": data})
+                except json.JSONDecodeError:
+                    pass
+                current_event = None
+            elif line == "":
+                current_event = None
+            if len(events) >= max_events:
+                break
+        return events
+
+    def _read_sse_with_timeout(self, conn, timeout_secs: float = 2.0, max_events: int = 10) -> list:
+        """Read SSE events from connection with timeout."""
+        import socket
+        conn.sock.settimeout(0.1)  # Short timeout for each read
+        events = []
+        buffer = b""
+        deadline = time.time() + timeout_secs
+
+        while time.time() < deadline:
+            try:
+                chunk = conn.sock.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                # Try to parse events from buffer
+                events = self._parse_sse_events(buffer, max_events)
+                if len(events) >= max_events:
+                    break
+            except socket.timeout:
+                # Expected - just continue
+                events = self._parse_sse_events(buffer, max_events)
+                if len(events) >= max_events:
+                    break
+            except Exception:
+                break
+
+        return events
+
+    def test_sdk_init_event_sent_on_session_start(self):
+        """SSE stream sends sdk-init event when SDK session is detected."""
+        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+
+        # Create SDK output with session info
+        sdk_data = {
+            "schema": "jeeves.sdk.v1",
+            "session_id": "test-session-123",
+            "started_at": "2026-01-28T10:00:00Z",
+            "messages": [],
+            "tool_calls": [],
+            "stats": {"message_count": 0, "tool_call_count": 0}
+        }
+        self._write_sdk_output(sdk_data)
+
+        state = JeevesState(str(self.state_dir))
+        run_manager = JeevesRunManager(state_dir=self.state_dir)
+        prompt_manager = JeevesPromptManager(self.tmp_path)
+
+        def handler(*args, **kwargs):
+            return JeevesViewerHandler(
+                *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
+                allow_remote_run=True, **kwargs
+            )
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            import socket
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.connect(("127.0.0.1", port))
+            conn.sendall(b"GET /api/stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            conn.settimeout(0.1)
+
+            buffer = b""
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    events = self._parse_sse_events(buffer, 5)
+                    if len(events) >= 3:
+                        break
+                except socket.timeout:
+                    events = self._parse_sse_events(buffer, 5)
+                    if len(events) >= 3:
+                        break
+            else:
+                events = self._parse_sse_events(buffer, 5)
+
+            conn.close()
+
+            # Check that sdk-init event was sent
+            sdk_init_events = [e for e in events if e["event"] == "sdk-init"]
+            self.assertGreaterEqual(len(sdk_init_events), 1, f"Expected sdk-init event, got: {[e['event'] for e in events]}")
+            self.assertEqual(sdk_init_events[0]["data"]["session_id"], "test-session-123")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_sdk_message_event_sent_for_new_messages(self):
+        """SSE stream sends sdk-message event for new messages."""
+        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+
+        # Start with one message
+        sdk_data = {
+            "schema": "jeeves.sdk.v1",
+            "session_id": "test-session-456",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_calls": [],
+            "stats": {"message_count": 1, "tool_call_count": 0}
+        }
+        self._write_sdk_output(sdk_data)
+
+        state = JeevesState(str(self.state_dir))
+        run_manager = JeevesRunManager(state_dir=self.state_dir)
+        prompt_manager = JeevesPromptManager(self.tmp_path)
+
+        def handler(*args, **kwargs):
+            return JeevesViewerHandler(
+                *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
+                allow_remote_run=True, **kwargs
+            )
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            import socket
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.connect(("127.0.0.1", port))
+            conn.sendall(b"GET /api/stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            conn.settimeout(0.1)
+
+            buffer = b""
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+                except socket.timeout:
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+            else:
+                events = self._parse_sse_events(buffer, 10)
+
+            conn.close()
+
+            # Check for sdk-message events (initial messages should be sent as sdk-message)
+            sdk_message_events = [e for e in events if e["event"] == "sdk-message"]
+            self.assertGreaterEqual(len(sdk_message_events), 1, f"Expected sdk-message event, got: {[e['event'] for e in events]}")
+            # First message should be "Hello"
+            self.assertEqual(sdk_message_events[0]["data"]["message"]["content"], "Hello")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_sdk_tool_events_sent_for_tool_calls(self):
+        """SSE stream sends sdk-tool-start and sdk-tool-complete events for tool calls."""
+        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+
+        sdk_data = {
+            "schema": "jeeves.sdk.v1",
+            "session_id": "test-session-789",
+            "messages": [],
+            "tool_calls": [
+                {
+                    "name": "Read",
+                    "tool_use_id": "tool-1",
+                    "input": {"file_path": "/test/file.py"},
+                    "duration_ms": 150,
+                    "is_error": False
+                }
+            ],
+            "stats": {"message_count": 0, "tool_call_count": 1}
+        }
+        self._write_sdk_output(sdk_data)
+
+        state = JeevesState(str(self.state_dir))
+        run_manager = JeevesRunManager(state_dir=self.state_dir)
+        prompt_manager = JeevesPromptManager(self.tmp_path)
+
+        def handler(*args, **kwargs):
+            return JeevesViewerHandler(
+                *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
+                allow_remote_run=True, **kwargs
+            )
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            import socket
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.connect(("127.0.0.1", port))
+            conn.sendall(b"GET /api/stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            conn.settimeout(0.1)
+
+            buffer = b""
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+                except socket.timeout:
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+            else:
+                events = self._parse_sse_events(buffer, 10)
+
+            conn.close()
+
+            # Check for tool events - tool calls should trigger sdk-tool-complete
+            sdk_tool_complete_events = [e for e in events if e["event"] == "sdk-tool-complete"]
+            self.assertGreaterEqual(len(sdk_tool_complete_events), 1, f"Expected sdk-tool-complete event, got: {[e['event'] for e in events]}")
+            self.assertEqual(sdk_tool_complete_events[0]["data"]["tool_use_id"], "tool-1")
+            self.assertEqual(sdk_tool_complete_events[0]["data"]["name"], "Read")
+            self.assertEqual(sdk_tool_complete_events[0]["data"]["duration_ms"], 150)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_sdk_complete_event_sent_when_session_ends(self):
+        """SSE stream sends sdk-complete event when session is marked complete."""
+        from viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+
+        sdk_data = {
+            "schema": "jeeves.sdk.v1",
+            "session_id": "test-session-complete",
+            "started_at": "2026-01-28T10:00:00Z",
+            "ended_at": "2026-01-28T10:05:00Z",
+            "success": True,
+            "messages": [{"role": "user", "content": "Done"}],
+            "tool_calls": [],
+            "stats": {"message_count": 1, "tool_call_count": 0, "duration_seconds": 300}
+        }
+        self._write_sdk_output(sdk_data)
+
+        state = JeevesState(str(self.state_dir))
+        run_manager = JeevesRunManager(state_dir=self.state_dir)
+        prompt_manager = JeevesPromptManager(self.tmp_path)
+
+        def handler(*args, **kwargs):
+            return JeevesViewerHandler(
+                *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
+                allow_remote_run=True, **kwargs
+            )
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            import socket
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.connect(("127.0.0.1", port))
+            conn.sendall(b"GET /api/stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            conn.settimeout(0.1)
+
+            buffer = b""
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+                except socket.timeout:
+                    events = self._parse_sse_events(buffer, 10)
+                    if len(events) >= 5:
+                        break
+            else:
+                events = self._parse_sse_events(buffer, 10)
+
+            conn.close()
+
+            # Check for sdk-complete event
+            sdk_complete_events = [e for e in events if e["event"] == "sdk-complete"]
+            self.assertGreaterEqual(len(sdk_complete_events), 1, f"Expected sdk-complete event, got: {[e['event'] for e in events]}")
+            self.assertEqual(sdk_complete_events[0]["data"]["status"], "success")
+            self.assertIn("summary", sdk_complete_events[0]["data"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()

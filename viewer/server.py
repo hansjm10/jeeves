@@ -1708,6 +1708,13 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             current_log_path = self.state.last_run_log
             log_watcher = LogWatcher(current_log_path)
 
+            # SDK output watcher for real-time SDK streaming
+            sdk_output_path = self._get_sdk_output_path()
+            sdk_watcher = SDKOutputWatcher(sdk_output_path)
+            sdk_session_started = False
+            sdk_session_ended = False
+            last_sdk_session_id: Optional[str] = None
+
             def state_signature(state: Dict) -> str:
                 signature_state = copy.deepcopy(state)
                 signature_state.pop("timestamp", None)
@@ -1724,11 +1731,57 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             state["run"] = self.run_manager.get_status()
             self._sse_send("state", state)
 
+            # Send initial SDK state if SDK output exists
+            sdk_data = self._read_sdk_output()
+            if sdk_data:
+                session_id = sdk_data.get("session_id")
+                if session_id:
+                    last_sdk_session_id = session_id
+                    sdk_session_started = True
+                    # Send sdk-init event
+                    self._sse_send("sdk-init", {
+                        "session_id": session_id,
+                        "started_at": sdk_data.get("started_at"),
+                        "status": "complete" if sdk_data.get("ended_at") else "running"
+                    })
+
+                # Send initial messages as sdk-message events
+                messages = sdk_data.get("messages", [])
+                for idx, msg in enumerate(messages):
+                    self._sse_send("sdk-message", {
+                        "message": msg,
+                        "index": idx,
+                        "total": len(messages)
+                    })
+
+                # Send tool calls as sdk-tool-complete events
+                tool_calls = sdk_data.get("tool_calls", [])
+                for tool_call in tool_calls:
+                    self._sse_send("sdk-tool-complete", {
+                        "tool_use_id": tool_call.get("tool_use_id"),
+                        "name": tool_call.get("name"),
+                        "duration_ms": tool_call.get("duration_ms", 0),
+                        "is_error": tool_call.get("is_error", False)
+                    })
+
+                # Update watcher to track from current position
+                sdk_watcher.get_updates()
+
+                # Send sdk-complete if session already ended
+                if sdk_data.get("ended_at"):
+                    sdk_session_ended = True
+                    self._sse_send("sdk-complete", {
+                        "status": "success" if sdk_data.get("success", True) else "error",
+                        "summary": sdk_data.get("stats", {})
+                    })
+
             last_state_sig = state_signature(state)
             heartbeat_interval = 15  # Send heartbeat every 15s
             last_heartbeat = time.time()
             state_poll_interval = 0.5  # 500ms state polling
             last_state_check = time.time()
+            sdk_poll_interval = 0.1  # 100ms SDK polling (same as logs)
+            last_sdk_check = time.time()
 
             while True:
                 # Check if log path changed (issue was changed)
@@ -1740,13 +1793,70 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                     if new_logs:
                         self._sse_send("logs", {"lines": new_logs, "reset": True})
 
+                    # Reset SDK watcher for new issue
+                    sdk_output_path = self._get_sdk_output_path()
+                    sdk_watcher = SDKOutputWatcher(sdk_output_path)
+                    sdk_session_started = False
+                    sdk_session_ended = False
+                    last_sdk_session_id = None
+
                 # Check for new log lines (fast poll - 100ms)
                 new_logs, has_logs = log_watcher.get_new_lines()
                 if has_logs and new_logs:
                     self._sse_send("logs", {"lines": new_logs})
 
-                # Check for state changes (slower poll - 500ms)
+                # Check for SDK updates (fast poll - 100ms)
                 now = time.time()
+                if now - last_sdk_check >= sdk_poll_interval:
+                    new_messages, new_tool_calls, has_sdk_changes = sdk_watcher.get_updates()
+
+                    if has_sdk_changes:
+                        # Check if this is a new session
+                        sdk_data = self._read_sdk_output()
+                        if sdk_data:
+                            session_id = sdk_data.get("session_id")
+
+                            # Send sdk-init if new session detected
+                            if session_id and session_id != last_sdk_session_id:
+                                last_sdk_session_id = session_id
+                                sdk_session_started = True
+                                sdk_session_ended = False
+                                self._sse_send("sdk-init", {
+                                    "session_id": session_id,
+                                    "started_at": sdk_data.get("started_at"),
+                                    "status": "running"
+                                })
+
+                            # Send sdk-message events for new messages
+                            total_messages = len(sdk_data.get("messages", []))
+                            start_idx = total_messages - len(new_messages)
+                            for idx, msg in enumerate(new_messages):
+                                self._sse_send("sdk-message", {
+                                    "message": msg,
+                                    "index": start_idx + idx,
+                                    "total": total_messages
+                                })
+
+                            # Send sdk-tool-complete events for new tool calls
+                            for tool_call in new_tool_calls:
+                                self._sse_send("sdk-tool-complete", {
+                                    "tool_use_id": tool_call.get("tool_use_id"),
+                                    "name": tool_call.get("name"),
+                                    "duration_ms": tool_call.get("duration_ms", 0),
+                                    "is_error": tool_call.get("is_error", False)
+                                })
+
+                            # Check if session ended
+                            if sdk_data.get("ended_at") and not sdk_session_ended:
+                                sdk_session_ended = True
+                                self._sse_send("sdk-complete", {
+                                    "status": "success" if sdk_data.get("success", True) else "error",
+                                    "summary": sdk_data.get("stats", {})
+                                })
+
+                    last_sdk_check = now
+
+                # Check for state changes (slower poll - 500ms)
                 if now - last_state_check >= state_poll_interval:
                     state = self.state.get_state(include_recent_logs=False)
                     state["run"] = self.run_manager.get_status()

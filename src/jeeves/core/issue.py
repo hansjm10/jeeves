@@ -16,6 +16,7 @@ from .paths import (
     parse_repo_spec,
 )
 from .repo import ensure_repo, run_gh, RepoError
+from .workflow_loader import load_workflow_by_name
 
 
 class IssueError(Exception):
@@ -238,12 +239,20 @@ def create_issue_state(
         except RepoError:
             pass
 
+    # Load workflow to get the start phase
+    try:
+        wf = load_workflow_by_name(workflow)
+        start_phase = wf.start
+    except FileNotFoundError:
+        # Fallback to legacy phase if workflow not found
+        start_phase = "design"
+
     state = IssueState(
         owner=owner,
         repo=repo,
         issue=issue,
         branch=branch,
-        phase="design",
+        phase=start_phase,
         workflow=workflow,
         design_doc_path=design_doc,
     )

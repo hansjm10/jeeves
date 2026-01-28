@@ -87,6 +87,14 @@ class ViewerRunApiTests(unittest.TestCase):
 
         self.tools_dir = tmp_path / "prompts"
         self.tools_dir.mkdir(parents=True, exist_ok=True)
+        # Create prompts matching the new workflow phases
+        (self.tools_dir / "design.draft.md").write_text("# Design Draft Prompt\n")
+        (self.tools_dir / "design.review.md").write_text("# Design Review Prompt\n")
+        (self.tools_dir / "design.edit.md").write_text("# Design Edit Prompt\n")
+        (self.tools_dir / "implement.md").write_text("# Implement Prompt\n")
+        (self.tools_dir / "review.evaluate.md").write_text("# Code Review Prompt\n")
+        (self.tools_dir / "review.fix.md").write_text("# Code Fix Prompt\n")
+        # Also keep old prompts for backward compatibility
         (self.tools_dir / "issue.design.md").write_text("# Design Prompt\n")
         (self.tools_dir / "issue.implement.md").write_text("# Implement Prompt\n")
         (self.tools_dir / "issue.review.md").write_text("# Review Prompt\n")
@@ -233,7 +241,9 @@ sleep 1
             conn.close()
 
     def test_run_stops_when_issue_json_indicates_complete(self):
+        """Test that run stops when workflow reaches terminal phase via transitions."""
         issue_json = self.state_dir / "issue.json"
+        # Start at code_review phase (after implement) so we can test terminal transition
         issue_json.write_text(
             json.dumps(
                 {
@@ -241,11 +251,10 @@ sleep 1
                     "repo": "acme/widgets",
                     "issue": {"number": 1, "repo": "acme/widgets"},
                     "branch": "issue/test",
-                    "phase": "implement",
+                    "phase": "code_review",
+                    "workflow": "default",
                     "status": {
-                        "implemented": False,
-                        "prCreated": False,
-                        "prDescriptionReady": False,
+                        "reviewClean": False,
                     },
                 },
                 indent=2,
@@ -277,10 +286,9 @@ issue_path = os.path.join(state_dir, "issue.json")
 with open(issue_path, "r", encoding="utf-8") as f:
     data = json.load(f)
 
+# Set reviewClean to trigger transition to complete (terminal phase)
 status = data.get("status") or {}
-status["implemented"] = True
-status["prCreated"] = True
-status["prDescriptionReady"] = True
+status["reviewClean"] = True
 data["status"] = status
 
 tmp_path = issue_path + ".tmp"
@@ -289,7 +297,7 @@ with open(tmp_path, "w", encoding="utf-8") as f:
     f.write("\\n")
 os.replace(tmp_path, issue_path)
 
-print("dummy sdk: set implement complete")
+print("dummy sdk: set review clean")
 """,
         )
 
@@ -320,7 +328,8 @@ print("dummy sdk: set implement complete")
             self.assertFalse(run.get("running"), run)
             self.assertTrue(run.get("completed_via_state"), run)
             self.assertFalse(run.get("completed_via_promise"), run)
-            self.assertIn("status.implemented", str(run.get("completion_reason", "")))
+            # Now completion reason is about reaching terminal phase
+            self.assertIn("terminal", str(run.get("completion_reason", "")))
         finally:
             conn.close()
 

@@ -58,20 +58,21 @@ from jeeves.core.issue import (
 )
 from jeeves.core.repo import ensure_repo, RepoError
 from jeeves.core.worktree import create_worktree, WorktreeError
-
-PHASE_TO_PROMPT = {
-    "design": "issue.design.md",
-    "implement": "issue.implement.md",
-    "review": "issue.review.md",
-}
+from jeeves.core.workflow import PhaseType
+from jeeves.core.workflow_loader import load_workflow_by_name
+from jeeves.core.engine import WorkflowEngine
+from jeeves.core.script_runner import run_script_phase
 
 
-def resolve_prompt_path(phase: str, prompts_dir: Path) -> Path:
-    if phase == "complete":
+def resolve_prompt_path(phase: str, prompts_dir: Path, engine: WorkflowEngine) -> Path:
+    """Resolve the prompt file path for a phase using the workflow engine."""
+    if engine.is_terminal(phase):
         raise ValueError("Phase is complete; no prompt to run.")
-    prompt_name = PHASE_TO_PROMPT.get(phase)
+
+    prompt_name = engine.get_prompt_for_phase(phase)
     if not prompt_name:
-        raise ValueError(f"Unknown phase: {phase}")
+        raise ValueError(f"No prompt defined for phase: {phase}")
+
     prompt_path = (prompts_dir / prompt_name).resolve()
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt not found: {prompt_path}")
@@ -540,6 +541,7 @@ class JeevesRunManager:
         self._proc: Optional[subprocess.Popen] = None
         self._iteration_thread: Optional[Thread] = None
         self._stop_requested: bool = False
+        self._workflow_engine: Optional[WorkflowEngine] = None
         self._run_info: Dict = {
             "running": False,
             "pid": None,
@@ -564,6 +566,22 @@ class JeevesRunManager:
         self.work_dir = get_worktree_path(self._owner, self._repo, self._issue_number)
         self._run_info["viewer_log_file"] = str(self.state_dir / "viewer-run.log")
         self._run_info["issue_ref"] = issue_ref
+
+    def _get_workflow_engine(self, workflow_name: str = "default") -> WorkflowEngine:
+        """Get or create workflow engine for the given workflow."""
+        if self._workflow_engine is None or self._workflow_engine.workflow.name != workflow_name:
+            try:
+                workflow = load_workflow_by_name(workflow_name)
+                self._workflow_engine = WorkflowEngine(workflow)
+            except Exception as e:
+                # Fall back to default workflow if specified one fails
+                if workflow_name != "default":
+                    # Can't easily log here without viewer_log_path, so just try default
+                    workflow = load_workflow_by_name("default")
+                    self._workflow_engine = WorkflowEngine(workflow)
+                else:
+                    raise RuntimeError(f"Failed to load default workflow: {e}") from e
+        return self._workflow_engine
 
     def get_status(self) -> Dict:
         with self._lock:
@@ -694,24 +712,29 @@ class JeevesRunManager:
                 # Run a single iteration
                 result = self._run_single_iteration(viewer_log_path)
 
-                # Check for completion via issue.json state (preferred)
+                # Check for completion via workflow engine transitions
                 issue_json = self._read_issue_json()
-                phase: Optional[str] = None
-                try:
-                    phase = IssueState.load(self._owner, self._repo, self._issue_number).phase
-                except Exception:
-                    if isinstance(issue_json, dict):
-                        phase = str(issue_json.get("phase") or "").strip().lower() or None
+                if issue_json:
+                    workflow_name = issue_json.get("workflow", "default")
+                    engine = self._get_workflow_engine(workflow_name)
+                    current_phase = issue_json.get("phase", "design_draft")
 
-                if isinstance(issue_json, dict) and phase:
-                    complete, reason = self._is_phase_complete(issue_json, phase)
-                    if complete:
-                        self._log_to_file(viewer_log_path, f"")
-                        self._log_to_file(viewer_log_path, f"[COMPLETE] Phase marked complete via issue.json: {reason or '(no reason)'}")
-                        with self._lock:
-                            self._run_info["completed_via_state"] = True
-                            self._run_info["completion_reason"] = reason
-                        break
+                    next_phase = engine.evaluate_transitions(current_phase, issue_json)
+                    if next_phase:
+                        # Update phase in issue.json
+                        issue_json["phase"] = next_phase
+                        self._write_issue_json(issue_json)
+
+                        if engine.is_terminal(next_phase):
+                            self._log_to_file(viewer_log_path, f"")
+                            self._log_to_file(viewer_log_path, f"[COMPLETE] Reached terminal phase: {next_phase}")
+                            with self._lock:
+                                self._run_info["completed_via_state"] = True
+                                self._run_info["completion_reason"] = f"reached terminal phase: {next_phase}"
+                            break
+
+                        # Continue to next phase
+                        self._log_to_file(viewer_log_path, f"[TRANSITION] {current_phase} -> {next_phase}")
 
                 # Check for completion promise in SDK output
                 if self._check_completion_promise():
@@ -755,7 +778,33 @@ class JeevesRunManager:
         Returns the subprocess exit code.
         """
         issue_state = IssueState.load(self._owner, self._repo, self._issue_number)
-        prompt_path = resolve_prompt_path(issue_state.phase, self.prompts_dir)
+
+        # Get workflow engine
+        issue_json = self._read_issue_json() or {}
+        workflow_name = issue_json.get("workflow", "default")
+        engine = self._get_workflow_engine(workflow_name)
+        current_phase = issue_state.phase
+
+        phase_type = engine.get_phase_type(current_phase)
+
+        # Handle script phases without spawning AI
+        if phase_type == PhaseType.SCRIPT:
+            phase = engine.get_phase(current_phase)
+            self._log_to_file(viewer_log_path, f"[SCRIPT] Running script phase: {current_phase}")
+            result = run_script_phase(phase, self.work_dir, issue_json)
+
+            # Update status from script result
+            if result.status_updates:
+                status = issue_json.get("status", {})
+                status.update(result.status_updates)
+                issue_json["status"] = status
+                self._write_issue_json(issue_json)
+
+            self._log_to_file(viewer_log_path, f"[SCRIPT] Exit code: {result.exit_code}")
+            return result.exit_code
+
+        # Normal AI phase - resolve prompt using workflow engine
+        prompt_path = resolve_prompt_path(current_phase, self.prompts_dir, engine)
 
         env = os.environ.copy()
         cmd: List[str]
@@ -816,38 +865,18 @@ class JeevesRunManager:
         except Exception:
             return None
 
-    def _is_phase_complete(self, issue_json: Dict, phase: str) -> Tuple[bool, Optional[str]]:
-        """Determine completion based on issue.json state (no model magic string)."""
-        phase = (phase or "").strip().lower()
-
-        if phase == "design":
-            design_doc_path = issue_json.get("designDocPath") or issue_json.get("designDoc")
-            if not design_doc_path:
-                return False, None
-            doc_path = Path(str(design_doc_path))
-            if not doc_path.is_absolute():
-                doc_path = self.work_dir / doc_path
-            if doc_path.exists() and doc_path.is_file():
-                return True, f"designDocPath exists on disk: {design_doc_path}"
-            return False, None
-
-        if phase == "implement":
-            status = issue_json.get("status") or {}
-            if not isinstance(status, dict):
-                status = {}
-            if bool(status.get("implemented")) and bool(status.get("prCreated")) and bool(status.get("prDescriptionReady")):
-                return True, "status.implemented && status.prCreated && status.prDescriptionReady"
-            return False, None
-
-        if phase == "review":
-            status = issue_json.get("status") or {}
-            if not isinstance(status, dict):
-                status = {}
-            if bool(status.get("reviewClean")):
-                return True, "status.reviewClean == true"
-            return False, None
-
-        return False, f"unknown phase: {phase}"
+    def _write_issue_json(self, data: Dict) -> None:
+        """Write the issue.json file."""
+        issue_path = self.state_dir / "issue.json"
+        tmp_path = issue_path.with_suffix(".json.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+            tmp_path.replace(issue_path)
+        except Exception as e:
+            tmp_path.unlink(missing_ok=True)
+            raise RuntimeError(f"Failed to write issue.json: {e}") from e
 
     def _check_completion_promise(self) -> bool:
         """Check if the agent output contains the completion promise."""

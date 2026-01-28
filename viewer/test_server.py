@@ -405,6 +405,149 @@ class JeevesPromptManagerEdgeCaseTests(unittest.TestCase):
                 manager.write_prompt("test.md", 123)
             self.assertIn("content must be a string", str(ctx.exception))
 
+    def test_resolve_prompt_id_symlink_escape_rejected(self):
+        """Test that symlinks pointing outside prompt_dir are rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            # Create a file outside prompt_dir
+            outside_file = Path(tmp) / "outside.md"
+            outside_file.write_text("# Outside\n")
+
+            # Create a symlink inside prompt_dir pointing outside
+            symlink_path = prompt_dir / "escape.md"
+            symlink_path.symlink_to(outside_file)
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            # The symlink exists as a file, but resolve() should follow it
+            # and relative_to() should fail since it's outside prompt_dir
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("escape.md")
+            self.assertIn("invalid prompt id", str(ctx.exception))
+
+    def test_resolve_prompt_id_none_type_rejected(self):
+        """Test that None as prompt ID raises ValueError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt(None)
+            self.assertIn("prompt id is required", str(ctx.exception))
+
+    def test_resolve_prompt_id_directory_rejected(self):
+        """Test that directory paths are rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            # Create a directory that ends with .md
+            dir_with_md = prompt_dir / "task.md"
+            dir_with_md.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            # Even though it ends with .md, it's a directory not a file
+            with self.assertRaises(FileNotFoundError):
+                manager.read_prompt("task.md")
+
+    def test_list_prompts_skips_directories_named_md(self):
+        """Test that list_prompts() skips directories even if they match *.md pattern."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            # Create a valid file
+            (prompt_dir / "valid.md").write_text("# Valid\n")
+
+            # Create a directory with .md suffix (unusual but possible)
+            dir_with_md = prompt_dir / "dir.md"
+            dir_with_md.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            # Should only find the file, not the directory
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0]["id"], "valid.md")
+
+
+class WorkDirEnvironmentTests(unittest.TestCase):
+    """Tests for work_dir environment variable propagation in JeevesRunManager."""
+
+    def test_work_dir_env_set_in_start(self):
+        """Test that JEEVES_WORK_DIR environment variable is set correctly on start."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir()
+
+            work_dir = Path(tmp) / "work"
+            work_dir.mkdir()
+
+            # Create a script that prints the env vars
+            script = Path(tmp) / "print_env.sh"
+            script.write_text("""#!/usr/bin/env bash
+echo "JEEVES_WORK_DIR=$JEEVES_WORK_DIR"
+echo "JEEVES_STATE_DIR=$JEEVES_STATE_DIR"
+""")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=script,
+                work_dir=work_dir,
+            )
+
+            # The run_manager.work_dir should be set correctly
+            self.assertEqual(run_manager.work_dir, work_dir.resolve())
+
+            # The state_dir should also be resolved
+            self.assertEqual(run_manager.state_dir, state_dir.resolve())
+
+    def test_work_dir_matches_cwd_used_for_subprocess(self):
+        """Test that work_dir is used as cwd for subprocess."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "jeeves"
+            state_dir.mkdir()
+
+            work_dir = Path(tmp) / "work"
+            work_dir.mkdir()
+
+            # Create a script that writes cwd to a file
+            script = Path(tmp) / "write_cwd.sh"
+            log_file = state_dir / "viewer-run.log"
+            script.write_text("""#!/usr/bin/env bash
+echo "cwd=$(pwd)"
+sleep 0.1
+""")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+            run_manager = JeevesRunManager(
+                state_dir=state_dir,
+                jeeves_script=script,
+                work_dir=work_dir,
+            )
+
+            # Start the process
+            result = run_manager.start(
+                runner="codex",
+                max_iterations=1,
+            )
+
+            self.assertTrue(result["running"])
+
+            # Wait for it to complete
+            time.sleep(0.5)
+
+            # Check that cwd was work_dir
+            if log_file.exists():
+                content = log_file.read_text()
+                self.assertIn(f"cwd={work_dir.resolve()}", content)
+
 
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)

@@ -893,3 +893,63 @@ class SDKSSEEventTests(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class SDKDefaultTabTests(unittest.TestCase):
+    """Test that SDK tab is the default for new sessions (T4)."""
+
+    def test_frontend_default_tab_is_sdk(self):
+        """Frontend index.html initializes mainTab to 'sdk' by default."""
+        # Read the frontend HTML
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        self.assertTrue(index_html.exists(), "index.html should exist")
+
+        content = index_html.read_text()
+
+        # Check that the initial mainTab variable is set to 'sdk'
+        self.assertIn("let mainTab = 'sdk';", content,
+            "mainTab should be initialized to 'sdk' by default")
+
+    def test_frontend_fallback_tab_is_sdk(self):
+        """Frontend falls back to 'sdk' when localStorage has no saved tab."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that the fallback in setMainTab call is 'sdk'
+        self.assertIn("setMainTab(savedTab || 'sdk')", content,
+            "Should fall back to 'sdk' when no saved tab in localStorage")
+
+    def test_frontend_error_fallback_tab_is_sdk(self):
+        """Frontend falls back to 'sdk' when localStorage throws error."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that the catch block falls back to 'sdk'
+        # The pattern is: } catch (e) {\n            setMainTab('sdk');
+        self.assertRegex(content, r"catch\s*\(e\)\s*\{\s*\n\s*setMainTab\('sdk'\)",
+            "Should fall back to 'sdk' in catch block when localStorage fails")
+
+    def test_frontend_preserves_localstorage_key(self):
+        """Frontend still uses 'jeeves_viewer_main_tab' localStorage key."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that localStorage key is preserved for user preferences
+        self.assertIn("localStorage.getItem('jeeves_viewer_main_tab')", content,
+            "Should read from 'jeeves_viewer_main_tab' localStorage key")
+        self.assertIn("localStorage.setItem('jeeves_viewer_main_tab'", content,
+            "Should save to 'jeeves_viewer_main_tab' localStorage key")
+
+    def test_frontend_logs_tab_still_accessible(self):
+        """Frontend still allows switching to logs tab via click."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that logs tab click handler exists
+        self.assertIn("tabLogs.addEventListener('click', () => setMainTab('logs'))", content,
+            "Logs tab should have click handler to setMainTab('logs')")

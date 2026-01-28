@@ -1286,7 +1286,7 @@
         let promptLoadedId = null;
         let promptDirty = false;
         let promptListPromise = null;
-        let mainTab = 'logs';
+        let mainTab = 'sdk';
         let promptFiles = [];
         let sdkOutput = null;
         let sdkShowTimeline = false;
@@ -1704,9 +1704,9 @@
 
         try {
             const savedTab = localStorage.getItem('jeeves_viewer_main_tab');
-            setMainTab(savedTab || 'logs');
+            setMainTab(savedTab || 'sdk');
         } catch (e) {
-            setMainTab('logs');
+            setMainTab('sdk');
         }
         
         // Connection handling

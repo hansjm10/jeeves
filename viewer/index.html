@@ -1240,6 +1240,7 @@
             <div class="sdk-panel" id="sdkBody" style="display: none;">
                 <div class="sdk-toolbar">
                     <div class="sdk-stats" id="sdkStats">
+                        <span class="sdk-stat" id="sdkProviderStat" style="display: none;"><span class="sdk-stat-label">Provider:</span> <span id="sdkProvider">-</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Session:</span> <span id="sdkSessionId">-</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Messages:</span> <span id="sdkMessageCount">0</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Tool calls:</span> <span id="sdkToolCount">0</span></span>
@@ -1291,6 +1292,70 @@
         let sdkOutput = null;
         let sdkShowTimeline = false;
 
+        // Schema version detection and normalization functions
+        function detectSchemaVersion(data) {
+            // Detect schema version from the 'schema' field
+            // Returns 'v1', 'v2', or 'unknown'
+            if (!data || typeof data !== 'object') return 'unknown';
+            const schema = data.schema;
+            if (schema === 'jeeves.sdk.v1') return 'v1';
+            if (schema === 'jeeves.output.v2') return 'v2';
+            // Fallback: detect by structure
+            if (data.session && data.conversation) return 'v2';
+            if (data.session_id !== undefined && data.messages !== undefined) return 'v1';
+            return 'unknown';
+        }
+
+        function normalizeSdkOutput(data) {
+            // Normalize both v1 and v2 schemas to a common internal format for rendering.
+            // Returns an object with: session_id, messages, tool_calls, stats, success, error,
+            // schemaVersion, and provider (for v2).
+            if (!data || typeof data !== 'object') return null;
+
+            const version = detectSchemaVersion(data);
+
+            if (version === 'v2') {
+                // v2 schema: uses session.id, conversation, summary, provider
+                return {
+                    schemaVersion: 'v2',
+                    session_id: data.session?.id || null,
+                    messages: data.conversation || [],
+                    tool_calls: data.tool_calls || [],
+                    stats: {
+                        message_count: data.summary?.message_count || (data.conversation?.length || 0),
+                        tool_call_count: data.summary?.tool_call_count || (data.tool_calls?.length || 0),
+                        duration_seconds: data.summary?.duration_seconds || 0,
+                    },
+                    // v2 uses session.status enum: running, success, error, cancelled
+                    success: data.session?.status === 'success',
+                    error: data.session?.status === 'error' ? (data.summary?.errors?.[0]?.message || 'Error') : null,
+                    status: data.session?.status || 'running',
+                    provider: data.provider || null,
+                    started_at: data.session?.started_at,
+                    ended_at: data.session?.ended_at,
+                };
+            } else {
+                // v1 schema (default): uses session_id, messages, stats directly
+                return {
+                    schemaVersion: 'v1',
+                    session_id: data.session_id || null,
+                    messages: data.messages || [],
+                    tool_calls: data.tool_calls || [],
+                    stats: data.stats || {
+                        message_count: data.messages?.length || 0,
+                        tool_call_count: data.tool_calls?.length || 0,
+                        duration_seconds: 0,
+                    },
+                    success: data.success,
+                    error: data.error || null,
+                    status: data.success ? 'success' : (data.error ? 'error' : (data.ended_at ? 'complete' : 'running')),
+                    provider: null,  // v1 does not have provider info
+                    started_at: data.started_at,
+                    ended_at: data.ended_at,
+                };
+            }
+        }
+
         // SDK output functions
         async function loadSdkOutput() {
             try {
@@ -1305,7 +1370,8 @@
                 }
                 const data = await response.json();
                 if (data.ok && data.output) {
-                    sdkOutput = data.output;
+                    // Normalize v1/v2 schema to common format
+                    sdkOutput = normalizeSdkOutput(data.output);
                     renderSdkOutput();
                 }
             } catch (e) {
@@ -1314,6 +1380,8 @@
         }
 
         function renderSdkOutput() {
+            const providerStatEl = document.getElementById('sdkProviderStat');
+            const providerEl = document.getElementById('sdkProvider');
             const sessionEl = document.getElementById('sdkSessionId');
             const msgCountEl = document.getElementById('sdkMessageCount');
             const toolCountEl = document.getElementById('sdkToolCount');
@@ -1323,6 +1391,7 @@
             const timelineEl = document.getElementById('sdkTimeline');
 
             if (!sdkOutput) {
+                if (providerStatEl) providerStatEl.style.display = 'none';
                 sessionEl.textContent = '-';
                 msgCountEl.textContent = '0';
                 toolCountEl.textContent = '0';
@@ -1340,6 +1409,16 @@
                 return;
             }
 
+            // Show provider info for v2 schema
+            if (sdkOutput.schemaVersion === 'v2' && sdkOutput.provider) {
+                const providerName = sdkOutput.provider.name || 'unknown';
+                const providerVersion = sdkOutput.provider.version || '';
+                providerEl.textContent = providerVersion ? `${providerName} ${providerVersion}` : providerName;
+                if (providerStatEl) providerStatEl.style.display = 'inline';
+            } else {
+                if (providerStatEl) providerStatEl.style.display = 'none';
+            }
+
             // Update stats
             sessionEl.textContent = sdkOutput.session_id ? sdkOutput.session_id.substring(0, 12) + '...' : '-';
             msgCountEl.textContent = String(sdkOutput.stats?.message_count || sdkOutput.messages?.length || 0);
@@ -1348,12 +1427,16 @@
             const duration = sdkOutput.stats?.duration_seconds;
             durationEl.textContent = duration ? `${duration.toFixed(1)}s` : '-';
 
-            if (sdkOutput.success) {
+            // Handle v2 session.status or v1 success/error
+            if (sdkOutput.status === 'success' || sdkOutput.success) {
                 statusEl.textContent = 'Success';
                 statusEl.className = 'sdk-status-success';
-            } else if (sdkOutput.error) {
+            } else if (sdkOutput.status === 'error' || sdkOutput.error) {
                 statusEl.textContent = 'Error';
                 statusEl.className = 'sdk-status-error';
+            } else if (sdkOutput.status === 'cancelled') {
+                statusEl.textContent = 'Cancelled';
+                statusEl.className = 'sdk-status-pending';
             } else {
                 statusEl.textContent = 'Running';
                 statusEl.className = 'sdk-status-pending';
@@ -1754,12 +1837,15 @@
                 try {
                     const data = JSON.parse(event.data);
                     // Initialize or reset SDK output when a new session starts
+                    // SSE events currently use v1-style data, so mark as v1
                     sdkOutput = {
+                        schemaVersion: 'v1',
                         session_id: data.session_id,
                         status: data.status || 'running',
                         messages: [],
                         tool_calls: [],
-                        stats: { message_count: 0, tool_call_count: 0 }
+                        stats: { message_count: 0, tool_call_count: 0 },
+                        provider: null,  // v1 has no provider info
                     };
                     if (mainTab === 'sdk') renderSdkOutput();
                 } catch (e) {
@@ -1771,7 +1857,7 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (!sdkOutput) {
-                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                        sdkOutput = { schemaVersion: 'v1', messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 }, provider: null };
                     }
                     // Add the new message to the list
                     if (data.message) {
@@ -1798,7 +1884,7 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (!sdkOutput) {
-                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                        sdkOutput = { schemaVersion: 'v1', messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 }, provider: null };
                     }
                     // Add the completed tool call to the list
                     if (data.tool_use_id) {
@@ -1820,11 +1906,12 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (!sdkOutput) {
-                        sdkOutput = { messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 } };
+                        sdkOutput = { schemaVersion: 'v1', messages: [], tool_calls: [], stats: { message_count: 0, tool_call_count: 0 }, provider: null };
                     }
                     // Update session status and final stats
                     sdkOutput.success = data.status === 'success';
-                    sdkOutput.error = data.status === 'error';
+                    sdkOutput.status = data.status || 'success';
+                    sdkOutput.error = data.status === 'error' ? 'Error' : null;
                     if (data.summary) {
                         sdkOutput.stats = { ...sdkOutput.stats, ...data.summary };
                     }

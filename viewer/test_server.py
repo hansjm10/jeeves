@@ -1440,3 +1440,105 @@ class ClaudeSDKProviderTests(unittest.TestCase):
         self.assertIn("timestamp", msg_dict)
         # v1 uses string content, not list
         self.assertIsInstance(msg_dict.get("content"), str)
+
+
+class SchemaVersionDetectionTests(unittest.TestCase):
+    """Test schema version detection for v1 and v2 output files (Task T8)."""
+
+    def test_frontend_has_detect_schema_version_function(self):
+        """Frontend index.html should have detectSchemaVersion function."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        self.assertIn("function detectSchemaVersion(data)", content,
+            "Frontend should have detectSchemaVersion function")
+
+    def test_frontend_detect_v1_schema(self):
+        """Frontend should detect v1 schema from 'schema' field."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v1 detection logic exists
+        self.assertIn("jeeves.sdk.v1", content,
+            "Frontend should recognize 'jeeves.sdk.v1' schema identifier")
+
+    def test_frontend_detect_v2_schema(self):
+        """Frontend should detect v2 schema from 'schema' field."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v2 detection logic exists
+        self.assertIn("jeeves.output.v2", content,
+            "Frontend should recognize 'jeeves.output.v2' schema identifier")
+
+    def test_frontend_has_normalize_sdk_output_function(self):
+        """Frontend should have normalizeSdkOutput function for v1/v2 compatibility."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        self.assertIn("function normalizeSdkOutput(data)", content,
+            "Frontend should have normalizeSdkOutput function")
+
+    def test_frontend_normalizes_v2_conversation_to_messages(self):
+        """Frontend should convert v2 'conversation' array to 'messages' for rendering."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v2 conversation field is handled
+        self.assertIn(".conversation", content,
+            "Frontend should handle v2 'conversation' field")
+
+    def test_frontend_normalizes_v2_session_id(self):
+        """Frontend should extract session_id from v2 'session.id'."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v2 session.id is handled
+        self.assertIn("session.id", content,
+            "Frontend should handle v2 'session.id' field")
+
+    def test_frontend_normalizes_v2_summary_to_stats(self):
+        """Frontend should convert v2 'summary' to 'stats' for rendering."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v2 summary field is used
+        self.assertIn(".summary", content,
+            "Frontend should handle v2 'summary' field")
+
+    def test_frontend_shows_provider_info_for_v2(self):
+        """Frontend should display provider info for v2 schema."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that provider info display element exists
+        self.assertIn("sdkProvider", content,
+            "Frontend should have element for displaying provider info")
+
+    def test_frontend_stats_bar_has_provider_element(self):
+        """Frontend SDK stats bar should have element for provider info."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check for provider display in stats bar HTML
+        self.assertIn('id="sdkProvider"', content,
+            "Stats bar should have sdkProvider element")
+
+    def test_frontend_handles_v2_session_status(self):
+        """Frontend should handle v2 session.status enum values."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that v2 status enum values are handled
+        self.assertIn("session.status", content,
+            "Frontend should handle v2 'session.status' field")

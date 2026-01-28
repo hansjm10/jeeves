@@ -188,6 +188,224 @@ class WorkDirLogicTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
 
+class JeevesPromptManagerEdgeCaseTests(unittest.TestCase):
+    """Edge case tests for JeevesPromptManager with the new nested prompt support."""
+
+    def test_list_prompts_includes_nested_directories(self):
+        """Test that list_prompts() returns prompts from nested directories."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            # Create top-level prompt
+            (prompt_dir / "design.md").write_text("# Design\n")
+
+            # Create nested directory with prompts
+            task_dir = prompt_dir / "task"
+            task_dir.mkdir()
+            (task_dir / "implement.md").write_text("# Implement Task\n")
+            (task_dir / "review.md").write_text("# Review Task\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            # Should find all 3 prompts
+            ids = {p["id"] for p in prompts}
+            self.assertIn("design.md", ids)
+            self.assertIn("task/implement.md", ids)
+            self.assertIn("task/review.md", ids)
+            self.assertEqual(len(prompts), 3)
+
+    def test_list_prompts_uses_relative_path_as_id(self):
+        """Test that nested prompt IDs use relative paths from prompt_dir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            # Create deeply nested prompt
+            deep_dir = prompt_dir / "level1" / "level2"
+            deep_dir.mkdir(parents=True)
+            (deep_dir / "deep.md").write_text("# Deep Prompt\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0]["id"], "level1/level2/deep.md")
+            self.assertEqual(prompts[0]["name"], "level1/level2/deep.md")
+
+    def test_list_prompts_ignores_non_md_files(self):
+        """Test that list_prompts() only returns .md files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            (prompt_dir / "valid.md").write_text("# Valid\n")
+            (prompt_dir / "invalid.txt").write_text("Not a prompt\n")
+            (prompt_dir / "also-invalid.json").write_text("{}\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0]["id"], "valid.md")
+
+    def test_list_prompts_empty_directory(self):
+        """Test list_prompts() returns empty list for empty directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            self.assertEqual(prompts, [])
+
+    def test_list_prompts_nonexistent_directory(self):
+        """Test list_prompts() returns empty list for non-existent directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "nonexistent"
+
+            manager = JeevesPromptManager(prompt_dir)
+            prompts = manager.list_prompts()
+
+            self.assertEqual(prompts, [])
+
+    def test_resolve_prompt_id_nested_path_valid(self):
+        """Test that nested paths like task/implement.md are valid."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            task_dir = prompt_dir / "task"
+            task_dir.mkdir()
+            (task_dir / "implement.md").write_text("# Implement\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+            # Should not raise - nested path is valid
+            prompt = manager.read_prompt("task/implement.md")
+            self.assertEqual(prompt["content"], "# Implement\n")
+
+    def test_resolve_prompt_id_path_traversal_rejected(self):
+        """Test that path traversal with .. is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            (prompt_dir / "safe.md").write_text("# Safe\n")
+
+            # Create a file outside prompt_dir that could be accessed via traversal
+            (Path(tmp) / "secret.md").write_text("# Secret\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            # Should reject any path with ..
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("../secret.md")
+            self.assertIn("invalid prompt id", str(ctx.exception))
+
+            # Also reject .. in the middle of path
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("task/../../../secret.md")
+            self.assertIn("invalid prompt id", str(ctx.exception))
+
+    def test_resolve_prompt_id_backslash_rejected(self):
+        """Test that backslashes in prompt IDs are rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            (prompt_dir / "safe.md").write_text("# Safe\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("task\\implement.md")
+            self.assertIn("invalid prompt id", str(ctx.exception))
+
+    def test_resolve_prompt_id_empty_string_rejected(self):
+        """Test that empty prompt ID is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("")
+            self.assertIn("prompt id is required", str(ctx.exception))
+
+    def test_resolve_prompt_id_non_md_extension_rejected(self):
+        """Test that non-.md extensions are rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            (prompt_dir / "file.txt").write_text("Not a prompt\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.read_prompt("file.txt")
+            self.assertIn("invalid prompt id", str(ctx.exception))
+
+    def test_resolve_prompt_id_nonexistent_file_rejected(self):
+        """Test that non-existent prompt files raise FileNotFoundError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                manager.read_prompt("nonexistent.md")
+            self.assertIn("prompt not found", str(ctx.exception))
+
+    def test_write_prompt_nested_path_valid(self):
+        """Test that writing to nested paths works."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            task_dir = prompt_dir / "task"
+            task_dir.mkdir()
+            (task_dir / "implement.md").write_text("# Old Content\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+            result = manager.write_prompt("task/implement.md", "# New Content\n")
+
+            self.assertIn("# New Content", result["content"])
+            self.assertEqual((task_dir / "implement.md").read_text(), "# New Content\n")
+
+    def test_write_prompt_content_too_large_rejected(self):
+        """Test that content exceeding 512KB is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            (prompt_dir / "test.md").write_text("# Test\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            # Create content larger than 512KB
+            large_content = "x" * (512 * 1024 + 1)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.write_prompt("test.md", large_content)
+            self.assertIn("content too large", str(ctx.exception))
+
+    def test_write_prompt_non_string_content_rejected(self):
+        """Test that non-string content is rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_dir = Path(tmp) / "prompts"
+            prompt_dir.mkdir()
+            (prompt_dir / "test.md").write_text("# Test\n")
+
+            manager = JeevesPromptManager(prompt_dir)
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.write_prompt("test.md", None)
+            self.assertIn("content must be a string", str(ctx.exception))
+
+            with self.assertRaises(ValueError) as ctx:
+                manager.write_prompt("test.md", 123)
+            self.assertIn("content must be a string", str(ctx.exception))
+
+
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)
     path.chmod(path.stat().st_mode | stat.S_IEXEC)

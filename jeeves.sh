@@ -1119,18 +1119,18 @@ DEBUG_RUN_START_TS=""
 DEBUG_ENDED=0
 declare -A DEBUG_PHASE_COUNTS
 
-# Prompt templates stay with the script
-PROMPT_ISSUE_DESIGN_FILE="$SCRIPT_DIR/prompt.issue.design.md"
-PROMPT_ISSUE_IMPLEMENT_FILE="$SCRIPT_DIR/prompt.issue.implement.md"
-PROMPT_ISSUE_REVIEW_FILE="$SCRIPT_DIR/prompt.issue.review.md"
-PROMPT_ISSUE_CI_FILE="$SCRIPT_DIR/prompt.issue.ci.md"
-PROMPT_ISSUE_COVERAGE_FILE="$SCRIPT_DIR/prompt.issue.coverage.md"
-PROMPT_ISSUE_COVERAGE_FIX_FILE="$SCRIPT_DIR/prompt.issue.coverage.fix.md"
-PROMPT_ISSUE_SONAR_FILE="$SCRIPT_DIR/prompt.issue.sonar.md"
-PROMPT_ISSUE_QUESTIONS_FILE="$SCRIPT_DIR/prompt.issue.questions.md"
-PROMPT_ISSUE_TASK_IMPLEMENT_FILE="$SCRIPT_DIR/prompt.issue.task.implement.md"
-PROMPT_ISSUE_TASK_SPEC_REVIEW_FILE="$SCRIPT_DIR/prompt.issue.task.spec-review.md"
-PROMPT_ISSUE_TASK_QUALITY_REVIEW_FILE="$SCRIPT_DIR/prompt.issue.task.quality-review.md"
+# Prompt templates are in prompts/ directory at repo root
+PROMPT_ISSUE_DESIGN_FILE="$SCRIPT_DIR/prompts/issue.design.md"
+PROMPT_ISSUE_IMPLEMENT_FILE="$SCRIPT_DIR/prompts/issue.implement.md"
+PROMPT_ISSUE_REVIEW_FILE="$SCRIPT_DIR/prompts/issue.review.md"
+PROMPT_ISSUE_CI_FILE="$SCRIPT_DIR/prompts/issue.ci.md"
+PROMPT_ISSUE_COVERAGE_FILE="$SCRIPT_DIR/prompts/issue.coverage.md"
+PROMPT_ISSUE_COVERAGE_FIX_FILE="$SCRIPT_DIR/prompts/issue.coverage.fix.md"
+PROMPT_ISSUE_SONAR_FILE="$SCRIPT_DIR/prompts/issue.sonar.md"
+PROMPT_ISSUE_QUESTIONS_FILE="$SCRIPT_DIR/prompts/issue.questions.md"
+PROMPT_ISSUE_TASK_IMPLEMENT_FILE="$SCRIPT_DIR/prompts/issue.task.implement.md"
+PROMPT_ISSUE_TASK_SPEC_REVIEW_FILE="$SCRIPT_DIR/prompts/issue.task.spec-review.md"
+PROMPT_ISSUE_TASK_QUALITY_REVIEW_FILE="$SCRIPT_DIR/prompts/issue.task.quality-review.md"
 
 # Optional: append extra instructions to the selected prompt each iteration.
 # Useful for tooling (e.g. the viewer) that wants to inject per-run guidance without

@@ -66,7 +66,7 @@ except ImportError:
 
 
 class JeevesPromptManager:
-    """Read/write Jeeves prompt templates stored alongside jeeves.sh."""
+    """Read/write Jeeves prompt templates from prompts/ directory."""
 
     def __init__(self, prompt_dir: Path):
         self.prompt_dir = prompt_dir.resolve()
@@ -75,7 +75,7 @@ class JeevesPromptManager:
     def list_prompts(self) -> List[Dict]:
         prompts: List[Dict] = []
         try:
-            for path in sorted(self.prompt_dir.glob("prompt*.md")):
+            for path in sorted(self.prompt_dir.glob("*.md")):
                 if not path.is_file():
                     continue
                 stat = path.stat()
@@ -132,7 +132,7 @@ class JeevesPromptManager:
             raise ValueError("prompt id is required")
         if "/" in prompt_id or "\\" in prompt_id:
             raise ValueError("invalid prompt id")
-        if not prompt_id.startswith("prompt") or not prompt_id.endswith(".md"):
+        if not prompt_id.endswith(".md"):
             raise ValueError("invalid prompt id")
 
         path = (self.prompt_dir / prompt_id).resolve()
@@ -2077,8 +2077,10 @@ def main():
 
     state = JeevesState(str(state_dir))
     run_manager = JeevesRunManager(issue_ref=issue_ref)
-    jeeves_dir = Path(__file__).resolve().parent.parent
-    prompt_manager = JeevesPromptManager(jeeves_dir)
+    # prompts/ directory is at repo root: src/jeeves/viewer/server.py -> src/jeeves/ -> src/ -> repo root
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    prompts_dir = repo_root / "prompts"
+    prompt_manager = JeevesPromptManager(prompts_dir)
 
     def handler(*args_handler, **kwargs_handler):
         return JeevesViewerHandler(

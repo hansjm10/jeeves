@@ -263,7 +263,7 @@ class ViewerRunApiTests(unittest.TestCase):
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
         (self.prompts_dir / "task").mkdir(parents=True, exist_ok=True)
 
-        (self.tools_dir / "prompt.md").write_text("# Prompt\nHello\n")
+        (self.prompts_dir / "prompt.md").write_text("# Prompt\nHello\n")
         (self.prompts_dir / "design.md").write_text("# Design Prompt\n")
 
         self.init_script = self.tools_dir / "init-issue.sh"

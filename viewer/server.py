@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import signal
+import sys
 import time
 import copy
 import re
@@ -31,6 +32,28 @@ from typing import Dict, Optional, List, Tuple
 from urllib.parse import parse_qs, urlparse
 import select
 import subprocess
+
+# Import jeeves modules for the new CLI-based approach
+try:
+    from jeeves.paths import (
+        get_data_dir,
+        get_issue_state_dir,
+        get_worktree_path,
+        parse_issue_ref,
+        parse_repo_spec,
+    )
+    from jeeves.issue import (
+        IssueError,
+        IssueState,
+        create_issue_state,
+        list_issues as list_issues_from_jeeves,
+    )
+    from jeeves.repo import ensure_repo, RepoError
+    from jeeves.worktree import create_worktree, WorktreeError
+    from jeeves.config import GlobalConfig
+    JEEVES_CLI_AVAILABLE = True
+except ImportError:
+    JEEVES_CLI_AVAILABLE = False
 
 
 class JeevesPromptManager:
@@ -462,10 +485,29 @@ class JeevesState:
 class JeevesRunManager:
     """Start/stop Jeeves runs from the viewer (single run at a time)."""
 
-    def __init__(self, *, state_dir: Path, jeeves_script: Path, work_dir: Optional[Path] = None):
-        self.state_dir = state_dir.resolve()
-        self.work_dir = (work_dir or self.state_dir.parent).resolve()
-        self.jeeves_script = jeeves_script.resolve()
+    def __init__(self, *, issue_ref: Optional[str] = None, state_dir: Optional[Path] = None):
+        """Initialize the run manager.
+
+        Args:
+            issue_ref: Issue reference in "owner/repo#123" format.
+            state_dir: State directory (derived from issue_ref if not provided).
+        """
+        self.issue_ref = issue_ref
+        self._owner: Optional[str] = None
+        self._repo: Optional[str] = None
+        self._issue_number: Optional[int] = None
+
+        if issue_ref and JEEVES_CLI_AVAILABLE:
+            self._owner, self._repo, self._issue_number = parse_issue_ref(issue_ref)
+            self.state_dir = get_issue_state_dir(self._owner, self._repo, self._issue_number)
+            self.work_dir = get_worktree_path(self._owner, self._repo, self._issue_number)
+        elif state_dir:
+            self.state_dir = state_dir.resolve()
+            self.work_dir = self.state_dir.parent
+        else:
+            # Default empty state for when no issue is selected
+            self.state_dir = Path.cwd() / "jeeves"
+            self.work_dir = Path.cwd()
 
         self._lock = Lock()
         self._proc: Optional[subprocess.Popen] = None
@@ -482,7 +524,24 @@ class JeevesRunManager:
             "prompt_append_file": None,
             "viewer_log_file": str(self.state_dir / "viewer-run.log"),
             "last_error": None,
+            "issue_ref": issue_ref,
         }
+
+    def set_issue(self, issue_ref: str) -> None:
+        """Set the active issue.
+
+        Args:
+            issue_ref: Issue reference in "owner/repo#123" format.
+        """
+        if not JEEVES_CLI_AVAILABLE:
+            raise RuntimeError("Jeeves CLI modules not available")
+
+        self._owner, self._repo, self._issue_number = parse_issue_ref(issue_ref)
+        self.issue_ref = issue_ref
+        self.state_dir = get_issue_state_dir(self._owner, self._repo, self._issue_number)
+        self.work_dir = get_worktree_path(self._owner, self._repo, self._issue_number)
+        self._run_info["viewer_log_file"] = str(self.state_dir / "viewer-run.log")
+        self._run_info["issue_ref"] = issue_ref
 
     def get_status(self) -> Dict:
         with self._lock:
@@ -538,8 +597,11 @@ class JeevesRunManager:
             if self._proc is not None and self._proc.poll() is None:
                 raise RuntimeError("Jeeves is already running")
 
-            if not self.jeeves_script.exists():
-                raise FileNotFoundError(f"jeeves.sh not found at {self.jeeves_script}")
+            if not JEEVES_CLI_AVAILABLE:
+                raise RuntimeError("Jeeves CLI modules not available")
+
+            if not self.issue_ref:
+                raise ValueError("No issue selected. Use /api/issues/select first.")
 
             if runner not in {"auto", "codex", "claude", "opencode", "sdk"}:
                 raise ValueError("runner must be one of: auto, codex, claude, opencode, sdk")
@@ -557,6 +619,13 @@ class JeevesRunManager:
             if output_mode not in {"stream", "compact"}:
                 raise ValueError("output_mode must be one of: stream, compact")
 
+            # Verify worktree exists
+            if not self.work_dir.exists():
+                raise FileNotFoundError(
+                    f"Worktree not found at {self.work_dir}. "
+                    f"Run: jeeves init --repo {self._owner}/{self._repo} --issue {self._issue_number}"
+                )
+
             viewer_log_path = Path(self._run_info["viewer_log_file"])
             viewer_log_path.parent.mkdir(parents=True, exist_ok=True)
             viewer_log_path.write_text("")
@@ -569,8 +638,6 @@ class JeevesRunManager:
             env["JEEVES_MODE"] = mode
             env["JEEVES_OUTPUT_MODE"] = output_mode
             env["JEEVES_PRINT_PROMPT"] = "1" if print_prompt else "0"
-            # Ensure Python imports jeeves from installation dir, not work dir
-            env["PYTHONPATH"] = str(self.jeeves_script.parent)
 
             if runner != "auto":
                 env["JEEVES_RUNNER"] = runner
@@ -594,7 +661,12 @@ class JeevesRunManager:
                         continue
                     env[key] = value
 
-            cmd: List[str] = [str(self.jeeves_script), "--max-iterations", str(max_iterations_int)]
+            # Build command using `python -m jeeves.cli run`
+            cmd: List[str] = [
+                sys.executable, "-m", "jeeves.cli", "run",
+                self.issue_ref,
+                "--max-iterations", str(max_iterations_int),
+            ]
             if runner != "auto":
                 cmd += ["--runner", runner]
 
@@ -628,6 +700,7 @@ class JeevesRunManager:
                 "prompt_append_file": str(append_path) if append_path else None,
                 "viewer_log_file": str(viewer_log_path),
                 "last_error": None,
+                "issue_ref": self.issue_ref,
             }
 
             Thread(target=self._wait_for_exit, args=(proc,), daemon=True).start()
@@ -676,7 +749,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
     """HTTP handler for Jeeves viewer"""
 
     protocol_version = "HTTP/1.1"
-    
+
     def __init__(
         self,
         *args,
@@ -684,14 +757,12 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         run_manager: JeevesRunManager,
         prompt_manager: JeevesPromptManager,
         allow_remote_run: bool = False,
-        init_issue_script: Optional[Path] = None,
         **kwargs,
     ):
         self.state = state
         self.run_manager = run_manager
         self.prompt_manager = prompt_manager
         self.allow_remote_run = allow_remote_run
-        self.init_issue_script = init_issue_script
         super().__init__(*args, **kwargs)
 
     def handle(self):
@@ -763,6 +834,9 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/init/issue":
             self._handle_init_issue()
             return
+        if path == "/api/issues/select":
+            self._handle_select_issue()
+            return
 
         self.send_error(404, "Not Found")
 
@@ -805,6 +879,28 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             return
 
         body = self._read_json_body()
+
+        # If issue_ref is provided, select that issue first
+        issue_ref = body.get("issue_ref")
+        if issue_ref:
+            try:
+                self.run_manager.set_issue(issue_ref)
+                # Update the state tracker to point to the new state dir
+                self.state.state_dir = self.run_manager.state_dir
+                self.state.prd_file = self.state.state_dir / "prd.json"
+                self.state.issue_file = self.state.state_dir / "issue.json"
+                self.state.progress_file = self.state.state_dir / "progress.txt"
+                self.state.last_run_log = self.state.state_dir / "last-run.log"
+                self.state.last_message = self.state.state_dir / "last-message.txt"
+                self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
+                self.state.open_questions = self.state.state_dir / "open-questions.md"
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=400)
+                return
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"Failed to select issue: {e}", "run": self.run_manager.get_status()}, status=500)
+                return
+
         runner = body.get("runner", "auto")
         max_iterations = body.get("max_iterations", 10)
         mode = body.get("mode", "auto")
@@ -828,6 +924,9 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             return
         except ValueError as e:
             self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=400)
+            return
+        except FileNotFoundError as e:
+            self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=404)
             return
         except Exception as e:
             self._send_json({"ok": False, "error": f"Failed to start: {e}", "run": self.run_manager.get_status()}, status=500)
@@ -1159,11 +1258,15 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         )
 
     def _handle_init_issue_script_info(self):
-        script = self.init_issue_script
-        if not script:
-            self._send_json({"ok": False, "error": "init-issue script not configured"}, status=404)
-            return
-        self._send_json({"ok": True, "script": {"path": str(script), "exists": script.exists()}})
+        """Return info about init capability (for backward compatibility)."""
+        self._send_json({
+            "ok": True,
+            "script": {
+                "path": "jeeves.cli",
+                "exists": JEEVES_CLI_AVAILABLE,
+                "method": "python-module"
+            }
+        })
 
     def _handle_init_issue(self):
         if not self.allow_remote_run and not self._is_local_request():
@@ -1180,58 +1283,204 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Cannot init while Jeeves is running."}, status=409)
             return
 
-        script = self.init_issue_script
-        if not script or not script.exists():
-            self._send_json({"ok": False, "error": "init-issue.sh not found"}, status=500)
+        if not JEEVES_CLI_AVAILABLE:
+            self._send_json({"ok": False, "error": "Jeeves CLI modules not available"}, status=500)
             return
 
         body = self._read_json_body()
 
-        issue = (body.get("issue") or "").strip()
-        design_doc = (body.get("design_doc") or "").strip()
-        repo = (body.get("repo") or "").strip()
-        branch = (body.get("branch") or "").strip()
+        issue_str = (body.get("issue") or "").strip()
+        design_doc = (body.get("design_doc") or "").strip() or None
+        repo_str = (body.get("repo") or "").strip()
+        branch = (body.get("branch") or "").strip() or None
         force = bool(body.get("force", False))
 
-        if not issue:
+        if not issue_str:
             self._send_json({"ok": False, "error": "issue is required"}, status=400)
             return
 
-        cmd: List[str] = [str(script), "--state-dir", str(self.run_manager.state_dir), "--issue", issue]
-        if design_doc:
-            cmd += ["--design-doc", design_doc]
-        if repo:
-            cmd += ["--repo", repo]
-        if branch:
-            cmd += ["--branch", branch]
-        if force:
-            cmd += ["--force"]
+        if not repo_str:
+            self._send_json({"ok": False, "error": "repo is required"}, status=400)
+            return
+
+        # Parse issue number
+        try:
+            issue_number = int(issue_str)
+        except ValueError:
+            self._send_json({"ok": False, "error": f"Invalid issue number: {issue_str}"}, status=400)
+            return
+
+        # Parse repo spec
+        try:
+            owner, repo_name = parse_repo_spec(repo_str)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+            return
+
+        output_lines = []
 
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(self.run_manager.work_dir),
-                capture_output=True,
-                text=True,
-                timeout=30,
+            # Step 1: Clone/fetch repository
+            output_lines.append(f"Ensuring repository {owner}/{repo_name} is cloned...")
+            repo_path = ensure_repo(owner, repo_name, fetch=True)
+            output_lines.append(f"  Repository: {repo_path}")
+
+            # Step 2: Create issue state
+            output_lines.append("Creating issue state...")
+            state = create_issue_state(
+                owner=owner,
+                repo=repo_name,
+                issue_number=issue_number,
+                branch=branch,
+                design_doc=design_doc,
+                fetch_metadata=True,
+                force=force,
             )
-        except subprocess.TimeoutExpired:
-            self._send_json({"ok": False, "error": "init-issue.sh timed out"}, status=504)
-            return
+            output_lines.append(f"  State: {state.state_dir}")
+            if state.issue.title:
+                output_lines.append(f"  Title: {state.issue.title}")
+
+            # Step 3: Create worktree
+            output_lines.append("Creating git worktree...")
+            worktree_path = create_worktree(
+                owner=owner,
+                repo=repo_name,
+                issue_number=issue_number,
+                branch=state.branch_name,
+            )
+            output_lines.append(f"  Worktree: {worktree_path}")
+            output_lines.append(f"  Branch: {state.branch_name}")
+
+            # Set this as the active issue
+            issue_ref = f"{owner}/{repo_name}#{issue_number}"
+            self.run_manager.set_issue(issue_ref)
+
+            # Update the state tracker
+            self.state.state_dir = self.run_manager.state_dir
+            self.state.prd_file = self.state.state_dir / "prd.json"
+            self.state.issue_file = self.state.state_dir / "issue.json"
+            self.state.progress_file = self.state.state_dir / "progress.txt"
+            self.state.last_run_log = self.state.state_dir / "last-run.log"
+            self.state.last_message = self.state.state_dir / "last-message.txt"
+            self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
+            self.state.open_questions = self.state.state_dir / "open-questions.md"
+
+            output_lines.append("")
+            output_lines.append(f"Ready! Run: jeeves run {issue_ref}")
+
+            self._send_json({
+                "ok": True,
+                "issue_ref": issue_ref,
+                "state_dir": str(state.state_dir),
+                "worktree": str(worktree_path),
+                "branch": state.branch_name,
+                "issue_title": state.issue.title,
+                "output": "\n".join(output_lines),
+            })
+
+        except IssueError as e:
+            output_lines.append(f"Error: {e}")
+            self._send_json({
+                "ok": False,
+                "error": str(e),
+                "output": "\n".join(output_lines),
+            }, status=400)
+
+        except RepoError as e:
+            output_lines.append(f"Error: {e}")
+            self._send_json({
+                "ok": False,
+                "error": f"Repository error: {e}",
+                "output": "\n".join(output_lines),
+            }, status=400)
+
+        except WorktreeError as e:
+            output_lines.append(f"Error: {e}")
+            self._send_json({
+                "ok": False,
+                "error": f"Worktree error: {e}",
+                "output": "\n".join(output_lines),
+            }, status=400)
+
         except Exception as e:
-            self._send_json({"ok": False, "error": f"Failed to run init-issue.sh: {e}"}, status=500)
+            output_lines.append(f"Error: {e}")
+            self._send_json({
+                "ok": False,
+                "error": f"Failed to initialize: {e}",
+                "output": "\n".join(output_lines),
+            }, status=500)
+
+    def _handle_select_issue(self):
+        """Handle POST /api/issues/select - Select an issue as active."""
+        if not self.allow_remote_run and not self._is_local_request():
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "Issue selection is only allowed from localhost.",
+                },
+                status=403,
+            )
             return
 
-        output = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
-        self._send_json(
-            {
-                "ok": proc.returncode == 0,
-                "returncode": proc.returncode,
-                "command": cmd,
-                "output": output.strip(),
-            },
-            status=200 if proc.returncode == 0 else 400,
-        )
+        if self.run_manager.get_status().get("running"):
+            self._send_json({"ok": False, "error": "Cannot change issue while Jeeves is running."}, status=409)
+            return
+
+        if not JEEVES_CLI_AVAILABLE:
+            self._send_json({"ok": False, "error": "Jeeves CLI modules not available"}, status=500)
+            return
+
+        body = self._read_json_body()
+        issue_ref = body.get("issue_ref", "").strip()
+
+        if not issue_ref:
+            self._send_json({"ok": False, "error": "issue_ref is required"}, status=400)
+            return
+
+        try:
+            # Parse and validate
+            owner, repo, issue_number = parse_issue_ref(issue_ref)
+
+            # Check if issue exists
+            state_dir = get_issue_state_dir(owner, repo, issue_number)
+            if not (state_dir / "issue.json").exists():
+                self._send_json({
+                    "ok": False,
+                    "error": f"Issue not initialized. Run: jeeves init --repo {owner}/{repo} --issue {issue_number}"
+                }, status=404)
+                return
+
+            # Set as active
+            self.run_manager.set_issue(issue_ref)
+
+            # Update the state tracker
+            self.state.state_dir = self.run_manager.state_dir
+            self.state.prd_file = self.state.state_dir / "prd.json"
+            self.state.issue_file = self.state.state_dir / "issue.json"
+            self.state.progress_file = self.state.state_dir / "progress.txt"
+            self.state.last_run_log = self.state.state_dir / "last-run.log"
+            self.state.last_message = self.state.state_dir / "last-message.txt"
+            self.state.coverage_failures = self.state.state_dir / "coverage-failures.md"
+            self.state.open_questions = self.state.state_dir / "open-questions.md"
+
+            # Load issue state to return info
+            state = IssueState.load(owner, repo, issue_number)
+
+            self._send_json({
+                "ok": True,
+                "issue_ref": issue_ref,
+                "state_dir": str(state_dir),
+                "worktree": str(get_worktree_path(owner, repo, issue_number)),
+                "branch": state.branch_name,
+                "issue_title": state.issue.title,
+            })
+
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+        except IssueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=404)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"Failed to select issue: {e}"}, status=500)
 
     def _get_sdk_output_path(self) -> Path:
         """Get the SDK output file path."""
@@ -1284,18 +1533,27 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
     def _handle_list_issues(self):
         """Handle GET /api/issues - List all issues from central data directory."""
-        issues = list_central_issues()
-        data_dir = get_jeeves_data_dir()
+        if JEEVES_CLI_AVAILABLE:
+            issues = list_issues_from_jeeves()
+            data_dir = get_data_dir()
+        else:
+            issues = list_central_issues()
+            data_dir = get_jeeves_data_dir()
         self._send_json({
             "ok": True,
             "issues": issues,
             "data_dir": str(data_dir) if data_dir else None,
             "count": len(issues),
+            "current_issue": self.run_manager.issue_ref,
         })
 
     def _handle_data_dir_info(self):
         """Handle GET /api/data-dir - Get info about the central data directory."""
-        data_dir = get_jeeves_data_dir()
+        if JEEVES_CLI_AVAILABLE:
+            data_dir = get_data_dir()
+        else:
+            data_dir = get_jeeves_data_dir()
+
         if not data_dir:
             self._send_json({
                 "ok": False,
@@ -1310,6 +1568,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             "repos_dir": str(data_dir / "repos"),
             "worktrees_dir": str(data_dir / "worktrees"),
             "issues_dir": str(data_dir / "issues"),
+            "cli_available": JEEVES_CLI_AVAILABLE,
         }
 
         if data_dir.exists():
@@ -1517,73 +1776,10 @@ def list_central_issues() -> List[Dict]:
     return sorted(results, key=lambda x: x.get("mtime", 0), reverse=True)
 
 
-def find_state_dir() -> Optional[str]:
-    """Find Jeeves state directory (or suggest a default).
-
-    Priority:
-    1. Legacy mode (JEEVES_WORK_DIR, JEEVES_STATE_DIR, or local ./jeeves)
-    2. Git root jeeves directory
-    3. Central data directory (if issues exist)
-    4. Fallback to git root or current dir
-    """
-    cwd = Path.cwd()
-    fallback: Optional[str] = None
-
-    # Check legacy environment variables first
-    if os.environ.get("JEEVES_STATE_DIR"):
-        return os.environ["JEEVES_STATE_DIR"]
-
-    if os.environ.get("JEEVES_WORK_DIR"):
-        work_dir = Path(os.environ["JEEVES_WORK_DIR"])
-        state_dir = work_dir / "jeeves"
-        if state_dir.exists():
-            return str(state_dir)
-
-    # Try git root first (matches jeeves.sh behavior)
-    try:
-        root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], stderr=subprocess.DEVNULL).decode().strip()
-        git_state_dir = Path(root) / "jeeves"
-        fallback = str(git_state_dir)
-        # Verify it looks like a state dir (has logs or config) or just exists at root
-        if git_state_dir.exists():
-            return str(git_state_dir)
-    except Exception:
-        pass
-
-    # Check current directory
-    state_dir = cwd / "jeeves"
-    if state_dir.exists() and (state_dir / "last-run.log").exists():
-        return str(state_dir)
-
-    # Check parent directories
-    for parent in [cwd] + list(cwd.parents):
-        state_dir = parent / "jeeves"
-        if state_dir.exists():
-            # Verify it has key files to avoid confusing with scripts/jeeves
-            if (state_dir / "last-run.log").exists() or \
-               (state_dir / "issue.json").exists() or \
-               (state_dir / "prd.json").exists():
-                return str(state_dir)
-
-    # Fallback to any jeeves dir if strict check fails
-    if (cwd / "jeeves").exists():
-        return str(cwd / "jeeves")
-
-    for parent in [cwd] + list(cwd.parents):
-        state_dir = parent / "jeeves"
-        if state_dir.exists():
-             return str(state_dir)
-
-    # No existing state dir found; suggest a default location so the viewer can still run.
-    if fallback:
-        return fallback
-    return str(cwd / "jeeves")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Jeeves Real-time Viewer")
     parser.add_argument("--port", "-p", type=int, default=8080, help="Port to serve on")
-    parser.add_argument("--state-dir", "-s", type=str, help="Path to Jeeves state directory")
+    parser.add_argument("--issue", "-i", type=str, help="Issue to work on (owner/repo#123)")
     parser.add_argument(
         "--allow-remote-run",
         action="store_true",
@@ -1594,41 +1790,73 @@ def main():
     env_allow_remote = str(os.environ.get("JEEVES_VIEWER_ALLOW_REMOTE_RUN", "")).strip().lower() in {"1", "true", "yes", "on"}
     if env_allow_remote:
         args.allow_remote_run = True
-    
-    state_dir = args.state_dir or find_state_dir()
-    if not state_dir:
-        print("Error: Could not find Jeeves state directory")
-        print("Run this from your project directory or specify --state-dir")
+
+    if not JEEVES_CLI_AVAILABLE:
+        print("Error: Jeeves CLI modules not available.")
+        print("Make sure the jeeves package is installed or in PYTHONPATH.")
         return 1
 
-    try:
-        Path(state_dir).mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        print(f"Error: Could not create state directory: {state_dir}")
-        print(f"Reason: {e}")
-        return 1
-    
+    # Determine initial issue
+    issue_ref = args.issue
+    state_dir = None
+
+    if issue_ref:
+        try:
+            owner, repo, issue_number = parse_issue_ref(issue_ref)
+            state_dir = get_issue_state_dir(owner, repo, issue_number)
+            if not (state_dir / "issue.json").exists():
+                print(f"Warning: Issue {issue_ref} not initialized.")
+                print(f"Run: jeeves init --repo {owner}/{repo} --issue {issue_number}")
+                issue_ref = None
+                state_dir = None
+        except ValueError as e:
+            print(f"Error: Invalid issue reference: {e}")
+            return 1
+
+    # If no issue specified, try to find the most recent one
+    if not issue_ref:
+        issues = list_issues_from_jeeves()
+        if issues:
+            # Sort by mtime if available, otherwise use first
+            sorted_issues = sorted(
+                issues,
+                key=lambda x: Path(x.get("state_dir", "")).stat().st_mtime if Path(x.get("state_dir", "")).exists() else 0,
+                reverse=True
+            )
+            if sorted_issues:
+                latest = sorted_issues[0]
+                issue_ref = f"{latest['owner']}/{latest['repo']}#{latest['issue_number']}"
+                state_dir = Path(latest["state_dir"])
+                print(f"  Auto-selected most recent issue: {issue_ref}")
+
+    # Create a default state dir if none found
+    if not state_dir:
+        data_dir = get_data_dir()
+        state_dir = data_dir / "viewer-default"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
     print("")
     print("  Jeeves Real-time Viewer")
     print("  " + "=" * 40)
-    print(f"  State directory: {state_dir}")
+    print(f"  CLI available: {JEEVES_CLI_AVAILABLE}")
+    print(f"  Data directory: {get_data_dir()}")
+    if issue_ref:
+        print(f"  Active issue: {issue_ref}")
+        print(f"  State directory: {state_dir}")
+    else:
+        print("  No issue selected. Use /api/init/issue or /api/issues/select")
     print(f"  Server: http://localhost:{args.port}")
     print("")
     print("  Press Ctrl+C to stop")
     print("")
-    
+
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
-    state = JeevesState(state_dir)
-    run_manager = JeevesRunManager(
-        state_dir=Path(state_dir),
-        jeeves_script=(Path(__file__).resolve().parent.parent / "jeeves.sh"),
-        work_dir=Path(state_dir).resolve().parent,
-    )
+
+    state = JeevesState(str(state_dir))
+    run_manager = JeevesRunManager(issue_ref=issue_ref)
     jeeves_dir = Path(__file__).resolve().parent.parent
     prompt_manager = JeevesPromptManager(jeeves_dir)
-    init_issue_script = jeeves_dir / "init-issue.sh"
-    
+
     def handler(*args_handler, **kwargs_handler):
         return JeevesViewerHandler(
             *args_handler,
@@ -1636,19 +1864,18 @@ def main():
             run_manager=run_manager,
             prompt_manager=prompt_manager,
             allow_remote_run=args.allow_remote_run,
-            init_issue_script=init_issue_script,
             **kwargs_handler,
         )
-    
+
     # SSE connections are long-lived; use a threaded server so one connected
     # dashboard doesn't block all other HTTP requests.
     server = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
-    
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
-    
+
     return 0
 
 

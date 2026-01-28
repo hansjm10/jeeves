@@ -669,12 +669,14 @@ class JeevesRunManager:
                         continue
                     env[key] = value
 
-            # Build command using `python -m jeeves.cli run`
-            cmd: List[str] = [
-                sys.executable, "-m", "jeeves.cli", "run",
-                self.issue_ref,
-                "--max-iterations", str(max_iterations_int),
-            ]
+            # Find jeeves.sh (in the same directory as the jeeves package)
+            jeeves_sh = Path(__file__).resolve().parent.parent / "jeeves.sh"
+            if not jeeves_sh.exists():
+                raise FileNotFoundError(f"jeeves.sh not found at {jeeves_sh}")
+
+            # Build command using jeeves.sh directly
+            # The env vars JEEVES_STATE_DIR and JEEVES_WORK_DIR tell it where to run
+            cmd: List[str] = [str(jeeves_sh), "--max-iterations", str(max_iterations_int)]
             if runner != "auto":
                 cmd += ["--runner", runner]
 

@@ -31,26 +31,30 @@ Modern AI coding assistants are powerful but stateless. They lose context betwee
 - [Codex CLI](https://github.com/openai/codex), [Claude CLI](https://claude.ai), or [Opencode CLI](https://opencode.ai)
 - `jq` for JSON processing
 - `gh` CLI (optional, for GitHub integration)
+- Python 3.9+ (for viewer and Python CLI)
 
 ### Installation
 
 ```bash
-# Clone Jeeves into your project
-git clone https://github.com/hansjm10/jeeves.git scripts/jeeves
-chmod +x scripts/jeeves/jeeves.sh
+# Clone the repository
+git clone https://github.com/hansjm10/jeeves.git
+cd jeeves
+
+# Install Python package (editable mode)
+pip install -e .
 ```
 
 ### Basic Usage
 
 ```bash
-# Initialize from a GitHub issue
-./scripts/jeeves/init-issue.sh --issue 42
+# Initialize from a GitHub issue (using init script)
+./scripts/init-issue.sh --issue 42
 
-# Run Jeeves (default: 10 iterations)
-./scripts/jeeves/jeeves.sh
+# Run Jeeves using the legacy bash CLI
+./scripts/legacy/jeeves.sh --max-iterations 10
 
-# Or specify max iterations
-./scripts/jeeves/jeeves.sh --max-iterations 20
+# Or use the Python CLI
+jeeves run --max-iterations 10
 ```
 
 ## Workflow Phases
@@ -64,7 +68,65 @@ Jeeves advances through these phases automatically based on completion status:
 5. **Sonar** — Addresses static analysis findings (when configured)
 6. **CI** — Verifies all GitHub Actions checks pass
 
-Each phase updates `jeeves/issue.json` status flags, allowing Jeeves to resume from any point.
+Each phase updates `.jeeves/issue.json` status flags, allowing Jeeves to resume from any point.
+
+## Repository Structure
+
+```
+jeeves/
+├── README.md                    # This file
+├── CLAUDE.md / AGENTS.md        # Agent instructions
+├── pyproject.toml               # Python package configuration
+├── LICENSE
+│
+├── src/jeeves/                  # Core Python package
+│   ├── __init__.py
+│   ├── cli.py                   # Python CLI entry point
+│   ├── core/                    # Core logic modules
+│   │   ├── issue.py             # Issue management
+│   │   ├── repo.py              # Repository operations
+│   │   ├── browse.py            # Issue browsing
+│   │   ├── config.py            # Configuration handling
+│   │   ├── paths.py             # Path utilities
+│   │   └── worktree.py          # Git worktree management
+│   ├── runner/                  # Agent runners
+│   │   ├── config.py
+│   │   ├── output.py
+│   │   ├── sdk_runner.py
+│   │   └── providers/           # Provider implementations
+│   └── viewer/                  # Web dashboard
+│       ├── server.py            # HTTP server
+│       ├── tui.py               # Terminal UI
+│       └── static/              # Static files
+│           └── index.html
+│
+├── prompts/                     # Prompt templates
+│   ├── issue.design.md
+│   ├── issue.implement.md
+│   ├── issue.review.md
+│   ├── issue.coverage.md
+│   ├── issue.ci.md
+│   └── ...                      # Other phase prompts
+│
+├── scripts/                     # Helper scripts
+│   ├── init-issue.sh            # Initialize issue from GitHub
+│   ├── create-issue-from-design-doc.sh
+│   ├── sonarcloud-issues.sh
+│   └── legacy/                  # Deprecated scripts
+│       ├── jeeves.sh            # Legacy bash CLI
+│       └── jeeves.test.sh
+│
+├── tests/                       # All tests
+│   ├── test_*.py
+│   └── conftest.py
+│
+├── docs/                        # Documentation
+│
+├── examples/                    # Example configurations
+│   └── issue.json.example
+│
+└── skills/                      # Skills directory
+```
 
 ## Configuration
 
@@ -73,7 +135,7 @@ Each phase updates `jeeves/issue.json` status flags, allowing Jeeves to resume f
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JEEVES_RUNNER` | `auto` | Agent runner: `codex`, `claude`, `opencode`, or `auto` |
-| `JEEVES_STATE_DIR` | `./jeeves` | Directory for state files |
+| `JEEVES_STATE_DIR` | `~/.local/share/jeeves` | Directory for state files |
 | `JEEVES_OUTPUT_MODE` | `compact` | Output mode: `compact` or `stream` |
 | `JEEVES_METRICS` | `1` | Enable JSONL metrics logging |
 | `JEEVES_DEBUG` | `1` | Enable debug JSONL per phase |
@@ -104,7 +166,9 @@ Each phase updates `jeeves/issue.json` status flags, allowing Jeeves to resume f
 ### Web Dashboard
 
 ```bash
-python3 viewer/server.py
+# Start the viewer server
+python -m jeeves.viewer.server
+
 # Open http://localhost:8080
 ```
 
@@ -120,19 +184,21 @@ Jeeves generates comprehensive logs for analysis:
 
 ```bash
 # Latest run metrics
-cat jeeves/current-run.json
+cat .jeeves/current-run.json
 
 # Per-phase debug logs
-ls jeeves/.runs/<runId>/debug-*.jsonl
+ls .jeeves/.runs/<runId>/debug-*.jsonl
 
 # Aggregate metrics
-jq -s 'group_by(.phase) | map({phase:.[0].phase, count:length})' jeeves/metrics.jsonl
+jq -s 'group_by(.phase) | map({phase:.[0].phase, count:length})' .jeeves/metrics.jsonl
 ```
 
-## Architecture
+## State Files
+
+Jeeves maintains state in the `.jeeves/` directory within your project:
 
 ```
-jeeves/
+.jeeves/
 ├── issue.json          # Current issue configuration and status
 ├── progress.txt        # Persistent learnings across iterations
 ├── last-run.log        # Raw output from last agent session
@@ -145,6 +211,24 @@ Each iteration spawns a fresh agent session with clean context. Memory persists 
 - `progress.txt` (patterns and learnings)
 - `issue.json` (workflow state)
 
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run with coverage
+pytest tests/ --cov=src/jeeves
+```
+
+### Installing for Development
+
+```bash
+pip install -e .
+```
+
 ## Integration
 
 ### GitHub Actions
@@ -152,7 +236,7 @@ Each iteration spawns a fresh agent session with clean context. Memory persists 
 ```yaml
 - name: Run Jeeves
   run: |
-    ./scripts/jeeves/jeeves.sh --max-iterations 5
+    ./scripts/legacy/jeeves.sh --max-iterations 5
   env:
     JEEVES_RUNNER: claude
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

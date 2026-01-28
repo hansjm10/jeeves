@@ -12,6 +12,7 @@ This package contains the core functionality:
 
 from . import browse
 from . import config
+from . import engine
 from . import guards
 from . import issue
 from . import paths
@@ -21,6 +22,7 @@ from . import worktree
 __all__ = [
     "browse",
     "config",
+    "engine",
     "guards",
     "issue",
     "paths",

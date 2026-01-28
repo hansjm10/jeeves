@@ -95,12 +95,39 @@ For any story that changes UI, verify it works in the browser if you have browse
 
 If no browser tools are available, note in your progress report that manual browser verification is needed.
 
-## Stop Condition
+## Iteration Pattern (Ralph Wiggum)
 
-After completing all phases, reply with:
-<promise>COMPLETE</promise>
+Jeeves uses an iteration pattern where each run is a **fresh context window**:
 
-If there are still phases remaining, end your response normally (another iteration will pick up the next phase).
+1. The viewer spawns you as a fresh subprocess (new context, no prior messages)
+2. You read `progress.txt` to understand what happened in prior iterations
+3. You work on the current phase
+4. You write your progress to `progress.txt` for the next iteration
+5. If complete, output `<promise>COMPLETE</promise>` to stop the loop
+6. If not complete, end normally and the next iteration continues
+
+**This means:**
+- You start fresh each iteration - no memory of prior runs except via files
+- `progress.txt` is your handoff mechanism - write learnings there
+- The `## Codebase Patterns` section in `progress.txt` is especially important
+- Multiple iterations can work on the same phase if needed
+
+## Completion Signal
+
+When ALL tasks for the current phase are complete:
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with final status
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+**When NOT to output the promise:**
+- Tests are failing
+- Implementation is incomplete
+- You hit errors or blockers
+- More work is needed
+
+If incomplete, write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.
 
 ## Important
 
@@ -108,3 +135,4 @@ If there are still phases remaining, end your response normally (another iterati
 - Commit frequently
 - Keep CI green
 - Read the Codebase Patterns section in progress.txt before starting
+- Write learnings to progress.txt so future iterations benefit

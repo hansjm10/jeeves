@@ -49,6 +49,38 @@ The viewer provides:
 - Prompts are in `prompts/issue.*.md` and can be edited in the viewer.
 - Minimal run artifacts: `issue.json`, `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
 
+## Iteration Pattern (Ralph Wiggum)
+
+The viewer implements the "Ralph Wiggum" iteration pattern for fresh context runs:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Outer Loop (JeevesRunManager in viewer/server.py)  │
+│  for i in range(max_iterations):                    │
+│      spawn sdk_runner subprocess (fresh context)    │
+│      if output contains <promise>COMPLETE</promise>:│
+│          break                                      │
+│      # Handoff via progress.txt (agent writes it)   │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key concepts:**
+- Each iteration is a **fresh subprocess** with a new context window (no context bloat)
+- The SDK runner stays simple: one run, no retry logic
+- Handoff between iterations happens via **files** (`progress.txt`)
+- Agents read `progress.txt` at the start of each iteration to understand prior work
+- Completion is signaled by outputting `<promise>COMPLETE</promise>`
+
+**API parameters:**
+- `max_iterations` (default: 10): Total fresh-context iterations allowed
+- `max_turns` (optional): Per-iteration SDK turn limit
+
+**Why this pattern:**
+1. True fresh context - no context window bloat from retries
+2. Simple SDK runner - just runs once, cleanly
+3. File-based handoff - already works (prompts read `progress.txt`)
+4. Agent-agnostic - the orchestrator doesn't care what agent runs
+
 ## Skills
 A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
 ### Available skills

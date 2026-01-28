@@ -531,6 +531,100 @@ def fetch_issue_metadata(owner: str, repo: str, issue_number: int) -> GitHubIssu
         return GitHubIssue(number=issue_number, repo=f"{owner}/{repo}")
 
 
+def list_github_issues(
+    owner: str, repo: str, state: str = "open", limit: int = 50
+) -> List[Dict]:
+    """List issues from GitHub for a repository.
+
+    Fetches issues from a GitHub repository using the gh CLI.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        state: Issue state filter ("open", "closed", "all"). Defaults to "open".
+        limit: Maximum number of issues to return. Defaults to 50.
+
+    Returns:
+        List of issue dictionaries with keys:
+        - number: Issue number
+        - title: Issue title
+        - labels: List of label names
+        - assignees: List of assignee logins
+
+    Raises:
+        IssueError: If the gh command fails.
+    """
+    try:
+        result = run_gh([
+            "issue", "list",
+            "--repo", f"{owner}/{repo}",
+            "--state", state,
+            "--json", "number,title,labels,assignees",
+            "--limit", str(limit),
+        ])
+    except RepoError as e:
+        raise IssueError(f"Failed to list issues for {owner}/{repo}: {e}") from e
+
+    issues_data = json.loads(result.stdout)
+
+    # Normalize the output structure
+    return [
+        {
+            "number": issue["number"],
+            "title": issue["title"],
+            "labels": [label["name"] for label in issue.get("labels", [])],
+            "assignees": [assignee["login"] for assignee in issue.get("assignees", [])],
+        }
+        for issue in issues_data
+    ]
+
+
+def list_assigned_issues(owner: str, repo: str, limit: int = 50) -> List[Dict]:
+    """List issues assigned to current user.
+
+    Fetches issues from a GitHub repository that are assigned to the
+    currently authenticated user.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+        limit: Maximum number of issues to return. Defaults to 50.
+
+    Returns:
+        List of issue dictionaries with keys:
+        - number: Issue number
+        - title: Issue title
+        - labels: List of label names
+        - assignees: List of assignee logins
+
+    Raises:
+        IssueError: If the gh command fails.
+    """
+    try:
+        result = run_gh([
+            "issue", "list",
+            "--repo", f"{owner}/{repo}",
+            "--assignee", "@me",
+            "--json", "number,title,labels,assignees",
+            "--limit", str(limit),
+        ])
+    except RepoError as e:
+        raise IssueError(f"Failed to list assigned issues for {owner}/{repo}: {e}") from e
+
+    issues_data = json.loads(result.stdout)
+
+    # Normalize the output structure
+    return [
+        {
+            "number": issue["number"],
+            "title": issue["title"],
+            "labels": [label["name"] for label in issue.get("labels", [])],
+            "assignees": [assignee["login"] for assignee in issue.get("assignees", [])],
+        }
+        for issue in issues_data
+    ]
+
+
 def list_issues(owner: Optional[str] = None, repo: Optional[str] = None) -> List[Dict]:
     """List all tracked issues.
 

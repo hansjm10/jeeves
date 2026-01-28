@@ -357,9 +357,9 @@ def run(
         click.echo(click.style("(dry run - not executing)", fg="yellow"))
         return
 
-    # Find jeeves.sh at repo root
-    # Path from src/jeeves/cli.py -> src/jeeves -> src -> repo_root
-    jeeves_sh = Path(__file__).parent.parent.parent / "jeeves.sh"
+    # Find jeeves.sh in scripts/legacy/
+    # Path from src/jeeves/cli.py -> src/jeeves -> src -> repo_root -> scripts/legacy
+    jeeves_sh = Path(__file__).parent.parent.parent / "scripts" / "legacy" / "jeeves.sh"
     if not jeeves_sh.exists():
         raise click.ClickException(f"jeeves.sh not found at {jeeves_sh}")
 

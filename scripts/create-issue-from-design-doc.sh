@@ -7,15 +7,15 @@ usage() {
 Create a GitHub issue from a design document using `gh`.
 
 Usage:
-  ./scripts/jeeves/create-issue-from-design-doc.sh --design-doc <path> [--repo <owner/repo>] [--title <title>] [--label <label>...] [--assignee <login>]
+  ./scripts/create-issue-from-design-doc.sh --design-doc <path> [--repo <owner/repo>] [--title <title>] [--label <label>...] [--assignee <login>]
 
 Notes:
   - If --title is omitted, the script uses the design doc frontmatter `title:` or first `# Heading`.
   - If the provided design doc path does not exist, it will try `docs/<path>`.
 
 Examples:
-  ./scripts/jeeves/create-issue-from-design-doc.sh --design-doc docs/desktop-shell-webgpu-renderer-replay-design-issue-778.md
-  ./scripts/jeeves/create-issue-from-design-doc.sh --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md --label jeeves --label desktop
+  ./scripts/create-issue-from-design-doc.sh --design-doc docs/desktop-shell-webgpu-renderer-replay-design-issue-778.md
+  ./scripts/create-issue-from-design-doc.sh --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md --label jeeves --label desktop
 EOF
 }
 

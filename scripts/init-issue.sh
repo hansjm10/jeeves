@@ -7,13 +7,13 @@ usage() {
 Initialize Jeeves issue mode state.
 
 Usage:
-  ./scripts/jeeves/init-issue.sh --issue <number> [--design-doc <path>] [--repo <owner/repo>] [--branch <name>] [--state-dir <dir>] [--force]
+  ./scripts/init-issue.sh --issue <number> [--design-doc <path>] [--repo <owner/repo>] [--branch <name>] [--state-dir <dir>] [--force]
 
 Examples:
-  ./scripts/jeeves/init-issue.sh --issue 590 --design-doc docs/rng-prd-design-issue-590.md
-  ./scripts/jeeves/init-issue.sh --issue 205 --design-doc docs/runtime-event-pubsub-design.md --branch jeeves/issue-205-pubsub
-  ./scripts/jeeves/init-issue.sh --issue 348 --repo owner/repo
-  ./scripts/jeeves/init-issue.sh --force --issue 784 --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md
+  ./scripts/init-issue.sh --issue 590 --design-doc docs/rng-prd-design-issue-590.md
+  ./scripts/init-issue.sh --issue 205 --design-doc docs/runtime-event-pubsub-design.md --branch jeeves/issue-205-pubsub
+  ./scripts/init-issue.sh --issue 348 --repo owner/repo
+  ./scripts/init-issue.sh --force --issue 784 --design-doc desktop-shell-webgpu-renderer-replay-design-issue-778.md
 EOF
 }
 

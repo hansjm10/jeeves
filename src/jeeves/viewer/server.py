@@ -747,8 +747,9 @@ class JeevesRunManager:
                         continue
                     env[key] = value
 
-            # Find jeeves.sh (in the same directory as the jeeves package)
-            jeeves_sh = Path(__file__).resolve().parent.parent / "jeeves.sh"
+            # Find jeeves.sh in scripts/legacy/
+            # Path from src/jeeves/viewer/server.py -> viewer -> jeeves -> src -> repo_root -> scripts/legacy
+            jeeves_sh = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "legacy" / "jeeves.sh"
             if not jeeves_sh.exists():
                 raise FileNotFoundError(f"jeeves.sh not found at {jeeves_sh}")
 

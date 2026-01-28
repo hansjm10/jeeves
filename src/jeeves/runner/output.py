@@ -72,6 +72,9 @@ class SDKOutput:
     ended_at: str = ""
     success: bool = False
 
+    # Iteration tracking (for Ralph Wiggum pattern)
+    iteration: int = 1  # Which iteration this run is (1-indexed)
+
     messages: List[Message] = field(default_factory=list)
     tool_calls: List[ToolCall] = field(default_factory=list)
 
@@ -135,6 +138,7 @@ class SDKOutput:
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "success": self.success,
+            "iteration": self.iteration,
             "messages": [m.to_dict() for m in self.messages],
             "tool_calls": [t.to_dict() for t in self.tool_calls],
             "stats": stats,

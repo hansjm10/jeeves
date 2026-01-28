@@ -52,3 +52,13 @@ You are a **test author** focused on edge cases and coverage.
 8. Push commits if any (so the PR updates).
 9. Append a progress entry to `.jeeves/progress.txt` summarizing tests added, checks run, and the current `coveragePasses` / `coverageClean` / `coverageNeedsFix`.
 
+## Completion Signal
+
+When the coverage phase is complete (`coverageClean=true` - tests pass and coverage work is done):
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with final status (`status.coverageClean=true`, `status.coverageNeedsFix=false`)
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If coverage work is incomplete or a fix phase is needed, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

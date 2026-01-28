@@ -38,3 +38,14 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
    - `tasksComplete`: `false`
 7. Save the design doc at the chosen path, then update `.jeeves/issue.json` so `designDocPath` points to it (path relative to repo root).
 8. Append a progress entry to `.jeeves/progress.txt` (design doc created/updated, tasks extracted, location, and any open questions).
+
+## Completion Signal
+
+When ALL tasks for this phase are complete (design doc created, tasks extracted, issue.json updated):
+
+1. Ensure all files are saved and committed
+2. Update `.jeeves/issue.json` with final status
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If you cannot complete all tasks in this iteration (e.g., need clarification, hit errors), write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

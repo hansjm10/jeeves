@@ -28,3 +28,14 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
    - Reset `.jeeves/issue.json.status.reviewCleanPasses=0`
 7. Append a progress entry to `.jeeves/progress.txt` summarizing the questions answered, any changes made, and checks run.
 
+## Completion Signal
+
+When all open questions are resolved (answered or addressed with code changes):
+
+1. Ensure all changes are committed and pushed
+2. Delete `.jeeves/open-questions.md` if all questions are resolved
+3. Update `.jeeves/issue.json` (`status.reviewClean=false`, `status.reviewCleanPasses=0`)
+4. Append final summary to `.jeeves/progress.txt`
+5. Output exactly: `<promise>COMPLETE</promise>`
+
+If questions remain unanswered, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

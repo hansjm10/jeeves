@@ -33,3 +33,14 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
    - If clean: increment `reviewCleanPasses` by 1; otherwise set `reviewCleanPasses=0`.
    - Set `reviewClean=true` only when `reviewCleanPasses >= $JEEVES_CONFIG_REVIEW_CLEAN_PASSES_REQUIRED` (default: 3, check `.jeeves/issue.json.config.reviewCleanPassesRequired`).
 11. Append a progress entry to `.jeeves/progress.txt` summarizing changes (if any), checks run, and the current `reviewPasses` / `reviewCleanPasses` / `reviewClean`.
+
+## Completion Signal
+
+When the review phase is complete (`reviewClean=true` with required passes):
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with final status (`status.reviewClean=true`)
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If the review is not yet clean or you need more passes, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

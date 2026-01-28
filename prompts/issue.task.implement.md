@@ -52,3 +52,14 @@ Check if `.jeeves/issue.json.config.autoSkipTaskReviews` is `true`. If so, asses
 - Changes affect public API or external integrations
 
 If `autoSkipTaskReviews` is `false` or not set, always set `taskStage=spec-review`.
+
+## Completion Signal
+
+When the current task implementation is complete (tests pass, code committed, PR exists):
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with task status and `taskStage`
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If the task is incomplete or tests fail, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

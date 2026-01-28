@@ -26,3 +26,13 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
    - Delete `.jeeves/task-issues.md` if it exists.
    - Set `status.taskStage=quality-review`.
 7. Append a progress entry to `.jeeves/progress.txt` with the task id and review outcome.
+
+## Completion Signal
+
+When the spec review is complete:
+
+1. Update `.jeeves/issue.json` with review outcome and `taskStage`
+2. Append final summary to `.jeeves/progress.txt`
+3. Output exactly: `<promise>COMPLETE</promise>`
+
+If the review found issues requiring fixes, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

@@ -34,3 +34,14 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
      - Set `status.prCreated=true` and record `pullRequest.number` + `pullRequest.url` if available.
      - Set `status.prDescriptionReady=true` once the body meets the requirements.
 6. Append a progress entry to `.jeeves/progress.txt` (what changed, checks run, PR created or not).
+
+## Completion Signal
+
+When ALL tasks for this phase are complete (implementation done, checks pass, PR created/updated with proper description):
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with final status (`status.implemented=true`, `status.prCreated=true`, `status.prDescriptionReady=true`)
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If you cannot complete all tasks in this iteration (e.g., tests failing, need fixes, blocked), write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

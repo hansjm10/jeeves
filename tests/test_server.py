@@ -179,7 +179,20 @@ echo "dummy sdk: done"
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
             self.assertTrue(data["run"]["running"])
-            self.assertIsNotNone(data["run"]["pid"])
+            # PID may not be immediately available due to iteration loop thread
+            # spawning subprocess asynchronously
+
+            # Wait briefly for the subprocess to spawn and PID to be set
+            deadline = time.time() + 2.0
+            pid_found = False
+            while time.time() < deadline:
+                status, data = _request_json(conn, "GET", "/api/run")
+                self.assertEqual(status, 200)
+                if data["run"]["pid"] is not None:
+                    pid_found = True
+                    break
+                time.sleep(0.05)
+            self.assertTrue(pid_found, "PID should be set after subprocess spawns")
 
             status, data = _request_json(conn, "GET", "/api/run")
             self.assertEqual(status, 200)

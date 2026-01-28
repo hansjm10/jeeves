@@ -497,7 +497,16 @@ class JeevesState:
 
 
 class JeevesRunManager:
-    """Start/stop SDK runs from the viewer (single run at a time)."""
+    """Start/stop SDK runs from the viewer (single run at a time).
+
+    Implements the Ralph Wiggum iteration pattern where each iteration runs
+    in a fresh context window (separate subprocess). Handoff between iterations
+    happens via files (progress.txt). The iteration loop lives here in the
+    orchestrator, not inside the SDK runner.
+    """
+
+    # Completion promise that agents should output when done
+    COMPLETION_PROMISE = "<promise>COMPLETE</promise>"
 
     def __init__(
         self,
@@ -529,6 +538,8 @@ class JeevesRunManager:
 
         self._lock = Lock()
         self._proc: Optional[subprocess.Popen] = None
+        self._iteration_thread: Optional[Thread] = None
+        self._stop_requested: bool = False
         self._run_info: Dict = {
             "running": False,
             "pid": None,
@@ -537,6 +548,9 @@ class JeevesRunManager:
             "returncode": None,
             "command": None,
             "max_turns": None,
+            "max_iterations": None,
+            "current_iteration": 0,
+            "completed_via_promise": False,
             "viewer_log_file": str(self.state_dir / "viewer-run.log"),
             "last_error": None,
             "issue_ref": issue_ref,
@@ -553,9 +567,18 @@ class JeevesRunManager:
     def get_status(self) -> Dict:
         with self._lock:
             proc = self._proc
+            iteration_thread = self._iteration_thread
+
+            # Check if iteration loop is running
+            iteration_running = iteration_thread is not None and iteration_thread.is_alive()
+
             if proc is not None and proc.poll() is None:
                 self._run_info["running"] = True
                 self._run_info["pid"] = proc.pid
+            elif iteration_running:
+                # Iteration loop is running but between iterations
+                self._run_info["running"] = True
+                self._run_info["pid"] = None
             else:
                 if proc is not None and self._run_info.get("returncode") is None:
                     self._run_info["returncode"] = proc.poll()
@@ -578,10 +601,28 @@ class JeevesRunManager:
         self,
         *,
         max_turns: Optional[int] = None,
+        max_iterations: int = 10,
     ) -> Dict:
+        """Start the iteration loop - spawns fresh SDK runner each iteration.
+
+        Args:
+            max_turns: Maximum SDK turns per iteration (passed to SDK runner)
+            max_iterations: Maximum number of fresh-context iterations
+
+        The iteration loop runs in a background thread. Each iteration:
+        1. Spawns a fresh SDK runner subprocess (new context window)
+        2. Waits for it to complete
+        3. Checks output for <promise>COMPLETE</promise>
+        4. If found, stops. If not, starts next iteration.
+
+        Handoff between iterations happens via progress.txt - the agent
+        reads it at the start of each iteration to understand prior work.
+        """
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 raise RuntimeError("Jeeves is already running")
+            if self._iteration_thread is not None and self._iteration_thread.is_alive():
+                raise RuntimeError("Jeeves iteration loop is already running")
 
             if not self.issue_ref:
                 raise ValueError("No issue selected. Use /api/issues/select first.")
@@ -597,98 +638,226 @@ class JeevesRunManager:
             viewer_log_path.parent.mkdir(parents=True, exist_ok=True)
             viewer_log_path.write_text("")
 
-            issue_state = IssueState.load(self._owner, self._repo, self._issue_number)
-            prompt_path = resolve_prompt_path(issue_state.phase, self.prompts_dir)
-
-            env = os.environ.copy()
-            cmd: List[str]
-            if self.runner_cmd_override:
-                cmd = list(self.runner_cmd_override)
-            else:
-                cmd = [self.python_exe, "-m", "jeeves.runner.sdk_runner"]
-            cmd += [
-                "--prompt",
-                str(prompt_path),
-                "--output",
-                str(self.state_dir / "sdk-output.json"),
-                "--text-output",
-                str(self.state_dir / "last-run.log"),
-                "--work-dir",
-                str(self.work_dir),
-                "--state-dir",
-                str(self.state_dir),
-            ]
-            if max_turns is not None:
-                cmd += ["--max-turns", str(max_turns)]
-
             started_at = datetime.now().isoformat()
 
-            log_file = open(viewer_log_path, "a", buffering=1)
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(self.work_dir),
-                    env=env,
-                    stdout=log_file,
-                    stderr=log_file,
-                    start_new_session=True,
-                    text=True,
-                )
-            finally:
-                log_file.close()
-
-            self._proc = proc
+            self._stop_requested = False
             self._run_info = {
                 "running": True,
-                "pid": proc.pid,
+                "pid": None,
                 "started_at": started_at,
                 "ended_at": None,
                 "returncode": None,
-                "command": cmd,
+                "command": None,
                 "max_turns": max_turns,
+                "max_iterations": max_iterations,
+                "current_iteration": 0,
+                "completed_via_promise": False,
                 "viewer_log_file": str(viewer_log_path),
                 "last_error": None,
                 "issue_ref": self.issue_ref,
             }
 
-            Thread(target=self._wait_for_exit, args=(proc,), daemon=True).start()
+            # Start iteration loop in background thread
+            self._iteration_thread = Thread(
+                target=self._run_iteration_loop,
+                args=(max_turns, max_iterations, viewer_log_path),
+                daemon=True,
+            )
+            self._iteration_thread.start()
+
             return copy.deepcopy(self._run_info)
 
-    def _wait_for_exit(self, proc: subprocess.Popen):
+    def _run_iteration_loop(
+        self,
+        max_turns: Optional[int],
+        max_iterations: int,
+        viewer_log_path: Path,
+    ) -> None:
+        """Run the iteration loop (called in background thread).
+
+        This is the Ralph Wiggum pattern: each iteration is a fresh subprocess
+        with a new context window. Handoff happens via files (progress.txt).
+        """
         try:
-            returncode = proc.wait()
-        except Exception:
-            returncode = None
-        ended_at = datetime.now().isoformat()
-        with self._lock:
-            if self._proc is proc:
+            for iteration in range(1, max_iterations + 1):
+                if self._stop_requested:
+                    self._log_to_file(viewer_log_path, f"[ITERATION] Stop requested, ending at iteration {iteration}")
+                    break
+
+                with self._lock:
+                    self._run_info["current_iteration"] = iteration
+
+                self._log_to_file(viewer_log_path, f"")
+                self._log_to_file(viewer_log_path, f"{'='*60}")
+                self._log_to_file(viewer_log_path, f"[ITERATION {iteration}/{max_iterations}] Starting fresh context")
+                self._log_to_file(viewer_log_path, f"{'='*60}")
+
+                # Run a single iteration
+                result = self._run_single_iteration(max_turns, viewer_log_path)
+
+                # Check for completion promise in SDK output
+                if self._check_completion_promise():
+                    self._log_to_file(viewer_log_path, f"")
+                    self._log_to_file(viewer_log_path, f"[COMPLETE] Agent signaled completion after {iteration} iteration(s)")
+                    with self._lock:
+                        self._run_info["completed_via_promise"] = True
+                    break
+
+                # Check if iteration failed
+                if result != 0:
+                    self._log_to_file(viewer_log_path, f"[ITERATION] Iteration {iteration} exited with code {result}")
+
+                # Small delay between iterations to allow file writes to settle
+                time.sleep(0.5)
+
+            else:
+                # Loop completed without completion promise
+                self._log_to_file(viewer_log_path, f"")
+                self._log_to_file(viewer_log_path, f"[MAX ITERATIONS] Reached {max_iterations} iterations without completion")
+
+        except Exception as e:
+            self._log_to_file(viewer_log_path, f"[ERROR] Iteration loop error: {e}")
+            with self._lock:
+                self._run_info["last_error"] = str(e)
+
+        finally:
+            ended_at = datetime.now().isoformat()
+            with self._lock:
                 self._run_info["running"] = False
-                self._run_info["pid"] = None
                 self._run_info["ended_at"] = ended_at
+                self._proc = None
+
+    def _run_single_iteration(
+        self,
+        max_turns: Optional[int],
+        viewer_log_path: Path,
+    ) -> int:
+        """Run a single SDK iteration (fresh subprocess, fresh context).
+
+        Returns the subprocess exit code.
+        """
+        issue_state = IssueState.load(self._owner, self._repo, self._issue_number)
+        prompt_path = resolve_prompt_path(issue_state.phase, self.prompts_dir)
+
+        env = os.environ.copy()
+        cmd: List[str]
+        if self.runner_cmd_override:
+            cmd = list(self.runner_cmd_override)
+        else:
+            cmd = [self.python_exe, "-m", "jeeves.runner.sdk_runner"]
+        cmd += [
+            "--prompt",
+            str(prompt_path),
+            "--output",
+            str(self.state_dir / "sdk-output.json"),
+            "--text-output",
+            str(self.state_dir / "last-run.log"),
+            "--work-dir",
+            str(self.work_dir),
+            "--state-dir",
+            str(self.state_dir),
+        ]
+        if max_turns is not None:
+            cmd += ["--max-turns", str(max_turns)]
+
+        with self._lock:
+            self._run_info["command"] = cmd
+
+        # Open log file in append mode for this iteration
+        with open(viewer_log_path, "a", buffering=1) as log_file:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(self.work_dir),
+                env=env,
+                stdout=log_file,
+                stderr=log_file,
+                start_new_session=True,
+                text=True,
+            )
+
+            with self._lock:
+                self._proc = proc
+                self._run_info["pid"] = proc.pid
+
+            # Wait for this iteration to complete
+            returncode = proc.wait()
+
+            with self._lock:
                 self._run_info["returncode"] = returncode
+                self._run_info["pid"] = None
+
+        return returncode
+
+    def _check_completion_promise(self) -> bool:
+        """Check if the agent output contains the completion promise."""
+        sdk_output_path = self.state_dir / "sdk-output.json"
+        if not sdk_output_path.exists():
+            return False
+
+        try:
+            with open(sdk_output_path, "r") as f:
+                data = json.load(f)
+
+            # Check messages for the completion promise
+            messages = data.get("messages", [])
+            for msg in messages:
+                content = msg.get("content", "")
+                if content and self.COMPLETION_PROMISE in content:
+                    return True
+
+            # Also check the text output file
+            text_output_path = self.state_dir / "last-run.log"
+            if text_output_path.exists():
+                text_content = text_output_path.read_text()
+                if self.COMPLETION_PROMISE in text_content:
+                    return True
+
+        except (json.JSONDecodeError, IOError):
+            pass
+
+        return False
+
+    def _log_to_file(self, path: Path, message: str) -> None:
+        """Append a log message to a file."""
+        try:
+            with open(path, "a") as f:
+                f.write(message + "\n")
+                f.flush()
+        except IOError:
+            pass
 
     def stop(self, *, force: bool = False, timeout_sec: float = 5.0) -> Dict:
+        """Stop the current run, including the iteration loop."""
+        # Signal the iteration loop to stop
+        self._stop_requested = True
+
         with self._lock:
             proc = self._proc
             if proc is None or proc.poll() is not None:
-                return copy.deepcopy(self._run_info)
-
-            try:
-                os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
-            except Exception:
+                # No active process, but iteration loop might still be running
+                pass
+            else:
+                # Kill the current subprocess
                 try:
-                    if force:
-                        proc.kill()
-                    else:
-                        proc.terminate()
+                    os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
                 except Exception:
-                    pass
+                    try:
+                        if force:
+                            proc.kill()
+                        else:
+                            proc.terminate()
+                    except Exception:
+                        pass
 
-        try:
-            proc.wait(timeout=timeout_sec)
-        except Exception:
-            if not force:
-                return self.stop(force=True, timeout_sec=timeout_sec)
+                try:
+                    proc.wait(timeout=timeout_sec)
+                except Exception:
+                    if not force:
+                        return self.stop(force=True, timeout_sec=timeout_sec)
+
+        # Wait for iteration thread to finish
+        if self._iteration_thread is not None and self._iteration_thread.is_alive():
+            self._iteration_thread.join(timeout=timeout_sec)
 
         return self.get_status()
 
@@ -845,7 +1014,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"Failed to select issue: {e}", "run": self.run_manager.get_status()}, status=500)
                 return
 
-        for unsupported in ("runner", "max_iterations", "mode", "output_mode", "print_prompt", "prompt_append", "env"):
+        for unsupported in ("runner", "mode", "output_mode", "print_prompt", "prompt_append", "env"):
             if unsupported in body:
                 self._send_json({"ok": False, "error": f"Unsupported field: {unsupported}"}, status=400)
                 return
@@ -861,8 +1030,19 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "max_turns must be >= 1"}, status=400)
                 return
 
+        # max_iterations controls total fresh-context iterations (Ralph Wiggum pattern)
+        max_iterations = body.get("max_iterations", 10)
         try:
-            run_info = self.run_manager.start(max_turns=max_turns)
+            max_iterations = int(max_iterations)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"max_iterations must be an integer: {e}"}, status=400)
+            return
+        if max_iterations < 1:
+            self._send_json({"ok": False, "error": "max_iterations must be >= 1"}, status=400)
+            return
+
+        try:
+            run_info = self.run_manager.start(max_turns=max_turns, max_iterations=max_iterations)
         except RuntimeError as e:
             self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=409)
             return

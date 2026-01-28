@@ -38,3 +38,14 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
    - If **all checks** succeeded OR the only failures are Sonar-specific (SonarCloud Scan step with quality gate issues):
      - Set `.jeeves/issue.json.status.ciClean=true` (Sonar issues are handled in the Sonar phase).
 8. Append a progress entry to `.jeeves/progress.txt` summarizing what you checked (description + checks), what was failing (if anything), any PR description edits made, and the current `ciPasses` / `ciClean`.
+
+## Completion Signal
+
+When the CI phase is complete (`ciClean=true` - all checks pass or only Sonar failures remain):
+
+1. Ensure all changes are committed and pushed
+2. Update `.jeeves/issue.json` with final status (`status.ciClean=true`)
+3. Append final summary to `.jeeves/progress.txt`
+4. Output exactly: `<promise>COMPLETE</promise>`
+
+If CI is still failing or checks are pending, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.

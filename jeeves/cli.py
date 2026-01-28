@@ -86,6 +86,13 @@ def main():
     help="Interactively browse and select issue from repository.",
 )
 @click.option(
+    "--interactive",
+    "-i",
+    "interactive_mode",
+    is_flag=True,
+    help="Full interactive setup: repo, issue, and branch selection.",
+)
+@click.option(
     "--branch",
     "-b",
     default=None,
@@ -113,6 +120,7 @@ def init(
     issue: Optional[int],
     browse: bool,
     browse_issues: bool,
+    interactive_mode: bool,
     branch: Optional[str],
     design_doc: Optional[str],
     force: bool,
@@ -131,9 +139,45 @@ def init(
         jeeves init -r owner/repo --issue 456 --branch feature/my-feature
         jeeves init --browse
         jeeves init --repo owner/repo --browse-issues
+        jeeves init -i
+        jeeves init --interactive --repo owner/repo
     """
+    # Validate mutually exclusive flags
+    if interactive_mode and browse:
+        raise click.ClickException("Cannot use --interactive with --browse. Choose one mode.")
+    if interactive_mode and browse_issues:
+        raise click.ClickException("Cannot use --interactive with --browse-issues. Choose one mode.")
+
+    # Handle --interactive / -i mode
+    if interactive_mode:
+        try:
+            check_gh_auth_for_browse()
+        except AuthenticationError as e:
+            raise click.ClickException(str(e))
+
+        # Step 1: Repository selection (skip if --repo provided)
+        if repo:
+            try:
+                owner, repo_name = parse_repo_spec(repo)
+            except ValueError as e:
+                raise click.ClickException(str(e))
+        else:
+            try:
+                owner, repo_name = select_repository()
+                click.echo(f"Selected repository: {owner}/{repo_name}")
+            except BrowseError as e:
+                raise click.ClickException(str(e))
+
+        # Step 2: Issue selection (skip if --issue provided)
+        if issue is None:
+            try:
+                issue = select_issue(owner, repo_name)
+                click.echo(f"Selected issue: #{issue}")
+            except BrowseError as e:
+                raise click.ClickException(str(e))
+
     # Handle --browse mode
-    if browse:
+    elif browse:
         # Cannot use --browse with --repo
         if repo:
             raise click.ClickException("Cannot use --browse with --repo. Use --browse alone to select both repository and issue.")

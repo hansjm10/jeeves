@@ -81,6 +81,11 @@ def main():
     help="Interactively browse and select repository and issue.",
 )
 @click.option(
+    "--browse-issues",
+    is_flag=True,
+    help="Interactively browse and select issue from repository.",
+)
+@click.option(
     "--branch",
     "-b",
     default=None,
@@ -107,6 +112,7 @@ def init(
     repo: Optional[str],
     issue: Optional[int],
     browse: bool,
+    browse_issues: bool,
     branch: Optional[str],
     design_doc: Optional[str],
     force: bool,
@@ -124,6 +130,7 @@ def init(
         jeeves init --repo anthropics/claude-code --issue 123
         jeeves init -r owner/repo --issue 456 --branch feature/my-feature
         jeeves init --browse
+        jeeves init --repo owner/repo --browse-issues
     """
     # Handle --browse mode
     if browse:
@@ -140,6 +147,28 @@ def init(
             owner, repo_name = select_repository()
             click.echo(f"Selected repository: {owner}/{repo_name}")
         except BrowseError as e:
+            raise click.ClickException(str(e))
+
+        try:
+            issue = select_issue(owner, repo_name)
+            click.echo(f"Selected issue: #{issue}")
+        except BrowseError as e:
+            raise click.ClickException(str(e))
+    elif browse_issues:
+        # --browse-issues mode: require --repo, select issue interactively
+        if not repo:
+            raise click.ClickException("--browse-issues requires --repo to be specified.")
+        if issue is not None:
+            raise click.ClickException("Cannot use --browse-issues with --issue. Use --browse-issues alone to select the issue interactively.")
+
+        try:
+            owner, repo_name = parse_repo_spec(repo)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
+        try:
+            check_gh_auth_for_browse()
+        except AuthenticationError as e:
             raise click.ClickException(str(e))
 
         try:

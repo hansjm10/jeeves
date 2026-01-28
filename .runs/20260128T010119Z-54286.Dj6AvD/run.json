@@ -1,0 +1,22 @@
+{
+  "runId": "20260128T010119Z-54286.Dj6AvD",
+  "dir": "/work/jeeves/.runs/20260128T010119Z-54286.Dj6AvD",
+  "startedAt": "2026-01-28T01:01:21Z",
+  "endedAt": "2026-01-28T01:02:03Z",
+  "duration_s": 44,
+  "exitCode": 1,
+  "reason": "error",
+  "mode": "issue",
+  "runner": "sdk",
+  "branchName": "issue/6-design",
+  "issue": {
+    "number": 6,
+    "repo": "hansjm10/jeeves"
+  },
+  "outputMode": "stream",
+  "maxIterations": 10,
+  "metricsFile": "/work/jeeves/.runs/20260128T010119Z-54286.Dj6AvD/metrics.jsonl",
+  "metricsAllFile": "/work/jeeves/metrics.jsonl",
+  "activeLogFile": "/work/jeeves/last-run.log",
+  "iterationsDir": "/work/jeeves/.runs/20260128T010119Z-54286.Dj6AvD/iterations"
+}

@@ -1569,6 +1569,22 @@ else
   SDK_PYTHON="python3"
 fi
 
+# SDK runner module and command setup. Prefer -P to avoid CWD shadowing imports.
+SDK_RUNNER_MODULE="jeeves.runner.sdk_runner"
+SDK_RUNNER_CMD=()
+SDK_RUNNER_ENV=()
+SDK_RUNNER_SCRIPT_DIR_ESCAPED="${SCRIPT_DIR//\'/\\\'}"
+if "$SDK_PYTHON" -P -c "import runpy" >/dev/null 2>&1; then
+  SDK_RUNNER_CMD=("$SDK_PYTHON" "-P" "-m" "$SDK_RUNNER_MODULE")
+else
+  SDK_RUNNER_CMD=(
+    "$SDK_PYTHON"
+    "-c"
+    "import runpy,sys; sys.path.insert(0, '${SDK_RUNNER_SCRIPT_DIR_ESCAPED}'); sys.path=[p for p in sys.path if p not in ('', '.')]; runpy.run_module('${SDK_RUNNER_MODULE}', run_name='__main__')"
+  )
+fi
+SDK_RUNNER_ENV=("PYTHONPATH=$SCRIPT_DIR")
+
 if [ "$RUNNER" = "auto" ]; then
   # SDK runner is the default (requires Python + claude-agent-sdk)
   if "$SDK_PYTHON" -c "import claude_agent_sdk" 2>/dev/null; then
@@ -1912,7 +1928,6 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     RUNNER_CALLS=$((RUNNER_CALLS + 1))
     debug_write_runner_invoke "$i" "$DEBUG_PHASE_KEY" "$RUNNER_CALLS"
 
-    SDK_RUNNER_CMD="$SDK_PYTHON -m jeeves.runner.sdk_runner"
     SDK_ARGS=(
       --prompt "$PROMPT_FILE_TO_USE"
       --output "$SDK_OUTPUT_FILE"
@@ -1921,20 +1936,18 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       --state-dir "$JEEVES_STATE_DIR"
     )
 
-    # Set PYTHONPATH to prioritize Jeeves installation directory
-    # This prevents Python from importing wrong jeeves module if work dir has one
     if [ "$OUTPUT_MODE" = "stream" ]; then
       # In stream mode, tee output to stderr for real-time viewing
       if [ -n "$SANDBOX_VALUE" ]; then
-        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" IS_SANDBOX="$SANDBOX_VALUE" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+        (cd "$WORK_DIR" && env "${SDK_RUNNER_ENV[@]}" IS_SANDBOX="$SANDBOX_VALUE" "${SDK_RUNNER_CMD[@]}" "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
       else
-        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+        (cd "$WORK_DIR" && env "${SDK_RUNNER_ENV[@]}" "${SDK_RUNNER_CMD[@]}" "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
       fi
     else
       if [ -n "$SANDBOX_VALUE" ]; then
-        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" IS_SANDBOX="$SANDBOX_VALUE" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+        (cd "$WORK_DIR" && env "${SDK_RUNNER_ENV[@]}" IS_SANDBOX="$SANDBOX_VALUE" "${SDK_RUNNER_CMD[@]}" "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
       else
-        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+        (cd "$WORK_DIR" && env "${SDK_RUNNER_ENV[@]}" "${SDK_RUNNER_CMD[@]}" "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
       fi
     fi
   else

@@ -60,3 +60,4 @@ Use the viewer while running Jeeves to see what's happening without scrolling th
 - Keep `pnpm coverage:md` in the coverage phase (avoid running it during implement/review)
 - Prefer `git commit --no-verify` in automation after running explicit checks (repo hooks can add ~5–10 minutes per commit)
 - Always update AGENTS.md with discovered patterns for future iterations
+- Worktree CWD can shadow the server `jeeves` package; SDK runner should avoid CWD imports (use `-P` or a runpy wrapper) and explicitly prefer `/work/jeeves` on `PYTHONPATH`.

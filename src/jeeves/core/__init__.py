@@ -9,5 +9,18 @@ This package contains the core functionality:
     - browse: Interactive repository and issue browsing
 """
 
-# Note: This is a placeholder for the new src/ layout.
-# Modules will be migrated in task T2.
+from . import browse
+from . import config
+from . import issue
+from . import paths
+from . import repo
+from . import worktree
+
+__all__ = [
+    "browse",
+    "config",
+    "issue",
+    "paths",
+    "repo",
+    "worktree",
+]

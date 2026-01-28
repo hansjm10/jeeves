@@ -16,6 +16,14 @@ import sys
 import time
 import copy
 import re
+
+# Add parent directory to path so we can import the jeeves package
+# when running this script directly (e.g., ./viewer/server.py)
+_viewer_dir = os.path.dirname(os.path.abspath(__file__))
+_jeeves_root = os.path.dirname(_viewer_dir)
+if _jeeves_root not in sys.path:
+    sys.path.insert(0, _jeeves_root)
+
 from datetime import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 try:

@@ -1754,9 +1754,16 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                         "total": len(messages)
                     })
 
-                # Send tool calls as sdk-tool-complete events
+                # Send tool calls as sdk-tool-start and sdk-tool-complete events
                 tool_calls = sdk_data.get("tool_calls", [])
                 for tool_call in tool_calls:
+                    # Send sdk-tool-start event first (tool invocation begins)
+                    self._sse_send("sdk-tool-start", {
+                        "tool_use_id": tool_call.get("tool_use_id"),
+                        "name": tool_call.get("name"),
+                        "input": tool_call.get("input", {})
+                    })
+                    # Then send sdk-tool-complete event (tool returns)
                     self._sse_send("sdk-tool-complete", {
                         "tool_use_id": tool_call.get("tool_use_id"),
                         "name": tool_call.get("name"),
@@ -1837,8 +1844,15 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                                     "total": total_messages
                                 })
 
-                            # Send sdk-tool-complete events for new tool calls
+                            # Send sdk-tool-start and sdk-tool-complete events for new tool calls
                             for tool_call in new_tool_calls:
+                                # Send sdk-tool-start event first (tool invocation begins)
+                                self._sse_send("sdk-tool-start", {
+                                    "tool_use_id": tool_call.get("tool_use_id"),
+                                    "name": tool_call.get("name"),
+                                    "input": tool_call.get("input", {})
+                                })
+                                # Then send sdk-tool-complete event (tool returns)
                                 self._sse_send("sdk-tool-complete", {
                                     "tool_use_id": tool_call.get("tool_use_id"),
                                     "name": tool_call.get("name"),

@@ -810,7 +810,14 @@ class SDKSSEEventTests(unittest.TestCase):
 
             conn.close()
 
-            # Check for tool events - tool calls should trigger sdk-tool-complete
+            # Check for sdk-tool-start event - must be sent when tool invocation begins
+            sdk_tool_start_events = [e for e in events if e["event"] == "sdk-tool-start"]
+            self.assertGreaterEqual(len(sdk_tool_start_events), 1, f"Expected sdk-tool-start event, got: {[e['event'] for e in events]}")
+            self.assertEqual(sdk_tool_start_events[0]["data"]["tool_use_id"], "tool-1")
+            self.assertEqual(sdk_tool_start_events[0]["data"]["name"], "Read")
+            self.assertEqual(sdk_tool_start_events[0]["data"]["input"], {"file_path": "/test/file.py"})
+
+            # Check for sdk-tool-complete event - must be sent when tool returns
             sdk_tool_complete_events = [e for e in events if e["event"] == "sdk-tool-complete"]
             self.assertGreaterEqual(len(sdk_tool_complete_events), 1, f"Expected sdk-tool-complete event, got: {[e['event'] for e in events]}")
             self.assertEqual(sdk_tool_complete_events[0]["data"]["tool_use_id"], "tool-1")

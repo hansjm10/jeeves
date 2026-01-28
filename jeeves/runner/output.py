@@ -80,6 +80,10 @@ class SDKOutput:
     tool_call_count: int = 0
     duration_seconds: float = 0.0
 
+    # Token usage tracking (when provider supports it)
+    input_tokens: int = 0
+    output_tokens: int = 0
+
     # Error info
     error: Optional[str] = None
     error_type: Optional[str] = None
@@ -114,6 +118,17 @@ class SDKOutput:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
+        stats: Dict[str, Any] = {
+            "message_count": self.message_count,
+            "tool_call_count": self.tool_call_count,
+            "duration_seconds": self.duration_seconds,
+        }
+        # Only include tokens if provider supports tracking (non-zero values)
+        if self.input_tokens > 0 or self.output_tokens > 0:
+            stats["tokens"] = {
+                "input": self.input_tokens,
+                "output": self.output_tokens,
+            }
         return {
             "schema": self.schema,
             "session_id": self.session_id,
@@ -122,11 +137,7 @@ class SDKOutput:
             "success": self.success,
             "messages": [m.to_dict() for m in self.messages],
             "tool_calls": [t.to_dict() for t in self.tool_calls],
-            "stats": {
-                "message_count": self.message_count,
-                "tool_call_count": self.tool_call_count,
-                "duration_seconds": self.duration_seconds,
-            },
+            "stats": stats,
             "error": self.error,
             "error_type": self.error_type,
         }

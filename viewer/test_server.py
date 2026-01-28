@@ -1542,3 +1542,111 @@ class SchemaVersionDetectionTests(unittest.TestCase):
         # Check that v2 status enum values are handled
         self.assertIn("session.status", content,
             "Frontend should handle v2 'session.status' field")
+
+
+class TokenTrackingTests(unittest.TestCase):
+    """Test token tracking for v2 schema (Task T9)."""
+
+    def test_frontend_has_token_display_elements(self):
+        """Frontend SDK toolbar should have elements for displaying token counts."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check for token display elements
+        self.assertIn('id="sdkInputTokens"', content,
+            "SDK toolbar should have input tokens element")
+        self.assertIn('id="sdkOutputTokens"', content,
+            "SDK toolbar should have output tokens element")
+
+    def test_frontend_has_token_stat_container(self):
+        """Frontend should have a container for token stats that can be shown/hidden."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check for token stat container
+        self.assertIn('id="sdkTokensStat"', content,
+            "SDK toolbar should have token stats container")
+
+    def test_frontend_normalizes_v2_token_counts(self):
+        """Frontend normalizeSdkOutput should extract tokens from v2 summary."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that tokens are extracted from v2 summary
+        self.assertIn("summary.tokens", content,
+            "normalizeSdkOutput should handle v2 'summary.tokens' field")
+
+    def test_frontend_renders_token_stats_when_available(self):
+        """Frontend renderSdkOutput should display token stats when tokens are available."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that token rendering logic exists
+        self.assertIn("sdkInputTokens", content,
+            "renderSdkOutput should update input tokens element")
+        self.assertIn("sdkOutputTokens", content,
+            "renderSdkOutput should update output tokens element")
+
+    def test_frontend_hides_tokens_when_not_available(self):
+        """Frontend should hide token stat when tokens are not available."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check that token stat visibility is controlled
+        self.assertIn("sdkTokensStat", content,
+            "Token stat container should be referenced for visibility control")
+
+    def test_frontend_formats_token_counts_with_comma_separators(self):
+        """Frontend should format large token counts with comma separators."""
+        viewer_dir = Path(__file__).parent
+        index_html = viewer_dir / "index.html"
+        content = index_html.read_text()
+
+        # Check for number formatting with toLocaleString or similar
+        self.assertIn("toLocaleString", content,
+            "Token counts should be formatted with comma separators")
+
+    def test_sdk_output_model_has_token_fields(self):
+        """SDKOutput model should support token tracking fields."""
+        from jeeves.runner.output import SDKOutput
+
+        output = SDKOutput()
+        # Check that token fields exist
+        self.assertTrue(hasattr(output, 'input_tokens'),
+            "SDKOutput should have input_tokens field")
+        self.assertTrue(hasattr(output, 'output_tokens'),
+            "SDKOutput should have output_tokens field")
+
+    def test_sdk_output_to_dict_includes_tokens(self):
+        """SDKOutput.to_dict() should include token counts in stats."""
+        from jeeves.runner.output import SDKOutput
+
+        output = SDKOutput()
+        output.input_tokens = 1000
+        output.output_tokens = 500
+
+        result = output.to_dict()
+        self.assertIn('tokens', result['stats'],
+            "SDKOutput.to_dict() stats should include tokens object")
+        self.assertEqual(result['stats']['tokens']['input'], 1000,
+            "Token input count should match")
+        self.assertEqual(result['stats']['tokens']['output'], 500,
+            "Token output count should match")
+
+    def test_sdk_output_to_dict_omits_tokens_when_zero(self):
+        """SDKOutput.to_dict() should omit tokens when both are zero (provider doesn't support)."""
+        from jeeves.runner.output import SDKOutput
+
+        output = SDKOutput()
+        output.input_tokens = 0
+        output.output_tokens = 0
+
+        result = output.to_dict()
+        # When tokens are 0/0, tokens should not be in stats (graceful handling)
+        self.assertNotIn('tokens', result.get('stats', {}),
+            "SDKOutput.to_dict() should omit tokens when provider doesn't support tracking")

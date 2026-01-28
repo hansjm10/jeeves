@@ -1245,6 +1245,7 @@
                         <span class="sdk-stat"><span class="sdk-stat-label">Messages:</span> <span id="sdkMessageCount">0</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Tool calls:</span> <span id="sdkToolCount">0</span></span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Duration:</span> <span id="sdkDuration">-</span></span>
+                        <span class="sdk-stat" id="sdkTokensStat" style="display: none;"><span class="sdk-stat-label">Tokens:</span> <span id="sdkInputTokens">0</span> in / <span id="sdkOutputTokens">0</span> out</span>
                         <span class="sdk-stat"><span class="sdk-stat-label">Status:</span> <span id="sdkStatus" class="sdk-status-pending">-</span></span>
                     </div>
                     <div class="sdk-controls">
@@ -1316,6 +1317,8 @@
 
             if (version === 'v2') {
                 // v2 schema: uses session.id, conversation, summary, provider
+                // Extract token counts from summary.tokens when available
+                const tokens = data.summary?.tokens || null;
                 return {
                     schemaVersion: 'v2',
                     session_id: data.session?.id || null,
@@ -1326,6 +1329,8 @@
                         tool_call_count: data.summary?.tool_call_count || (data.tool_calls?.length || 0),
                         duration_seconds: data.summary?.duration_seconds || 0,
                     },
+                    // Token tracking (when provider supports it)
+                    tokens: tokens,
                     // v2 uses session.status enum: running, success, error, cancelled
                     success: data.session?.status === 'success',
                     error: data.session?.status === 'error' ? (data.summary?.errors?.[0]?.message || 'Error') : null,
@@ -1336,6 +1341,8 @@
                 };
             } else {
                 // v1 schema (default): uses session_id, messages, stats directly
+                // Extract token counts from stats.tokens when available
+                const tokens = data.stats?.tokens || null;
                 return {
                     schemaVersion: 'v1',
                     session_id: data.session_id || null,
@@ -1346,6 +1353,8 @@
                         tool_call_count: data.tool_calls?.length || 0,
                         duration_seconds: 0,
                     },
+                    // Token tracking (when provider supports it)
+                    tokens: tokens,
                     success: data.success,
                     error: data.error || null,
                     status: data.success ? 'success' : (data.error ? 'error' : (data.ended_at ? 'complete' : 'running')),
@@ -1389,9 +1398,13 @@
             const statusEl = document.getElementById('sdkStatus');
             const convEl = document.getElementById('sdkConversation');
             const timelineEl = document.getElementById('sdkTimeline');
+            const tokensStatEl = document.getElementById('sdkTokensStat');
+            const inputTokensEl = document.getElementById('sdkInputTokens');
+            const outputTokensEl = document.getElementById('sdkOutputTokens');
 
             if (!sdkOutput) {
                 if (providerStatEl) providerStatEl.style.display = 'none';
+                if (tokensStatEl) tokensStatEl.style.display = 'none';
                 sessionEl.textContent = '-';
                 msgCountEl.textContent = '0';
                 toolCountEl.textContent = '0';
@@ -1426,6 +1439,15 @@
 
             const duration = sdkOutput.stats?.duration_seconds;
             durationEl.textContent = duration ? `${duration.toFixed(1)}s` : '-';
+
+            // Show token stats when available (provider supports token tracking)
+            if (sdkOutput.tokens && (sdkOutput.tokens.input > 0 || sdkOutput.tokens.output > 0)) {
+                inputTokensEl.textContent = sdkOutput.tokens.input.toLocaleString();
+                outputTokensEl.textContent = sdkOutput.tokens.output.toLocaleString();
+                if (tokensStatEl) tokensStatEl.style.display = 'inline';
+            } else {
+                if (tokensStatEl) tokensStatEl.style.display = 'none';
+            }
 
             // Handle v2 session.status or v1 success/error
             if (sdkOutput.status === 'success' || sdkOutput.success) {

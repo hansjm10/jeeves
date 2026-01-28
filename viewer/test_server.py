@@ -1244,3 +1244,199 @@ class OutputProviderBaseTests(unittest.TestCase):
         sig = inspect.signature(OutputProvider.get_provider_info)
         # The method exists with proper signature
         self.assertIsNotNone(sig)
+
+
+class ClaudeSDKProviderTests(unittest.TestCase):
+    """Test ClaudeSDKProvider adapter for Claude Agent SDK (Task T7).
+
+    Acceptance Criteria:
+    - jeeves/runner/providers/claude_sdk.py created
+    - ClaudeSDKProvider implements OutputProvider
+    - Provider produces output identical to v1 (backward compat)
+    - Provider info includes claude-agent-sdk version
+    """
+
+    def test_claude_sdk_module_exists(self):
+        """jeeves/runner/providers/claude_sdk.py should exist."""
+        claude_sdk_module = Path(__file__).parent.parent / "jeeves" / "runner" / "providers" / "claude_sdk.py"
+        self.assertTrue(claude_sdk_module.exists(),
+            f"ClaudeSDKProvider module should exist at {claude_sdk_module}")
+
+    def test_claude_sdk_provider_is_importable(self):
+        """ClaudeSDKProvider should be importable from providers package."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        self.assertIsNotNone(ClaudeSDKProvider)
+
+    def test_claude_sdk_provider_extends_output_provider(self):
+        """ClaudeSDKProvider should extend OutputProvider."""
+        from jeeves.runner.providers import OutputProvider
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        self.assertTrue(issubclass(ClaudeSDKProvider, OutputProvider),
+            "ClaudeSDKProvider should be a subclass of OutputProvider")
+
+    def test_claude_sdk_provider_can_be_instantiated(self):
+        """ClaudeSDKProvider can be instantiated."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        provider = ClaudeSDKProvider()
+        self.assertIsNotNone(provider)
+
+    def test_get_provider_info_returns_correct_structure(self):
+        """get_provider_info() returns dict with name, version, metadata."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        provider = ClaudeSDKProvider()
+        info = provider.get_provider_info()
+
+        self.assertIsInstance(info, dict)
+        self.assertIn("name", info)
+        self.assertIn("version", info)
+        self.assertIn("metadata", info)
+
+    def test_get_provider_info_name_is_claude_sdk(self):
+        """get_provider_info() name is 'claude-sdk'."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        provider = ClaudeSDKProvider()
+        info = provider.get_provider_info()
+
+        self.assertEqual(info["name"], "claude-sdk")
+
+    def test_get_provider_info_includes_sdk_version(self):
+        """get_provider_info() version includes claude-agent-sdk version."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        provider = ClaudeSDKProvider()
+        info = provider.get_provider_info()
+
+        # Version should be a non-empty string
+        self.assertIsInstance(info["version"], str)
+        self.assertTrue(len(info["version"]) > 0,
+            "Version string should not be empty")
+
+    def test_supports_tokens_returns_boolean(self):
+        """supports_tokens should return a boolean."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        provider = ClaudeSDKProvider()
+
+        self.assertIsInstance(provider.supports_tokens, bool)
+
+    def test_parse_event_returns_message_for_system_init(self):
+        """parse_event() converts system init event to Message."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        # Simulate a system init event (dict format as from SDK)
+        event = {
+            "type": "system",
+            "subtype": "init",
+            "data": {"session_id": "test-session-123"}
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "system")
+        self.assertEqual(msg.subtype, "init")
+        self.assertEqual(msg.session_id, "test-session-123")
+
+    def test_parse_event_returns_message_for_assistant_text(self):
+        """parse_event() converts assistant text event to Message."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [{"type": "text", "text": "Hello, I'm here to help!"}]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "assistant")
+        self.assertEqual(msg.content, "Hello, I'm here to help!")
+
+    def test_parse_event_returns_message_for_assistant_tool_use(self):
+        """parse_event() converts assistant tool_use event to Message."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "tool-123",
+                "name": "Read",
+                "input": {"file_path": "/test/file.py"}
+            }]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "assistant")
+        self.assertIsNotNone(msg.tool_use)
+        self.assertEqual(msg.tool_use["name"], "Read")
+        self.assertEqual(msg.tool_use["id"], "tool-123")
+        self.assertEqual(msg.tool_use["input"], {"file_path": "/test/file.py"})
+
+    def test_parse_event_returns_message_for_tool_result(self):
+        """parse_event() converts tool result event to Message."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-123",
+                "content": "File contents here..."
+            }]
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "tool_result")
+        self.assertEqual(msg.tool_use_id, "tool-123")
+        self.assertEqual(msg.content, "File contents here...")
+
+    def test_parse_event_returns_message_for_result(self):
+        """parse_event() converts result event to Message."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "result",
+            "subtype": "success",
+            "result": "Task completed successfully"
+        }
+
+        msg = provider.parse_event(event)
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.type, "result")
+        self.assertEqual(msg.subtype, "success")
+        self.assertEqual(msg.content, "Task completed successfully")
+
+    def test_parse_event_backward_compatible_with_v1(self):
+        """parse_event() produces Message compatible with v1 schema."""
+        from jeeves.runner.providers.claude_sdk import ClaudeSDKProvider
+        from jeeves.runner.output import Message
+
+        provider = ClaudeSDKProvider()
+
+        event = {
+            "type": "assistant",
+            "content": [{"type": "text", "text": "Test content"}]
+        }
+
+        msg = provider.parse_event(event)
+
+        # Convert to dict and verify v1 compatibility
+        msg_dict = msg.to_dict()
+        self.assertIn("type", msg_dict)
+        self.assertIn("timestamp", msg_dict)
+        # v1 uses string content, not list
+        self.assertIsInstance(msg_dict.get("content"), str)

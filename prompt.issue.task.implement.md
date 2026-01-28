@@ -4,10 +4,14 @@ You are an autonomous coding agent working on a software project.
 
 ## Inputs
 
+The `.jeeves/` directory is in your **current working directory**. Use relative paths only.
+
 - Issue config: `.jeeves/issue.json`
 - Progress log: `.jeeves/progress.txt`
 - Design document: path in `.jeeves/issue.json` (`designDocPath`)
 - Task list: `.jeeves/issue.json.tasks`
+- Do not use absolute paths - always use relative paths starting with `.jeeves/`
+- Do not delete the .jeeves folder.
 
 ## Your Task
 

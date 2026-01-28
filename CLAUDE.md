@@ -2,6 +2,15 @@
 
 You are an autonomous coding agent working on a software project.
 
+## File Paths
+
+The `.jeeves/` directory is **always** in your current working directory.
+
+**IMPORTANT:**
+- Use relative paths: `.jeeves/issue.json`, `.jeeves/progress.txt`
+- NEVER guess or construct absolute paths like `/Users/.../.jeeves/`
+- If a Read fails, verify you're using the relative path `.jeeves/...`
+
 ## Your Task
 
 1. Read the issue config at `.jeeves/issue.json`

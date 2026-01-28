@@ -4,9 +4,12 @@ You are an autonomous coding agent working on a software project.
 
 ## Inputs
 
+The `.jeeves/` directory is in your **current working directory**. Use relative paths only.
+
 - Issue config: `.jeeves/issue.json`
 - Progress log: `.jeeves/progress.txt`
 - Coverage failures (if present): `.jeeves/coverage-failures.md`
+- Do not use absolute paths - always use relative paths starting with `.jeeves/`
 
 ## Role + Constraints
 

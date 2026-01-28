@@ -17,12 +17,13 @@ import time
 import copy
 import re
 
-# Add parent directory to path so we can import the jeeves package
-# when running this script directly (e.g., ./viewer/server.py)
+# Add src directory to path so we can import the jeeves package
+# when running this script directly (e.g., ./src/jeeves/viewer/server.py)
 _viewer_dir = os.path.dirname(os.path.abspath(__file__))
-_jeeves_root = os.path.dirname(_viewer_dir)
-if _jeeves_root not in sys.path:
-    sys.path.insert(0, _jeeves_root)
+_jeeves_dir = os.path.dirname(_viewer_dir)  # src/jeeves
+_src_dir = os.path.dirname(_jeeves_dir)     # src/
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 from datetime import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -41,24 +42,24 @@ from urllib.parse import parse_qs, urlparse
 import select
 import subprocess
 
-# Import jeeves modules for the new CLI-based approach
+# Import jeeves.core modules for the new src/ layout
 try:
-    from jeeves.paths import (
+    from jeeves.core.paths import (
         get_data_dir,
         get_issue_state_dir,
         get_worktree_path,
         parse_issue_ref,
         parse_repo_spec,
     )
-    from jeeves.issue import (
+    from jeeves.core.issue import (
         IssueError,
         IssueState,
         create_issue_state,
         list_issues as list_issues_from_jeeves,
     )
-    from jeeves.repo import ensure_repo, RepoError
-    from jeeves.worktree import create_worktree, WorktreeError
-    from jeeves.config import GlobalConfig
+    from jeeves.core.repo import ensure_repo, RepoError
+    from jeeves.core.worktree import create_worktree, WorktreeError
+    from jeeves.core.config import GlobalConfig
     JEEVES_CLI_AVAILABLE = True
 except ImportError:
     JEEVES_CLI_AVAILABLE = False
@@ -864,10 +865,11 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         """Handle GET requests"""
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
+        # Redirect root to index.html in static directory
         if path == "/":
-            path = "/index.html"
-        
+            self.path = "/static/index.html"
+
         if path == "/api/state":
             data = self.state.get_state()
             data["run"] = self.run_manager.get_status()

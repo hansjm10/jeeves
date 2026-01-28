@@ -569,6 +569,8 @@ class JeevesRunManager:
             env["JEEVES_MODE"] = mode
             env["JEEVES_OUTPUT_MODE"] = output_mode
             env["JEEVES_PRINT_PROMPT"] = "1" if print_prompt else "0"
+            # Ensure Python imports jeeves from installation dir, not work dir
+            env["PYTHONPATH"] = str(self.jeeves_script.parent)
 
             if runner != "auto":
                 env["JEEVES_RUNNER"] = runner
@@ -732,6 +734,10 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._handle_sdk_output_messages()
         elif path == "/api/sdk-output/tool-calls":
             self._handle_sdk_output_tool_calls()
+        elif path == "/api/issues":
+            self._handle_list_issues()
+        elif path == "/api/data-dir":
+            self._handle_data_dir_info()
         else:
             super().do_GET()
 
@@ -1276,6 +1282,61 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             }
         })
 
+    def _handle_list_issues(self):
+        """Handle GET /api/issues - List all issues from central data directory."""
+        issues = list_central_issues()
+        data_dir = get_jeeves_data_dir()
+        self._send_json({
+            "ok": True,
+            "issues": issues,
+            "data_dir": str(data_dir) if data_dir else None,
+            "count": len(issues),
+        })
+
+    def _handle_data_dir_info(self):
+        """Handle GET /api/data-dir - Get info about the central data directory."""
+        data_dir = get_jeeves_data_dir()
+        if not data_dir:
+            self._send_json({
+                "ok": False,
+                "error": "Cannot determine data directory",
+            }, status=500)
+            return
+
+        info = {
+            "ok": True,
+            "data_dir": str(data_dir),
+            "exists": data_dir.exists(),
+            "repos_dir": str(data_dir / "repos"),
+            "worktrees_dir": str(data_dir / "worktrees"),
+            "issues_dir": str(data_dir / "issues"),
+        }
+
+        if data_dir.exists():
+            repos_dir = data_dir / "repos"
+            worktrees_dir = data_dir / "worktrees"
+            issues_dir = data_dir / "issues"
+
+            if repos_dir.exists():
+                try:
+                    info["repo_count"] = sum(1 for _ in repos_dir.glob("*/*") if _.is_dir())
+                except Exception:
+                    info["repo_count"] = 0
+
+            if worktrees_dir.exists():
+                try:
+                    info["worktree_count"] = sum(1 for _ in worktrees_dir.glob("*/*/issue-*") if _.is_dir())
+                except Exception:
+                    info["worktree_count"] = 0
+
+            if issues_dir.exists():
+                try:
+                    info["issue_count"] = sum(1 for _ in issues_dir.glob("*/*/*/issue.json"))
+                except Exception:
+                    info["issue_count"] = 0
+
+        self._send_json(info)
+
     def _send_json(self, data: Dict, status: int = 200):
         """Send JSON response"""
         body = json.dumps(data).encode()
@@ -1367,11 +1428,117 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             print(f"[404] {args[0]}")
 
 
+def get_jeeves_data_dir() -> Optional[Path]:
+    """Get the central Jeeves data directory using XDG standard.
+
+    Returns:
+        Path to ~/.local/share/jeeves or platform equivalent.
+    """
+    try:
+        import platformdirs
+        return Path(platformdirs.user_data_dir("jeeves", appauthor=False))
+    except ImportError:
+        pass
+
+    # Fallback without platformdirs
+    env_dir = os.environ.get("JEEVES_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser().resolve()
+
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+        return Path(base) / "jeeves"
+    elif hasattr(os, 'uname') and os.uname().sysname == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "jeeves"
+    else:
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        if xdg_data:
+            return Path(xdg_data) / "jeeves"
+        return Path.home() / ".local" / "share" / "jeeves"
+
+
+def list_central_issues() -> List[Dict]:
+    """List all issues from the central Jeeves data directory.
+
+    Returns:
+        List of issue info dicts.
+    """
+    data_dir = get_jeeves_data_dir()
+    if not data_dir:
+        return []
+
+    issues_dir = data_dir / "issues"
+    if not issues_dir.exists():
+        return []
+
+    results = []
+
+    for owner_dir in issues_dir.iterdir():
+        if not owner_dir.is_dir():
+            continue
+
+        for repo_dir in owner_dir.iterdir():
+            if not repo_dir.is_dir():
+                continue
+
+            for issue_dir in repo_dir.iterdir():
+                if not issue_dir.is_dir():
+                    continue
+
+                issue_file = issue_dir / "issue.json"
+                if not issue_file.exists():
+                    continue
+
+                try:
+                    with open(issue_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+
+                    issue_data = data.get("issue", {})
+                    if isinstance(issue_data, int):
+                        issue_number = issue_data
+                        issue_title = ""
+                    else:
+                        issue_number = issue_data.get("number", 0)
+                        issue_title = issue_data.get("title", "")
+
+                    results.append({
+                        "owner": owner_dir.name,
+                        "repo": repo_dir.name,
+                        "issue_number": issue_number,
+                        "issue_title": issue_title,
+                        "branch": data.get("branchName", ""),
+                        "state_dir": str(issue_dir),
+                        "status": data.get("status", {}),
+                        "mtime": issue_file.stat().st_mtime,
+                    })
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+    return sorted(results, key=lambda x: x.get("mtime", 0), reverse=True)
+
+
 def find_state_dir() -> Optional[str]:
-    """Find Jeeves state directory (or suggest a default)."""
+    """Find Jeeves state directory (or suggest a default).
+
+    Priority:
+    1. Legacy mode (JEEVES_WORK_DIR, JEEVES_STATE_DIR, or local ./jeeves)
+    2. Git root jeeves directory
+    3. Central data directory (if issues exist)
+    4. Fallback to git root or current dir
+    """
     cwd = Path.cwd()
     fallback: Optional[str] = None
-    
+
+    # Check legacy environment variables first
+    if os.environ.get("JEEVES_STATE_DIR"):
+        return os.environ["JEEVES_STATE_DIR"]
+
+    if os.environ.get("JEEVES_WORK_DIR"):
+        work_dir = Path(os.environ["JEEVES_WORK_DIR"])
+        state_dir = work_dir / "jeeves"
+        if state_dir.exists():
+            return str(state_dir)
+
     # Try git root first (matches jeeves.sh behavior)
     try:
         root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], stderr=subprocess.DEVNULL).decode().strip()
@@ -1382,12 +1549,12 @@ def find_state_dir() -> Optional[str]:
             return str(git_state_dir)
     except Exception:
         pass
-    
+
     # Check current directory
     state_dir = cwd / "jeeves"
     if state_dir.exists() and (state_dir / "last-run.log").exists():
         return str(state_dir)
-    
+
     # Check parent directories
     for parent in [cwd] + list(cwd.parents):
         state_dir = parent / "jeeves"
@@ -1397,11 +1564,11 @@ def find_state_dir() -> Optional[str]:
                (state_dir / "issue.json").exists() or \
                (state_dir / "prd.json").exists():
                 return str(state_dir)
-    
+
     # Fallback to any jeeves dir if strict check fails
     if (cwd / "jeeves").exists():
         return str(cwd / "jeeves")
-        
+
     for parent in [cwd] + list(cwd.parents):
         state_dir = parent / "jeeves"
         if state_dir.exists():

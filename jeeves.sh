@@ -1921,11 +1921,21 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       --state-dir "$JEEVES_STATE_DIR"
     )
 
+    # Set PYTHONPATH to prioritize Jeeves installation directory
+    # This prevents Python from importing wrong jeeves module if work dir has one
     if [ "$OUTPUT_MODE" = "stream" ]; then
       # In stream mode, tee output to stderr for real-time viewing
-      (cd "$WORK_DIR" && $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+      if [ -n "$SANDBOX_VALUE" ]; then
+        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" IS_SANDBOX="$SANDBOX_VALUE" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+      else
+        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" 2>&1) | tee -a "$LAST_RUN_LOG_FILE" >(cat >&2) || true
+      fi
     else
-      (cd "$WORK_DIR" && $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+      if [ -n "$SANDBOX_VALUE" ]; then
+        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" IS_SANDBOX="$SANDBOX_VALUE" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+      else
+        (cd "$WORK_DIR" && PYTHONPATH="$SCRIPT_DIR" $SDK_RUNNER_CMD "${SDK_ARGS[@]}" >> "$LAST_RUN_LOG_FILE" 2>&1) || true
+      fi
     fi
   else
     echo "[ERROR] Unsupported runner: $RUNNER"

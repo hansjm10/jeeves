@@ -11,6 +11,8 @@ authors = [
 
 dependencies = [
     "claude-agent-sdk>=0.1.0",
+    "click>=8.0",
+    "platformdirs>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +22,7 @@ dev = [
 ]
 
 [project.scripts]
+jeeves = "jeeves.cli:main"
 jeeves-sdk-runner = "jeeves.runner.sdk_runner:main"
 
 [build-system]

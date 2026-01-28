@@ -18,6 +18,16 @@ from typing import Any, Dict, List, Optional
 # Import the SDK
 try:
     from claude_agent_sdk import ClaudeAgentOptions, query
+    from claude_agent_sdk.types import (
+        AssistantMessage,
+        ResultMessage,
+        StreamEvent,
+        SystemMessage,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
 except ImportError:
     # Provide helpful error message
     print("Error: claude-agent-sdk not installed.", file=sys.stderr)
@@ -36,23 +46,54 @@ class SDKRunner:
         self.output: SDKOutput = create_output()
         self._tool_start_times: Dict[str, float] = {}
         self._pending_tool_calls: Dict[str, ToolCall] = {}
+        self._log_file = None
+
+    def _open_log_file(self) -> None:
+        """Open the text log file for streaming output."""
+        if self.config.text_output_file:
+            self.config.text_output_file.parent.mkdir(parents=True, exist_ok=True)
+            self._log_file = open(self.config.text_output_file, "w", buffering=1)  # Line buffered
+
+    def _close_log_file(self) -> None:
+        """Close the text log file."""
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
+
+    def _log(self, line: str) -> None:
+        """Write a line to the log file immediately."""
+        if self._log_file:
+            self._log_file.write(line + "\n")
+            self._log_file.flush()
 
     async def run(self) -> SDKOutput:
         """Run the agent with the given prompt and collect output."""
+        # Open log file for streaming
+        self._open_log_file()
+
+        try:
+            return await self._run_internal()
+        finally:
+            self._close_log_file()
+
+    async def _run_internal(self) -> SDKOutput:
+        """Internal run implementation."""
         # Read the prompt
         if not self.config.prompt_file.exists():
             self.output.error = f"Prompt file not found: {self.config.prompt_file}"
             self.output.error_type = "FileNotFoundError"
+            self._log(f"[ERROR] Prompt file not found: {self.config.prompt_file}")
             self.output.finalize(success=False, error=self.output.error)
             return self.output
 
         prompt = self.config.prompt_file.read_text()
 
-        # Build options
+        # Build options with streaming enabled
         options = ClaudeAgentOptions(
             allowed_tools=self.config.allowed_tools,
             permission_mode=self.config.permission_mode,
             cwd=str(self.config.work_dir),
+            include_partial_messages=True,  # Enable streaming
         )
 
         # Add max_turns if specified
@@ -60,6 +101,7 @@ class SDKRunner:
             options.max_turns = self.config.max_turns
 
         # Track session initialization
+        self._log(f"[SDK] Starting with prompt from {self.config.prompt_file}")
         self.output.add_message(
             Message(
                 type="system",
@@ -74,11 +116,14 @@ class SDKRunner:
             async for message in query(prompt=prompt, options=options):
                 self._process_message(message)
 
+            self._log("")  # Newline after streamed content
+            self._log("[SDK] Run completed successfully")
             self.output.finalize(success=True)
 
         except Exception as e:
             self.output.error = str(e)
             self.output.error_type = type(e).__name__
+            self._log(f"[ERROR] Agent error: {e}")
             self.output.add_message(
                 Message(
                     type="system",
@@ -97,29 +142,35 @@ class SDKRunner:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        # The SDK yields various message types
-        # Handle based on the message structure
-        msg_type = getattr(message, "type", None) or message.get("type", "unknown") if isinstance(message, dict) else "unknown"
-
-        if msg_type == "system":
+        # The SDK yields typed dataclass messages - use isinstance checks
+        if isinstance(message, SystemMessage):
             # System messages (session init, etc.)
-            session_id = getattr(message, "session_id", None)
+            subtype = message.subtype
+            data = message.data
+            session_id = data.get("session_id") if data else None
             if session_id:
                 self.output.session_id = session_id
+                self._log(f"[SDK] Session: {session_id}")
             self.output.add_message(
                 Message(
                     type="system",
-                    subtype=getattr(message, "subtype", None),
+                    subtype=subtype,
                     session_id=session_id,
                     timestamp=now,
                     raw=self._to_dict(message),
                 )
             )
 
-        elif msg_type == "assistant":
+        elif isinstance(message, AssistantMessage):
             # Assistant messages may contain content and/or tool_use
             content = self._get_content(message)
             tool_use = self._get_tool_use(message)
+
+            # Note: Content is already streamed via StreamEvent, so we just
+            # add a newline to end the streamed block
+            if content and self._log_file:
+                self._log_file.write("\n")
+                self._log_file.flush()
 
             self.output.add_message(
                 Message(
@@ -131,72 +182,132 @@ class SDKRunner:
                 )
             )
 
-            # Track tool call start
+            # Track tool call start and log it
             if tool_use:
+                tool_name = tool_use.get("name", "unknown")
+                tool_input = tool_use.get("input", {})
                 tool_id = tool_use.get("id", "")
+
+                # Log tool invocation
+                if tool_name == "Bash":
+                    cmd = tool_input.get("command", "")
+                    self._log(f"[TOOL] Bash: {cmd[:200]}{'...' if len(cmd) > 200 else ''}")
+                elif tool_name in ("Write", "Edit"):
+                    file_path = tool_input.get("file_path", "")
+                    self._log(f"[TOOL] {tool_name}: {file_path}")
+                elif tool_name == "Read":
+                    file_path = tool_input.get("file_path", "")
+                    self._log(f"[TOOL] Read: {file_path}")
+                elif tool_name in ("Glob", "Grep"):
+                    pattern = tool_input.get("pattern", "")
+                    self._log(f"[TOOL] {tool_name}: {pattern}")
+                else:
+                    self._log(f"[TOOL] {tool_name}")
+
                 if tool_id:
                     self._tool_start_times[tool_id] = time.time()
                     self._pending_tool_calls[tool_id] = ToolCall(
-                        name=tool_use.get("name", "unknown"),
-                        input=tool_use.get("input", {}),
+                        name=tool_name,
+                        input=tool_input,
                         tool_use_id=tool_id,
                         timestamp=now,
                     )
 
-        elif msg_type == "tool_result":
-            # Tool result messages
-            tool_use_id = getattr(message, "tool_use_id", None) or (message.get("tool_use_id") if isinstance(message, dict) else None)
-            content = self._get_content(message)
-            is_error = getattr(message, "is_error", False) or (message.get("is_error", False) if isinstance(message, dict) else False)
+        elif isinstance(message, UserMessage):
+            # User messages contain tool results
+            content_blocks = message.content
+            tool_use_id = None
+            content = None
+            is_error = False
 
-            self.output.add_message(
-                Message(
-                    type="tool_result",
-                    tool_use_id=tool_use_id,
-                    content=content[:2000] if content and len(content) > 2000 else content,  # Truncate large results
-                    timestamp=now,
-                    raw=self._to_dict(message),
+            # Check if this is a tool result (has ToolResultBlock)
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, ToolResultBlock):
+                        tool_use_id = block.tool_use_id
+                        content = block.content if isinstance(block.content, str) else str(block.content) if block.content else None
+                        is_error = block.is_error or False
+                        break
+
+            if tool_use_id:
+                # This is a tool result
+                # Log errors from tool results
+                if is_error and content:
+                    self._log(f"[TOOL ERROR] {content[:500]}")
+
+                self.output.add_message(
+                    Message(
+                        type="tool_result",
+                        tool_use_id=tool_use_id,
+                        content=content[:2000] if content and len(content) > 2000 else content,
+                        timestamp=now,
+                        raw=self._to_dict(message),
+                    )
                 )
-            )
 
-            # Record completed tool call
-            if tool_use_id and tool_use_id in self._pending_tool_calls:
-                tool_call = self._pending_tool_calls.pop(tool_use_id)
-                start_time = self._tool_start_times.pop(tool_use_id, None)
-                if start_time:
-                    tool_call.duration_ms = int((time.time() - start_time) * 1000)
-                tool_call.is_error = is_error
-                self.output.add_tool_call(tool_call)
+                # Record completed tool call
+                if tool_use_id in self._pending_tool_calls:
+                    tool_call = self._pending_tool_calls.pop(tool_use_id)
+                    start_time = self._tool_start_times.pop(tool_use_id, None)
+                    if start_time:
+                        tool_call.duration_ms = int((time.time() - start_time) * 1000)
+                        self._log(f"[TOOL] Completed {tool_call.name} ({tool_call.duration_ms}ms)")
+                    tool_call.is_error = is_error
+                    self.output.add_tool_call(tool_call)
+            else:
+                # Regular user message
+                content = self._get_content(message)
+                self.output.add_message(
+                    Message(
+                        type="user",
+                        content=content,
+                        timestamp=now,
+                        raw=self._to_dict(message),
+                    )
+                )
 
-        elif msg_type == "result":
+        elif isinstance(message, ResultMessage):
             # Final result message
-            content = self._get_content(message)
+            subtype = message.subtype
+            result = message.result
+            self._log("")
+            self._log(f"--- Result ({subtype}) ---")
+            if result:
+                for line in str(result).split("\n"):
+                    self._log(line)
             self.output.add_message(
                 Message(
                     type="result",
-                    content=content,
+                    subtype=subtype,
+                    content=result,
                     timestamp=now,
                     raw=self._to_dict(message),
                 )
             )
 
-        elif msg_type == "user":
-            # User messages (typically just the initial prompt)
-            content = self._get_content(message)
-            self.output.add_message(
-                Message(
-                    type="user",
-                    content=content,
-                    timestamp=now,
-                    raw=self._to_dict(message),
-                )
-            )
+        elif isinstance(message, StreamEvent):
+            # StreamEvent - handle streaming deltas
+            event = message.event
+            event_type = event.get("type", "") if isinstance(event, dict) else ""
+
+            if event_type == "content_block_delta":
+                delta = event.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        # Stream text without newline for partial chunks
+                        if self._log_file:
+                            self._log_file.write(text)
+                            self._log_file.flush()
+
+            # Don't store every stream event in output (too verbose)
+            # Only store significant events
 
         else:
             # Unknown message type - still record it
             self.output.add_message(
                 Message(
-                    type=msg_type if isinstance(msg_type, str) else "unknown",
+                    type="unknown",
                     content=str(message)[:500],
                     timestamp=now,
                     raw=self._to_dict(message),
@@ -217,7 +328,9 @@ class SDKRunner:
         if isinstance(content, list):
             text_parts = []
             for block in content:
-                if isinstance(block, dict):
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+                elif isinstance(block, dict):
                     if block.get("type") == "text":
                         text_parts.append(block.get("text", ""))
                 elif isinstance(block, str):
@@ -240,17 +353,17 @@ class SDKRunner:
 
         if isinstance(content, list):
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
+                if isinstance(block, ToolUseBlock):
+                    return {
+                        "name": block.name,
+                        "input": block.input,
+                        "id": block.id,
+                    }
+                elif isinstance(block, dict) and block.get("type") == "tool_use":
                     return {
                         "name": block.get("name"),
                         "input": block.get("input", {}),
                         "id": block.get("id"),
-                    }
-                elif hasattr(block, "type") and block.type == "tool_use":
-                    return {
-                        "name": block.name,
-                        "input": getattr(block, "input", {}),
-                        "id": block.id,
                     }
 
         return None

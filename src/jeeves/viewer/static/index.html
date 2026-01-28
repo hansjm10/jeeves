@@ -1219,6 +1219,7 @@
                     <div class="sdk-controls">
                         <button class="log-btn" id="btnSdkRefresh">Refresh</button>
                         <button class="log-btn" id="btnSdkTimeline">Timeline</button>
+                        <button class="log-btn active" id="btnSdkAutoScroll">Auto-scroll</button>
                     </div>
                 </div>
                 <div class="sdk-content" id="sdkContent">
@@ -1260,6 +1261,7 @@
         let promptFiles = [];
         let sdkOutput = null;
         let sdkShowTimeline = false;
+        let sdkAutoScroll = true;
 
         // Schema version detection and normalization functions
         function detectSchemaVersion(data) {
@@ -1489,6 +1491,9 @@
             }).join('');
 
             convEl.innerHTML = html;
+            if (sdkAutoScroll) {
+                convEl.scrollTop = convEl.scrollHeight;
+            }
         }
 
         function renderSdkTimeline() {
@@ -1523,6 +1528,9 @@
             }).join('');
 
             timelineEl.innerHTML = html;
+            if (sdkAutoScroll) {
+                timelineEl.scrollTop = timelineEl.scrollHeight;
+            }
         }
 
         function truncateText(text, maxLen) {
@@ -1626,6 +1634,7 @@
         const tabPrompts = document.getElementById('tabPrompts');
         const btnSdkRefresh = document.getElementById('btnSdkRefresh');
         const btnSdkTimeline = document.getElementById('btnSdkTimeline');
+        const btnSdkAutoScroll = document.getElementById('btnSdkAutoScroll');
         const btnAutoScroll = document.getElementById('btnAutoScroll');
         const btnClear = document.getElementById('btnClear');
         const btnHideDiffs = document.getElementById('btnHideDiffs');
@@ -1758,6 +1767,38 @@
             btnSdkTimeline.classList.toggle('active', sdkShowTimeline);
             btnSdkTimeline.textContent = sdkShowTimeline ? 'Conversation' : 'Timeline';
             renderSdkOutput();
+        });
+        if (btnSdkAutoScroll) btnSdkAutoScroll.addEventListener('click', () => {
+            sdkAutoScroll = !sdkAutoScroll;
+            btnSdkAutoScroll.classList.toggle('active', sdkAutoScroll);
+            if (sdkAutoScroll) {
+                const activeContainer = sdkShowTimeline
+                    ? document.getElementById('sdkTimeline')
+                    : document.getElementById('sdkConversation');
+                if (activeContainer) {
+                    activeContainer.scrollTop = activeContainer.scrollHeight;
+                }
+            }
+        });
+
+        // SDK auto-scroll detection for Conversation view
+        const sdkConvEl = document.getElementById('sdkConversation');
+        if (sdkConvEl) sdkConvEl.addEventListener('scroll', () => {
+            const isAtBottom = sdkConvEl.scrollHeight - sdkConvEl.scrollTop - sdkConvEl.clientHeight < 50;
+            if (!isAtBottom && sdkAutoScroll) {
+                sdkAutoScroll = false;
+                if (btnSdkAutoScroll) btnSdkAutoScroll.classList.remove('active');
+            }
+        });
+
+        // SDK auto-scroll detection for Timeline view
+        const sdkTimeEl = document.getElementById('sdkTimeline');
+        if (sdkTimeEl) sdkTimeEl.addEventListener('scroll', () => {
+            const isAtBottom = sdkTimeEl.scrollHeight - sdkTimeEl.scrollTop - sdkTimeEl.clientHeight < 50;
+            if (!isAtBottom && sdkAutoScroll) {
+                sdkAutoScroll = false;
+                if (btnSdkAutoScroll) btnSdkAutoScroll.classList.remove('active');
+            }
         });
 
         try {
@@ -2720,7 +2761,16 @@
                 }
             }
             if (e.key === 'End') {
-                logContent.scrollTop = logContent.scrollHeight;
+                if (mainTab === 'logs') {
+                    logContent.scrollTop = logContent.scrollHeight;
+                } else if (mainTab === 'sdk') {
+                    const activeContainer = sdkShowTimeline
+                        ? document.getElementById('sdkTimeline')
+                        : document.getElementById('sdkConversation');
+                    if (activeContainer) {
+                        activeContainer.scrollTop = activeContainer.scrollHeight;
+                    }
+                }
             }
         });
         

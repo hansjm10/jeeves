@@ -1,0 +1,69 @@
+workflow:
+  name: default
+  version: 1
+  start: design_draft
+
+phases:
+  # Design phases
+  design_draft:
+    prompt: design.draft.md
+    type: execute
+    description: Create initial design document
+    transitions:
+      - to: design_review
+        auto: true
+
+  design_review:
+    prompt: design.review.md
+    type: evaluate
+    description: Review design document (read-only)
+    allowed_writes:
+      - ".jeeves/*"
+    transitions:
+      - to: design_edit
+        when: "status.designNeedsChanges == true"
+      - to: implement
+        when: "status.designApproved == true"
+
+  design_edit:
+    prompt: design.edit.md
+    type: execute
+    description: Apply changes from design review
+    transitions:
+      - to: design_review
+        auto: true
+
+  # Implementation phase
+  implement:
+    prompt: implement.md
+    type: execute
+    description: Implement the design
+    transitions:
+      - to: code_review
+        auto: true
+
+  # Code review loop
+  code_review:
+    prompt: review.evaluate.md
+    type: evaluate
+    description: Review code changes (read-only)
+    allowed_writes:
+      - ".jeeves/*"
+    transitions:
+      - to: code_fix
+        when: "status.reviewNeedsChanges == true"
+      - to: complete
+        when: "status.reviewClean == true"
+
+  code_fix:
+    prompt: review.fix.md
+    type: execute
+    description: Apply fixes from code review
+    transitions:
+      - to: code_review
+        auto: true
+
+  # Terminal state
+  complete:
+    type: terminal
+    description: Workflow complete

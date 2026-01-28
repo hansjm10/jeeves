@@ -41,11 +41,10 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
 
 ## Completion Signal
 
-When ALL tasks for this phase are complete (design doc created, tasks extracted, issue.json updated):
+The viewer detects completion from `.jeeves/issue.json` after your run exits.
 
-1. Ensure all files are saved and committed
-2. Update `.jeeves/issue.json` with final status
-3. Append final summary to `.jeeves/progress.txt`
-4. Output exactly: `<promise>COMPLETE</promise>`
+For the **design** phase, you are considered done when:
+- `.jeeves/issue.json.designDocPath` is set, and
+- the referenced design doc file exists on disk (relative to the repo root)
 
-If you cannot complete all tasks in this iteration (e.g., need clarification, hit errors), write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.
+If you cannot complete all tasks in this iteration (e.g., need clarification, hit errors), write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.

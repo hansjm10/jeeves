@@ -130,24 +130,24 @@ if [ -n "$text_out" ]; then
   echo "dummy log line 2" >> "$text_out"
 fi
 sleep 1
-echo "dummy sdk: done"
+        echo "dummy sdk: done"
 """,
         )
 
         state = JeevesState(str(self.state_dir))
-        run_manager = JeevesRunManager(
+        self.run_manager = JeevesRunManager(
             issue_ref=self.issue_ref,
             prompts_dir=self.tools_dir,
             runner_cmd_override=[str(self.dummy_script)],
         )
-        prompt_manager = JeevesPromptManager(self.tools_dir)
+        self.prompt_manager = JeevesPromptManager(self.tools_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args,
                 state=state,
-                run_manager=run_manager,
-                prompt_manager=prompt_manager,
+                run_manager=self.run_manager,
+                prompt_manager=self.prompt_manager,
                 allow_remote_run=True,
                 **kwargs,
             )
@@ -229,6 +229,98 @@ echo "dummy sdk: done"
                 time.sleep(0.05)
             self.assertFalse(data["run"]["running"])
             self.assertIsNotNone(data["run"]["returncode"])
+        finally:
+            conn.close()
+
+    def test_run_stops_when_issue_json_indicates_complete(self):
+        issue_json = self.state_dir / "issue.json"
+        issue_json.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "repo": "acme/widgets",
+                    "issue": {"number": 1, "repo": "acme/widgets"},
+                    "branch": "issue/test",
+                    "phase": "implement",
+                    "status": {
+                        "implemented": False,
+                        "prCreated": False,
+                        "prDescriptionReady": False,
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+        dummy_set_complete = Path(self._tmp.name) / "dummy_sdk_set_complete.py"
+        _write_executable(
+            dummy_set_complete,
+            """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+def _get_flag_value(flag: str) -> str | None:
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == flag and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+state_dir = _get_flag_value("--state-dir")
+if not state_dir:
+    print("dummy sdk: missing --state-dir", file=sys.stderr)
+    sys.exit(2)
+
+issue_path = os.path.join(state_dir, "issue.json")
+with open(issue_path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+status = data.get("status") or {}
+status["implemented"] = True
+status["prCreated"] = True
+status["prDescriptionReady"] = True
+data["status"] = status
+
+tmp_path = issue_path + ".tmp"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\\n")
+os.replace(tmp_path, issue_path)
+
+print("dummy sdk: set implement complete")
+""",
+        )
+
+        self.run_manager.runner_cmd_override = [str(dummy_set_complete)]
+
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, data = _request_json(
+                conn,
+                "POST",
+                "/api/run",
+                {"max_iterations": 3},
+            )
+            self.assertEqual(status, 200, data)
+            self.assertTrue(data["ok"])
+
+            deadline = time.time() + 5.0
+            run = None
+            while time.time() < deadline:
+                status, data = _request_json(conn, "GET", "/api/run")
+                self.assertEqual(status, 200)
+                run = data.get("run", {})
+                if not run.get("running"):
+                    break
+                time.sleep(0.05)
+
+            self.assertIsNotNone(run)
+            self.assertFalse(run.get("running"), run)
+            self.assertTrue(run.get("completed_via_state"), run)
+            self.assertFalse(run.get("completed_via_promise"), run)
+            self.assertIn("status.implemented", str(run.get("completion_reason", "")))
         finally:
             conn.close()
 

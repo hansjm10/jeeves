@@ -37,11 +37,11 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
 
 ## Completion Signal
 
-When ALL tasks for this phase are complete (implementation done, checks pass, PR created/updated with proper description):
+The viewer detects completion from `.jeeves/issue.json` after your run exits.
 
-1. Ensure all changes are committed and pushed
-2. Update `.jeeves/issue.json` with final status (`status.implemented=true`, `status.prCreated=true`, `status.prDescriptionReady=true`)
-3. Append final summary to `.jeeves/progress.txt`
-4. Output exactly: `<promise>COMPLETE</promise>`
+For the **implement** phase, you are considered done when ALL are true in `.jeeves/issue.json.status`:
+- `implemented=true`
+- `prCreated=true`
+- `prDescriptionReady=true`
 
-If you cannot complete all tasks in this iteration (e.g., tests failing, need fixes, blocked), write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.
+If you cannot complete all tasks in this iteration (e.g., tests failing, need fixes, blocked), write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.

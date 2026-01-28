@@ -36,11 +36,9 @@ The `.jeeves/` directory is in your **current working directory**. Use relative 
 
 ## Completion Signal
 
-When the review phase is complete (`reviewClean=true` with required passes):
+The viewer detects completion from `.jeeves/issue.json` after your run exits.
 
-1. Ensure all changes are committed and pushed
-2. Update `.jeeves/issue.json` with final status (`status.reviewClean=true`)
-3. Append final summary to `.jeeves/progress.txt`
-4. Output exactly: `<promise>COMPLETE</promise>`
+For the **review** phase, you are considered done when:
+- `.jeeves/issue.json.status.reviewClean=true`
 
-If the review is not yet clean or you need more passes, write your progress to `.jeeves/progress.txt` and end normally WITHOUT the promise. The next iteration will continue from where you left off.
+If the review is not yet clean or you need more passes, write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.

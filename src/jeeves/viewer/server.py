@@ -550,6 +550,8 @@ class JeevesRunManager:
             "max_iterations": None,
             "current_iteration": 0,
             "completed_via_promise": False,
+            "completed_via_state": False,
+            "completion_reason": None,
             "viewer_log_file": str(self.state_dir / "viewer-run.log"),
             "last_error": None,
             "issue_ref": issue_ref,
@@ -648,6 +650,8 @@ class JeevesRunManager:
                 "max_iterations": max_iterations,
                 "current_iteration": 0,
                 "completed_via_promise": False,
+                "completed_via_state": False,
+                "completion_reason": None,
                 "viewer_log_file": str(viewer_log_path),
                 "last_error": None,
                 "issue_ref": self.issue_ref,
@@ -690,12 +694,32 @@ class JeevesRunManager:
                 # Run a single iteration
                 result = self._run_single_iteration(viewer_log_path)
 
+                # Check for completion via issue.json state (preferred)
+                issue_json = self._read_issue_json()
+                phase: Optional[str] = None
+                try:
+                    phase = IssueState.load(self._owner, self._repo, self._issue_number).phase
+                except Exception:
+                    if isinstance(issue_json, dict):
+                        phase = str(issue_json.get("phase") or "").strip().lower() or None
+
+                if isinstance(issue_json, dict) and phase:
+                    complete, reason = self._is_phase_complete(issue_json, phase)
+                    if complete:
+                        self._log_to_file(viewer_log_path, f"")
+                        self._log_to_file(viewer_log_path, f"[COMPLETE] Phase marked complete via issue.json: {reason or '(no reason)'}")
+                        with self._lock:
+                            self._run_info["completed_via_state"] = True
+                            self._run_info["completion_reason"] = reason
+                        break
+
                 # Check for completion promise in SDK output
                 if self._check_completion_promise():
                     self._log_to_file(viewer_log_path, f"")
                     self._log_to_file(viewer_log_path, f"[COMPLETE] Agent signaled completion after {iteration} iteration(s)")
                     with self._lock:
                         self._run_info["completed_via_promise"] = True
+                        self._run_info["completion_reason"] = "completion promise found in output"
                     break
 
                 # Check if iteration failed
@@ -779,6 +803,51 @@ class JeevesRunManager:
                 self._run_info["pid"] = None
 
         return returncode
+
+    def _read_issue_json(self) -> Optional[Dict]:
+        """Read the raw issue.json for completion checks."""
+        issue_path = self.state_dir / "issue.json"
+        if not issue_path.exists():
+            return None
+        try:
+            with open(issue_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _is_phase_complete(self, issue_json: Dict, phase: str) -> Tuple[bool, Optional[str]]:
+        """Determine completion based on issue.json state (no model magic string)."""
+        phase = (phase or "").strip().lower()
+
+        if phase == "design":
+            design_doc_path = issue_json.get("designDocPath") or issue_json.get("designDoc")
+            if not design_doc_path:
+                return False, None
+            doc_path = Path(str(design_doc_path))
+            if not doc_path.is_absolute():
+                doc_path = self.work_dir / doc_path
+            if doc_path.exists() and doc_path.is_file():
+                return True, f"designDocPath exists on disk: {design_doc_path}"
+            return False, None
+
+        if phase == "implement":
+            status = issue_json.get("status") or {}
+            if not isinstance(status, dict):
+                status = {}
+            if bool(status.get("implemented")) and bool(status.get("prCreated")) and bool(status.get("prDescriptionReady")):
+                return True, "status.implemented && status.prCreated && status.prDescriptionReady"
+            return False, None
+
+        if phase == "review":
+            status = issue_json.get("status") or {}
+            if not isinstance(status, dict):
+                status = {}
+            if bool(status.get("reviewClean")):
+                return True, "status.reviewClean == true"
+            return False, None
+
+        return False, f"unknown phase: {phase}"
 
     def _check_completion_promise(self) -> bool:
         """Check if the agent output contains the completion promise."""

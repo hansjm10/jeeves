@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Jeeves Output Schema v2",
+  "description": "Structured output from Jeeves runners with provider abstraction (jeeves.output.v2)",
+  "type": "object",
+  "required": ["schema", "provider", "session", "conversation", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "jeeves.output.v2",
+      "description": "Schema version identifier"
+    },
+    "provider": {
+      "type": "object",
+      "description": "Provider information for the SDK/runner that produced this output",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Provider name (e.g., 'claude-sdk', 'codex', 'opencode')"
+        },
+        "version": {
+          "type": "string",
+          "description": "Provider/SDK version string"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional provider-specific metadata",
+          "additionalProperties": true
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "description": "Session information including status",
+      "required": ["id", "started_at", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": ["string", "null"],
+          "description": "Unique session identifier from the provider"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the session started"
+        },
+        "ended_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the session ended (null if still running)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["running", "success", "error", "cancelled"],
+          "description": "Current session status"
+        }
+      }
+    },
+    "conversation": {
+      "type": "array",
+      "description": "All messages from the session (backward compatible with v1 messages)",
+      "items": {
+        "$ref": "#/$defs/Message"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Aggregate statistics for the session",
+      "required": ["message_count", "tool_call_count", "duration_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "message_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of messages"
+        },
+        "tool_call_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of tool calls"
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total session duration in seconds"
+        },
+        "tokens": {
+          "type": "object",
+          "description": "Token usage tracking (when provider supports it)",
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total input tokens consumed"
+            },
+            "output": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Total output tokens generated"
+            }
+          }
+        },
+        "errors": {
+          "type": "array",
+          "description": "List of errors that occurred during the session",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Error type/class"
+              },
+              "message": {
+                "type": "string",
+                "description": "Error message"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the error occurred"
+              }
+            }
+          }
+        }
+      }
+    },
+    "raw": {
+      "type": "object",
+      "description": "Raw provider-specific data for debugging or advanced use cases",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "Message": {
+      "type": "object",
+      "description": "A message in the conversation (backward compatible with v1)",
+      "required": ["type", "timestamp"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["system", "user", "assistant", "tool_result", "result"],
+          "description": "Message type (compatible with v1 schema)"
+        },
+        "subtype": {
+          "type": ["string", "null"],
+          "enum": ["init", "error", null],
+          "description": "Subtype for system messages"
+        },
+        "content": {
+          "type": ["string", "null"],
+          "description": "Text content of the message"
+        },
+        "tool_use": {
+          "type": ["object", "null"],
+          "description": "Tool use information for assistant messages",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Tool name"
+            },
+            "input": {
+              "type": "object",
+              "description": "Tool input parameters"
+            },
+            "id": {
+              "type": "string",
+              "description": "Unique tool use ID"
+            }
+          }
+        },
+        "tool_use_id": {
+          "type": ["string", "null"],
+          "description": "Tool use ID for tool_result messages"
+        },
+        "session_id": {
+          "type": ["string", "null"],
+          "description": "Session ID (typically in system init message)"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the message was received"
+        }
+      }
+    },
+    "ToolCall": {
+      "type": "object",
+      "description": "Summary of a tool call with timing information",
+      "required": ["name", "input", "tool_use_id"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Tool name (e.g., Read, Write, Bash)"
+        },
+        "input": {
+          "type": "object",
+          "description": "Tool input parameters"
+        },
+        "tool_use_id": {
+          "type": "string",
+          "description": "Unique tool use ID"
+        },
+        "duration_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Tool execution duration in milliseconds"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the tool was called"
+        },
+        "is_error": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the tool call resulted in an error"
+        }
+      }
+    }
+  }
+}

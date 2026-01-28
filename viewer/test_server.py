@@ -953,3 +953,181 @@ class SDKDefaultTabTests(unittest.TestCase):
         # Check that logs tab click handler exists
         self.assertIn("tabLogs.addEventListener('click', () => setMainTab('logs'))", content,
             "Logs tab should have click handler to setMainTab('logs')")
+
+
+class OutputSchemaV2Tests(unittest.TestCase):
+    """Test jeeves.output.v2 JSON Schema design (Task T5)."""
+
+    def setUp(self):
+        # Path to the v2 schema file
+        self.schema_path = Path(__file__).parent.parent / "docs" / "output-schema-v2.json"
+
+    def test_schema_file_exists(self):
+        """docs/output-schema-v2.json should exist."""
+        self.assertTrue(self.schema_path.exists(),
+            f"Schema file should exist at {self.schema_path}")
+
+    def test_schema_is_valid_json(self):
+        """Schema file should be valid JSON."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)  # Should not raise
+        self.assertIsInstance(schema, dict)
+
+    def test_schema_has_json_schema_meta(self):
+        """Schema should have $schema meta property for JSON Schema."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        self.assertIn("$schema", schema)
+        self.assertIn("json-schema.org", schema["$schema"])
+
+    def test_schema_version_is_v2(self):
+        """Schema should define schema property as 'jeeves.output.v2'."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        # Check that the schema property is defined with v2 value
+        props = schema.get("properties", {})
+        self.assertIn("schema", props)
+        schema_prop = props["schema"]
+        # Should be a const with v2 or enum containing v2
+        if "const" in schema_prop:
+            self.assertEqual(schema_prop["const"], "jeeves.output.v2")
+        elif "enum" in schema_prop:
+            self.assertIn("jeeves.output.v2", schema_prop["enum"])
+
+    def test_schema_includes_provider_info(self):
+        """Schema should include provider info (name, version, metadata)."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        props = schema.get("properties", {})
+
+        self.assertIn("provider", props, "Schema should have 'provider' property")
+        provider_props = props["provider"].get("properties", {})
+
+        self.assertIn("name", provider_props, "Provider should have 'name'")
+        self.assertIn("version", provider_props, "Provider should have 'version'")
+        self.assertIn("metadata", provider_props, "Provider should have 'metadata'")
+
+    def test_schema_includes_session_with_status_enum(self):
+        """Schema should include session info with status enum."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        props = schema.get("properties", {})
+
+        self.assertIn("session", props, "Schema should have 'session' property")
+        session_props = props["session"].get("properties", {})
+
+        self.assertIn("id", session_props, "Session should have 'id'")
+        self.assertIn("started_at", session_props, "Session should have 'started_at'")
+        self.assertIn("ended_at", session_props, "Session should have 'ended_at'")
+        self.assertIn("status", session_props, "Session should have 'status'")
+
+        # Status should be an enum with running, success, error, cancelled
+        status_prop = session_props["status"]
+        self.assertIn("enum", status_prop, "Status should be an enum")
+        expected_statuses = ["running", "success", "error", "cancelled"]
+        for status in expected_statuses:
+            self.assertIn(status, status_prop["enum"],
+                f"Status enum should include '{status}'")
+
+    def test_schema_includes_token_tracking(self):
+        """Schema should include token usage tracking."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        props = schema.get("properties", {})
+
+        # Token tracking should be in summary
+        self.assertIn("summary", props, "Schema should have 'summary' property")
+        summary_props = props["summary"].get("properties", {})
+
+        self.assertIn("tokens", summary_props, "Summary should have 'tokens'")
+        token_props = summary_props["tokens"].get("properties", {})
+
+        self.assertIn("input", token_props, "Tokens should track 'input'")
+        self.assertIn("output", token_props, "Tokens should track 'output'")
+
+    def test_schema_backward_compatible_with_v1_messages(self):
+        """Schema should be backward compatible with v1 messages format."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+
+        # Check for $defs or definitions section
+        defs = schema.get("$defs", schema.get("definitions", {}))
+
+        # Should have Message definition compatible with v1
+        self.assertIn("Message", defs, "Schema should define Message type")
+        message_def = defs["Message"]
+        message_props = message_def.get("properties", {})
+
+        # v1 required message fields
+        self.assertIn("type", message_props, "Message should have 'type'")
+        self.assertIn("timestamp", message_props, "Message should have 'timestamp'")
+
+        # v1 optional message fields
+        self.assertIn("content", message_props, "Message should have 'content'")
+
+        # Check Message type enum matches v1
+        type_prop = message_props.get("type", {})
+        if "enum" in type_prop:
+            v1_types = ["system", "user", "assistant", "tool_result", "result"]
+            for msg_type in v1_types:
+                self.assertIn(msg_type, type_prop["enum"],
+                    f"Message type enum should include v1 type '{msg_type}'")
+
+    def test_schema_has_conversation_array(self):
+        """Schema should have conversation array for messages."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+        props = schema.get("properties", {})
+
+        self.assertIn("conversation", props, "Schema should have 'conversation' property")
+        conv_prop = props["conversation"]
+        self.assertEqual(conv_prop.get("type"), "array", "Conversation should be an array")
+
+    def test_sample_v2_document_validates(self):
+        """A sample v2 document should match the schema structure."""
+        content = self.schema_path.read_text()
+        schema = json.loads(content)
+
+        # Create a sample v2 document
+        sample_v2 = {
+            "schema": "jeeves.output.v2",
+            "provider": {
+                "name": "claude-sdk",
+                "version": "1.0.0",
+                "metadata": {}
+            },
+            "session": {
+                "id": "test-session-123",
+                "started_at": "2026-01-28T10:00:00Z",
+                "ended_at": "2026-01-28T10:05:00Z",
+                "status": "success"
+            },
+            "conversation": [
+                {
+                    "type": "user",
+                    "content": "Hello",
+                    "timestamp": "2026-01-28T10:00:01Z"
+                },
+                {
+                    "type": "assistant",
+                    "content": "Hi there!",
+                    "timestamp": "2026-01-28T10:00:02Z"
+                }
+            ],
+            "summary": {
+                "message_count": 2,
+                "tool_call_count": 0,
+                "duration_seconds": 300,
+                "tokens": {
+                    "input": 100,
+                    "output": 50
+                },
+                "errors": []
+            },
+            "raw": {}
+        }
+
+        # Basic structural validation (without jsonschema library)
+        props = schema.get("properties", {})
+        for key in sample_v2.keys():
+            self.assertIn(key, props, f"Sample key '{key}' should be in schema properties")

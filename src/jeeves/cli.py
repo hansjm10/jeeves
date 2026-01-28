@@ -17,14 +17,14 @@ from typing import Optional
 
 import click
 
-from .config import GlobalConfig
-from .issue import (
+from .core.config import GlobalConfig
+from .core.issue import (
     IssueError,
     IssueState,
     create_issue_state,
     list_issues,
 )
-from .paths import (
+from .core.paths import (
     get_data_dir,
     get_issue_state_dir,
     get_worktree_path,
@@ -32,7 +32,7 @@ from .paths import (
     parse_issue_ref,
     parse_repo_spec,
 )
-from .repo import (
+from .core.repo import (
     AuthenticationError,
     RepoError,
     check_gh_auth_for_browse,
@@ -40,8 +40,8 @@ from .repo import (
     fetch_repo,
     get_default_branch,
 )
-from .browse import BrowseError, select_issue, select_repository
-from .worktree import WorktreeError, create_worktree
+from .core.browse import BrowseError, select_issue, select_repository
+from .core.worktree import WorktreeError, create_worktree
 
 
 @click.group()
@@ -357,8 +357,9 @@ def run(
         click.echo(click.style("(dry run - not executing)", fg="yellow"))
         return
 
-    # Find jeeves.sh
-    jeeves_sh = Path(__file__).parent.parent / "jeeves.sh"
+    # Find jeeves.sh at repo root
+    # Path from src/jeeves/cli.py -> src/jeeves -> src -> repo_root
+    jeeves_sh = Path(__file__).parent.parent.parent / "jeeves.sh"
     if not jeeves_sh.exists():
         raise click.ClickException(f"jeeves.sh not found at {jeeves_sh}")
 
@@ -573,7 +574,7 @@ def clean(issue_ref: str, force: bool):
 
     This removes the worktree and optionally the state directory.
     """
-    from .worktree import remove_worktree
+    from .core.worktree import remove_worktree
 
     try:
         owner, repo, issue_number = parse_issue_ref(issue_ref)

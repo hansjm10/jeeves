@@ -47,6 +47,20 @@ class SDKRunner:
         self._tool_start_times: Dict[str, float] = {}
         self._pending_tool_calls: Dict[str, ToolCall] = {}
         self._log_file = None
+        self._last_save_time: float = 0
+        self._save_interval: float = 2.0  # Save every 2 seconds max
+
+    def _save_output_incremental(self, force: bool = False) -> None:
+        """Save output file incrementally for real-time viewer updates."""
+        import time
+        now = time.time()
+        # Save if forced or if enough time has passed since last save
+        if force or (now - self._last_save_time >= self._save_interval):
+            try:
+                self.output.save(self.config.output_file)
+                self._last_save_time = now
+            except Exception:
+                pass  # Don't fail on save errors
 
     def _open_log_file(self) -> None:
         """Open the text log file for streaming output."""
@@ -115,10 +129,14 @@ class SDKRunner:
             # Run the agent
             async for message in query(prompt=prompt, options=options):
                 self._process_message(message)
+                # Periodically save output for real-time viewer updates
+                self._save_output_incremental()
 
             self._log("")  # Newline after streamed content
             self._log("[SDK] Run completed successfully")
             self.output.finalize(success=True)
+            # Final save after completion
+            self._save_output_incremental(force=True)
 
         except Exception as e:
             self.output.error = str(e)
@@ -133,6 +151,8 @@ class SDKRunner:
                 )
             )
             self.output.finalize(success=False, error=str(e))
+            # Final save after error
+            self._save_output_incremental(force=True)
 
         return self.output
 
@@ -254,6 +274,8 @@ class SDKRunner:
                         self._log(f"[TOOL] Completed {tool_call.name} ({tool_call.duration_ms}ms)")
                     tool_call.is_error = is_error
                     self.output.add_tool_call(tool_call)
+                    # Save output after each tool call for real-time viewer updates
+                    self._save_output_incremental()
             else:
                 # Regular user message
                 content = self._get_content(message)

@@ -1626,9 +1626,10 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")  # Disable nginx buffering
         self.end_headers()
-        
+
         try:
-            log_watcher = LogWatcher(self.state.last_run_log)
+            current_log_path = self.state.last_run_log
+            log_watcher = LogWatcher(current_log_path)
 
             def state_signature(state: Dict) -> str:
                 signature_state = copy.deepcopy(state)
@@ -1645,19 +1646,28 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             state["recent_logs"] = log_watcher.get_all_lines(500)
             state["run"] = self.run_manager.get_status()
             self._sse_send("state", state)
-            
+
             last_state_sig = state_signature(state)
             heartbeat_interval = 15  # Send heartbeat every 15s
             last_heartbeat = time.time()
             state_poll_interval = 0.5  # 500ms state polling
             last_state_check = time.time()
-            
+
             while True:
+                # Check if log path changed (issue was changed)
+                if self.state.last_run_log != current_log_path:
+                    current_log_path = self.state.last_run_log
+                    log_watcher = LogWatcher(current_log_path)
+                    # Send all lines from new log file
+                    new_logs = log_watcher.get_all_lines(500)
+                    if new_logs:
+                        self._sse_send("logs", {"lines": new_logs, "reset": True})
+
                 # Check for new log lines (fast poll - 100ms)
                 new_logs, has_logs = log_watcher.get_new_lines()
                 if has_logs and new_logs:
                     self._sse_send("logs", {"lines": new_logs})
-                
+
                 # Check for state changes (slower poll - 500ms)
                 now = time.time()
                 if now - last_state_check >= state_poll_interval:
@@ -1668,14 +1678,14 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
                         self._sse_send("state", state)
                         last_state_sig = sig
                     last_state_check = now
-                
+
                 # Heartbeat to keep connection alive
                 if now - last_heartbeat > heartbeat_interval:
                     self._sse_send("heartbeat", {"time": datetime.now().isoformat()})
                     last_heartbeat = now
-                
+
                 time.sleep(0.1)  # 100ms poll interval
-                
+
         except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:

@@ -3,6 +3,7 @@
 This module handles cloning and updating repositories using the GitHub CLI (gh).
 """
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -134,6 +135,84 @@ def check_gh_auth_for_browse() -> None:
             "GitHub CLI is not authenticated. "
             "Please run 'gh auth login' to authenticate with GitHub before browsing repositories or issues."
         )
+
+
+def list_user_repos(limit: int = 30) -> list[dict]:
+    """List user's repositories via gh repo list.
+
+    Fetches repositories owned by the authenticated user.
+
+    Args:
+        limit: Maximum number of repositories to return. Defaults to 30.
+
+    Returns:
+        List of repository dictionaries with keys:
+        - name: Repository name
+        - owner: Repository owner login
+        - description: Repository description (may be None)
+        - updatedAt: Last update timestamp in ISO format
+
+    Raises:
+        RepoError: If the gh command fails.
+    """
+    result = run_gh([
+        "repo", "list",
+        "--json", "name,owner,description,updatedAt",
+        "--limit", str(limit),
+    ])
+
+    repos_data = json.loads(result.stdout)
+
+    # Normalize the output structure
+    return [
+        {
+            "name": repo["name"],
+            "owner": repo["owner"]["login"],
+            "description": repo.get("description"),
+            "updatedAt": repo.get("updatedAt"),
+        }
+        for repo in repos_data
+    ]
+
+
+def list_contributed_repos(limit: int = 20) -> list[dict]:
+    """List repositories user has contributed to.
+
+    Uses the --source flag to get repositories where the user is
+    not the owner but has made contributions.
+
+    Args:
+        limit: Maximum number of repositories to return. Defaults to 20.
+
+    Returns:
+        List of repository dictionaries with keys:
+        - name: Repository name
+        - owner: Repository owner login
+        - description: Repository description (may be None)
+        - updatedAt: Last update timestamp in ISO format
+
+    Raises:
+        RepoError: If the gh command fails.
+    """
+    result = run_gh([
+        "repo", "list",
+        "--source",
+        "--json", "name,owner,description,updatedAt",
+        "--limit", str(limit),
+    ])
+
+    repos_data = json.loads(result.stdout)
+
+    # Normalize the output structure
+    return [
+        {
+            "name": repo["name"],
+            "owner": repo["owner"]["login"],
+            "description": repo.get("description"),
+            "updatedAt": repo.get("updatedAt"),
+        }
+        for repo in repos_data
+    ]
 
 
 def ensure_repo(owner: str, repo: str, fetch: bool = True) -> Path:

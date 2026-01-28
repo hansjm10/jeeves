@@ -27,7 +27,7 @@ def __getattr__(name):
     if name in ("get_data_dir", "get_repos_dir", "get_worktrees_dir", "get_issues_dir"):
         from . import paths
         return getattr(paths, name)
-    if name in ("check_gh_auth_for_browse", "AuthenticationError", "RepoError", "is_gh_authenticated"):
+    if name in ("check_gh_auth_for_browse", "AuthenticationError", "RepoError", "is_gh_authenticated", "list_user_repos", "list_contributed_repos"):
         from . import repo
         return getattr(repo, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -45,4 +45,6 @@ __all__ = [
     "AuthenticationError",
     "RepoError",
     "is_gh_authenticated",
+    "list_user_repos",
+    "list_contributed_repos",
 ]

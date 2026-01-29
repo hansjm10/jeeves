@@ -25,9 +25,12 @@ class JeevesTerminalViewer:
     }
 
     PHASE_COLORS = {
-        "design": "magenta",
+        "design_draft": "magenta",
+        "design_review": "magenta",
+        "design_edit": "magenta",
         "implement": "yellow",
-        "review": "yellow",
+        "code_review": "yellow",
+        "code_fix": "yellow",
         "complete": "blue",
     }
 
@@ -69,7 +72,7 @@ class JeevesTerminalViewer:
         config = state["config"]
         issue = config.get("issue", {})
         state["status"] = {
-            "phase": config.get("phase", "design"),
+            "phase": config.get("phase", "design_draft"),
             "issue_number": issue.get("number"),
             "issue_title": issue.get("title"),
             "branch_name": config.get("branch") or config.get("branchName"),
@@ -118,7 +121,7 @@ class JeevesTerminalViewer:
         print(f"Updated: {self.color(timestamp, 'gray')}")
         print()
 
-        phase = status.get("phase", "design")
+        phase = status.get("phase", "design_draft")
         phase_color = self.PHASE_COLORS.get(phase, "gray")
         print(self.color("Status:", "bold"))
         print(f"  Phase: {self.color(phase.upper(), phase_color)}")

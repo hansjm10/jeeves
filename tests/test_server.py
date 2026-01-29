@@ -398,7 +398,7 @@ print("dummy sdk: set review clean")
                     "repo": "acme/widgets",
                     "issue": {"number": 1, "repo": "acme/widgets"},
                     "branch": "issue/1-test-branch",
-                    "phase": "design",
+                    "phase": "design_draft",
                     "designDocPath": "docs/design-document-template.md",
                 },
                 indent=2,
@@ -412,13 +412,13 @@ print("dummy sdk: set review clean")
                 conn,
                 "POST",
                 "/api/issue/status",
-                {"phase": "review"},
+                {"phase": "code_review"},
             )
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"], data)
 
             payload = json.loads(issue_json.read_text())
-            self.assertEqual(payload.get("phase"), "review")
+            self.assertEqual(payload.get("phase"), "code_review")
         finally:
             conn.close()
 

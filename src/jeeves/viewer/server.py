@@ -57,7 +57,7 @@ from jeeves.core.issue import (
     list_issues as list_issues_from_jeeves,
 )
 from jeeves.core.repo import ensure_repo, RepoError
-from jeeves.core.worktree import create_worktree, WorktreeError
+from jeeves.core.worktree import create_worktree, WorktreeError, _create_state_symlink
 from jeeves.core.workflow import PhaseType
 from jeeves.core.workflow_loader import load_workflow_by_name
 from jeeves.core.engine import WorkflowEngine
@@ -397,7 +397,7 @@ class JeevesState:
         if state["mode"] == "issue":
             config = state["config"]
             issue = config.get("issue", {})
-            phase = config.get("phase", "design")
+            phase = config.get("phase", "design_draft")
             state["status"] = {
                 "phase": phase,
                 "issue_number": issue.get("number") or config.get("issueNumber"),
@@ -769,6 +769,79 @@ class JeevesRunManager:
                 self._run_info["ended_at"] = ended_at
                 self._proc = None
 
+    def _ensure_jeeves_symlink(self, viewer_log_path: Path) -> bool:
+        """Ensure the .jeeves symlink exists in the worktree.
+
+        The agent needs to read .jeeves/issue.json from the worktree.
+        This is normally a symlink created by create_worktree, but it can
+        fail silently on some systems. This method checks and repairs it.
+
+        Returns:
+            True if .jeeves/issue.json is accessible, False otherwise.
+        """
+        jeeves_path = self.work_dir / ".jeeves"
+        issue_json_via_symlink = jeeves_path / "issue.json"
+
+        # Check if already accessible
+        if issue_json_via_symlink.exists():
+            return True
+
+        # Check if the state directory has the file
+        state_issue_json = self.state_dir / "issue.json"
+        if not state_issue_json.exists():
+            self._log_to_file(
+                viewer_log_path,
+                f"[ERROR] issue.json not found in state directory: {self.state_dir}"
+            )
+            return False
+
+        # Try to create/repair the symlink
+        self._log_to_file(
+            viewer_log_path,
+            f"[SETUP] Creating .jeeves symlink: {jeeves_path} -> {self.state_dir}"
+        )
+
+        try:
+            _create_state_symlink(
+                self.work_dir,
+                self._owner,
+                self._repo,
+                self._issue_number,
+            )
+        except Exception as e:
+            self._log_to_file(
+                viewer_log_path,
+                f"[WARNING] Could not create .jeeves symlink: {e}"
+            )
+
+        # Check again after attempting to create
+        if issue_json_via_symlink.exists():
+            self._log_to_file(viewer_log_path, "[SETUP] .jeeves symlink created successfully")
+            return True
+
+        # If symlink still doesn't work, provide helpful error
+        self._log_to_file(
+            viewer_log_path,
+            f"[ERROR] Cannot access .jeeves/issue.json from worktree"
+        )
+        self._log_to_file(
+            viewer_log_path,
+            f"[ERROR] Worktree: {self.work_dir}"
+        )
+        self._log_to_file(
+            viewer_log_path,
+            f"[ERROR] State dir: {self.state_dir}"
+        )
+        self._log_to_file(
+            viewer_log_path,
+            "[ERROR] The agent needs .jeeves/ to be a symlink to the state directory."
+        )
+        self._log_to_file(
+            viewer_log_path,
+            f"[ERROR] Try manually: ln -s {self.state_dir} {jeeves_path}"
+        )
+        return False
+
     def _run_single_iteration(
         self,
         viewer_log_path: Path,
@@ -777,6 +850,10 @@ class JeevesRunManager:
 
         Returns the subprocess exit code.
         """
+        # Ensure .jeeves symlink exists before running
+        if not self._ensure_jeeves_symlink(viewer_log_path):
+            return 1
+
         issue_state = IssueState.load(self._owner, self._repo, self._issue_number)
 
         # Get workflow engine
@@ -1023,6 +1100,8 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._handle_list_issues()
         elif path == "/api/data-dir":
             self._handle_data_dir_info()
+        elif path == "/api/workflow":
+            self._handle_workflow()
         else:
             super().do_GET()
 
@@ -1231,16 +1310,26 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             return
 
         body = self._read_json_body()
-        phase = (body.get("phase") or "").strip().lower()
-        if phase not in {"design", "implement", "review", "complete"}:
-            self._send_json({"ok": False, "error": "phase must be one of: design, implement, review, complete"}, status=400)
-            return
+        phase = (body.get("phase") or "").strip()
 
         try:
             raw = issue_file.read_text(encoding="utf-8")
             data = json.loads(raw) if raw.strip() else {}
         except Exception as e:
             self._send_json({"ok": False, "error": f"Failed to read issue.json: {e}"}, status=500)
+            return
+
+        # Load workflow to validate phase
+        workflow_name = data.get("workflow", "default")
+        try:
+            workflow = load_workflow_by_name(workflow_name)
+            valid_phases = set(workflow.phases.keys())
+        except FileNotFoundError:
+            # Fallback to default phases if workflow not found
+            valid_phases = {"design_draft", "design_review", "design_edit", "implement", "code_review", "code_fix", "complete"}
+
+        if phase not in valid_phases:
+            self._send_json({"ok": False, "error": f"phase must be one of: {', '.join(sorted(valid_phases))}"}, status=400)
             return
 
         data["phase"] = phase
@@ -1532,6 +1621,60 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             "data_dir": str(data_dir) if data_dir else None,
             "count": len(issues),
             "current_issue": self.run_manager.issue_ref,
+        })
+
+    def _handle_workflow(self):
+        """Handle GET /api/workflow - Return workflow phases for the current issue."""
+        # Load issue.json to get workflow name
+        issue_file = self.state.issue_file
+        workflow_name = "default"
+        current_phase = "design_draft"
+
+        if issue_file.exists():
+            try:
+                with open(issue_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                workflow_name = data.get("workflow", "default")
+                current_phase = data.get("phase", "design_draft")
+            except Exception:
+                pass
+
+        try:
+            workflow = load_workflow_by_name(workflow_name)
+        except FileNotFoundError:
+            self._send_json({
+                "ok": False,
+                "error": f"Workflow '{workflow_name}' not found",
+            }, status=404)
+            return
+        except Exception as e:
+            self._send_json({
+                "ok": False,
+                "error": f"Failed to load workflow: {e}",
+            }, status=500)
+            return
+
+        # Build phases list
+        phases = []
+        for phase_id, phase in workflow.phases.items():
+            phases.append({
+                "id": phase_id,
+                "name": phase_id.replace("_", " ").title(),
+                "type": phase.type.value if hasattr(phase.type, 'value') else str(phase.type),
+                "description": phase.description or "",
+            })
+
+        # Sort phases by workflow order (start phase first, then follow transitions)
+        # For now, we'll use a simple ordering based on the workflow's defined order
+        phase_order = list(workflow.phases.keys())
+
+        self._send_json({
+            "ok": True,
+            "workflow_name": workflow_name,
+            "start_phase": workflow.start,
+            "current_phase": current_phase,
+            "phases": phases,
+            "phase_order": phase_order,
         })
 
     def _handle_data_dir_info(self):

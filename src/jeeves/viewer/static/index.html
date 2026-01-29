@@ -20,11 +20,12 @@
             --accent-yellow: #d29922;
             --accent-purple: #a371f7;
             --accent-orange: #db6d28;
-            --phase-design: #a371f7;
+            --phase-design-draft: #a371f7;
+            --phase-design-review: #a371f7;
+            --phase-design-edit: #a371f7;
             --phase-implement: #d29922;
-            --phase-review: #db6d28;
-            --phase-coverage: #f85149;
-            --phase-sonar: #3fb950;
+            --phase-code-review: #db6d28;
+            --phase-code-fix: #db6d28;
             --phase-complete: #58a6ff;
         }
         
@@ -1114,10 +1115,7 @@
                     <div class="control-row">
                         <div class="control-label">Phase</div>
                         <select class="control-input" id="runPhase">
-                            <option value="design">Design</option>
-                            <option value="implement">Implement</option>
-                            <option value="review">Review</option>
-                            <option value="complete">Complete</option>
+                            <!-- Populated dynamically from /api/workflow -->
                         </select>
                     </div>
                     <div class="control-row">
@@ -1765,18 +1763,59 @@
         }
         updateHideDiffsButton();
 
-        // Phase definitions
-        const phases = [
-            { id: 'design', name: 'Design', desc: 'Create design document' },
-            { id: 'implement', name: 'Implement', desc: 'Implement changes' },
-            { id: 'review', name: 'Review', desc: 'Review and polish' },
-            { id: 'complete', name: 'Complete', desc: 'Done' }
+        // Phase definitions - populated dynamically from /api/workflow
+        let phases = [
+            { id: 'design_draft', name: 'Design Draft', desc: 'Create initial design document' },
+            { id: 'design_review', name: 'Design Review', desc: 'Review design document' },
+            { id: 'design_edit', name: 'Design Edit', desc: 'Apply changes from design review' },
+            { id: 'implement', name: 'Implement', desc: 'Implement the design' },
+            { id: 'code_review', name: 'Code Review', desc: 'Review code changes' },
+            { id: 'code_fix', name: 'Code Fix', desc: 'Apply fixes from code review' },
+            { id: 'complete', name: 'Complete', desc: 'Workflow complete' }
         ];
-        
-        const phaseOrder = ['design', 'implement', 'review', 'complete'];
-        
+
+        let phaseOrder = ['design_draft', 'design_review', 'design_edit', 'implement', 'code_review', 'code_fix', 'complete'];
+
         function getPhaseIndex(phase) {
             return phaseOrder.indexOf(phase);
+        }
+
+        // Fetch workflow phases from API
+        async function fetchWorkflow() {
+            try {
+                const response = await fetch('/api/workflow');
+                const data = await response.json();
+                if (data.ok && data.phases && data.phase_order) {
+                    phases = data.phases.map(p => ({
+                        id: p.id,
+                        name: p.name,
+                        desc: p.description || ''
+                    }));
+                    phaseOrder = data.phase_order;
+
+                    // Update the phase dropdown
+                    const runPhase = document.getElementById('runPhase');
+                    if (runPhase) {
+                        runPhase.innerHTML = phases.map(p =>
+                            `<option value="${p.id}">${p.name}</option>`
+                        ).join('');
+
+                        // Set current phase if available
+                        if (data.current_phase && phaseOrder.includes(data.current_phase)) {
+                            runPhase.value = data.current_phase;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch workflow:', e);
+                // Fall back to default phases - populate dropdown anyway
+                const runPhase = document.getElementById('runPhase');
+                if (runPhase && runPhase.options.length === 0) {
+                    runPhase.innerHTML = phases.map(p =>
+                        `<option value="${p.id}">${p.name}</option>`
+                    ).join('');
+                }
+            }
         }
 
         let sidebarTab = 'setup';
@@ -2067,7 +2106,7 @@
             
             // Update phase timeline
             if (mode === 'issue') {
-                updatePhaseTimeline(status.phase || 'design');
+                updatePhaseTimeline(status.phase || 'design_draft');
                 if (checksCard) checksCard.style.display = 'none';
             } else if (mode === 'prd') {
                 updatePRDProgress(status);
@@ -2128,7 +2167,11 @@
             }
 
             if (runPhase && status.phase) {
-                runPhase.value = status.phase;
+                // Check if the phase option exists in the dropdown
+                const optionExists = Array.from(runPhase.options).some(opt => opt.value === status.phase);
+                if (optionExists) {
+                    runPhase.value = status.phase;
+                }
             }
         }
 
@@ -2335,6 +2378,9 @@
                 }
 
                 if (initStatusText) initStatusText.textContent = (data.output || 'Init complete.');
+
+                // Refresh workflow phases for the new issue
+                await fetchWorkflow();
             } catch (e) {
                 if (initStatusText) initStatusText.textContent = 'Init failed: ' + e;
             } finally {
@@ -2860,6 +2906,7 @@
         });
         
         // Start
+        fetchWorkflow();
         loadPromptList();
         connect();
     </script>

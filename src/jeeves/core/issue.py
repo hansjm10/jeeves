@@ -62,7 +62,7 @@ class IssueState:
     repo: str
     issue: GitHubIssue
     branch: str
-    phase: str = "design"
+    phase: str = "design_draft"
     workflow: str = "default"
     design_doc_path: Optional[str] = None
     notes: str = ""
@@ -139,7 +139,7 @@ class IssueState:
                 repo = repo or "unknown"
 
         branch = data.get("branch") or data.get("branchName") or f"issue/{issue.number}"
-        phase = data.get("phase") or "design"
+        phase = data.get("phase") or "design_draft"
         workflow = data.get("workflow", "default")
 
         return cls(
@@ -245,7 +245,7 @@ def create_issue_state(
         start_phase = wf.start
     except FileNotFoundError:
         # Fallback to legacy phase if workflow not found
-        start_phase = "design"
+        start_phase = "design_draft"
 
     state = IssueState(
         owner=owner,
@@ -388,7 +388,7 @@ def list_issues(owner: Optional[str] = None, repo: Optional[str] = None) -> List
                             "issue_number": issue_number,
                             "issue_title": issue_title,
                             "branch": data.get("branch") or data.get("branchName", ""),
-                            "phase": data.get("phase", "design"),
+                            "phase": data.get("phase", "design_draft"),
                             "state_dir": str(issue_dir),
                         }
                     )

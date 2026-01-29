@@ -35,6 +35,7 @@ except ImportError:
     sys.exit(1)
 
 from ..context import ContextService
+from ..skills.manager import SkillManager
 from .config import RunnerConfig
 from .output import Message, SDKOutput, ToolCall, create_output
 
@@ -50,6 +51,13 @@ class SDKRunner:
         self._log_file = None
         self._last_save_time: float = 0
         self._save_interval: float = 2.0  # Save every 2 seconds max
+
+        # Initialize skill manager if skills_source is configured
+        self._skill_manager: Optional[SkillManager] = None
+        if config.skills_source:
+            self._skill_manager = SkillManager(
+                skills_source=config.skills_source,
+            )
 
     def _save_output_incremental(self, force: bool = False) -> None:
         """Save output file incrementally for real-time viewer updates."""
@@ -127,12 +135,30 @@ class SDKRunner:
 
         prompt = self.config.prompt_file.read_text()
 
+        # Provision phase-specific skills
+        provisioned_skills: List[str] = []
+        if self._skill_manager and self.config.phase and self.config.phase_type:
+            provisioned_skills = self._skill_manager.provision_skills(
+                target_dir=self.config.work_dir,
+                phase=self.config.phase,
+                phase_type=self.config.phase_type,
+            )
+            self._log(f"[SKILLS] Provisioned for {self.config.phase}: {provisioned_skills}")
+
+        # Build allowed_tools list - add Skill tool if skills were provisioned
+        allowed_tools = list(self.config.allowed_tools)
+        if provisioned_skills:
+            if "Skill" not in allowed_tools:
+                allowed_tools.append("Skill")
+
         # Build options with streaming enabled
         options = ClaudeAgentOptions(
-            allowed_tools=self.config.allowed_tools,
+            allowed_tools=allowed_tools,
             permission_mode=self.config.permission_mode,
             cwd=str(self.config.work_dir),
             include_partial_messages=True,  # Enable streaming
+            # Enable project skills discovery when skills are provisioned
+            setting_sources=["project"] if provisioned_skills else None,
         )
 
         # Track session initialization

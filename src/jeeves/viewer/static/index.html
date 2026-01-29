@@ -2077,6 +2077,166 @@
             color: var(--text-muted);
             font-size: 12px;
         }
+
+        /* ========================================
+           Workflow Validation Panel Styles
+           ======================================== */
+        .workflow-validation-panel {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            width: 320px;
+            max-height: 300px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            z-index: 100;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .workflow-validation-panel.collapsed {
+            max-height: 40px;
+        }
+
+        .workflow-validation-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .workflow-validation-header:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .workflow-validation-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .workflow-validation-status {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            font-size: 11px;
+        }
+
+        .workflow-validation-status.valid {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--accent-green);
+        }
+
+        .workflow-validation-status.invalid {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-toggle {
+            color: var(--text-muted);
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .workflow-validation-panel.collapsed .workflow-validation-toggle {
+            transform: rotate(180deg);
+        }
+
+        .workflow-validation-content {
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+
+        .workflow-validation-panel.collapsed .workflow-validation-content {
+            display: none;
+        }
+
+        .workflow-validation-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 8px 12px;
+            gap: 10px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .workflow-validation-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .workflow-validation-icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .workflow-validation-item.passed .workflow-validation-icon {
+            color: var(--accent-green);
+        }
+
+        .workflow-validation-item.failed .workflow-validation-icon {
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-message {
+            flex: 1;
+            color: var(--text-secondary);
+        }
+
+        .workflow-validation-item.failed .workflow-validation-message {
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-details {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .workflow-validation-item.failed .workflow-validation-details {
+            color: rgba(248, 81, 73, 0.7);
+        }
+
+        /* Invalid element highlighting in graph */
+        .workflow-node.invalid rect {
+            stroke: var(--accent-red) !important;
+            stroke-width: 3px;
+            stroke-dasharray: 5, 5;
+        }
+
+        .workflow-node.invalid text {
+            fill: var(--accent-red);
+        }
+
+        .workflow-edge.invalid path {
+            stroke: var(--accent-red) !important;
+            stroke-width: 2px;
+            stroke-dasharray: 4, 4;
+        }
+
+        .workflow-edge.invalid .workflow-edge-arrow {
+            fill: var(--accent-red) !important;
+        }
+
+        .workflow-edge.invalid .workflow-edge-label {
+            fill: var(--accent-red);
+        }
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -3371,6 +3531,453 @@
                 if (this.container) {
                     this.container.innerHTML = '';
                     this.container.classList.remove('workflow-graph-container');
+                }
+            }
+        }
+
+        /**
+         * WorkflowValidator - Real-time validation for workflow graphs
+         *
+         * Performs validation checks on the workflow and displays results in a panel.
+         * Highlights invalid elements in the graph with visual indicators.
+         */
+        class WorkflowValidator {
+            constructor(options = {}) {
+                this.options = {
+                    onValidationComplete: options.onValidationComplete || null,  // Callback with results
+                    ...options
+                };
+
+                this.workflowGraph = null;
+                this.validationResults = [];
+                this.invalidNodes = new Set();
+                this.invalidEdges = new Set();
+                this.isCollapsed = false;
+
+                this._createPanel();
+            }
+
+            /**
+             * Create the validation panel DOM
+             */
+            _createPanel() {
+                this.panel = document.createElement('div');
+                this.panel.className = 'workflow-validation-panel';
+                this.panel.innerHTML = `
+                    <div class="workflow-validation-header">
+                        <div class="workflow-validation-title">
+                            <span class="workflow-validation-status valid">✓</span>
+                            Validation
+                        </div>
+                        <span class="workflow-validation-toggle">▼</span>
+                    </div>
+                    <div class="workflow-validation-content">
+                        <div class="workflow-validation-item passed">
+                            <span class="workflow-validation-icon">⏳</span>
+                            <span class="workflow-validation-message">Awaiting workflow data...</span>
+                        </div>
+                    </div>
+                `;
+
+                // Bind header toggle
+                const header = this.panel.querySelector('.workflow-validation-header');
+                header.addEventListener('click', () => this._toggleCollapsed());
+
+                document.body.appendChild(this.panel);
+            }
+
+            /**
+             * Toggle panel collapsed state
+             */
+            _toggleCollapsed() {
+                this.isCollapsed = !this.isCollapsed;
+                this.panel.classList.toggle('collapsed', this.isCollapsed);
+            }
+
+            /**
+             * Attach to a WorkflowGraph instance
+             * @param {WorkflowGraph} graph - The graph to validate
+             */
+            attachToGraph(graph) {
+                this.workflowGraph = graph;
+            }
+
+            /**
+             * Validate the current workflow
+             * @returns {Object} Validation results with passed/failed arrays
+             */
+            validate() {
+                if (!this.workflowGraph) {
+                    return { passed: [], failed: [], allPassed: false };
+                }
+
+                const nodes = this.workflowGraph.nodes || [];
+                const links = this.workflowGraph.links || [];
+                const workflow = this.workflowGraph.workflow || {};
+
+                // Clear previous invalid markers
+                this.invalidNodes.clear();
+                this.invalidEdges.clear();
+
+                const results = [];
+
+                // Check 1: Start phase exists
+                results.push(this._checkStartPhaseExists(nodes, workflow));
+
+                // Check 2: All phases reachable from start
+                results.push(this._checkPhasesReachable(nodes, links, workflow));
+
+                // Check 3: At least one terminal phase exists
+                results.push(this._checkTerminalPhaseExists(nodes));
+
+                // Check 4: All transition targets are valid phase names
+                results.push(this._checkTransitionTargets(nodes, links));
+
+                // Check 5: Execute/evaluate phases have prompts
+                results.push(this._checkPhasesHavePrompts(nodes));
+
+                // Check 6: Script phases have commands
+                results.push(this._checkScriptPhasesHaveCommands(nodes));
+
+                // Check 7: Guard expression syntax is valid
+                results.push(this._checkGuardExpressions(links));
+
+                this.validationResults = results;
+
+                // Update panel UI
+                this._renderResults();
+
+                // Update graph highlighting
+                this._updateGraphHighlighting();
+
+                const allPassed = results.every(r => r.passed);
+                const passed = results.filter(r => r.passed);
+                const failed = results.filter(r => !r.passed);
+
+                // Trigger callback
+                if (this.options.onValidationComplete) {
+                    this.options.onValidationComplete({ passed, failed, allPassed });
+                }
+
+                return { passed, failed, allPassed };
+            }
+
+            /**
+             * Check 1: Start phase exists
+             */
+            _checkStartPhaseExists(nodes, workflow) {
+                const startName = workflow?.workflow?.start || workflow?.start || 'start';
+                const startExists = nodes.some(n => n.id === startName);
+
+                if (!startExists && nodes.length > 0) {
+                    // Mark first node or default 'start' as expected
+                    this.invalidNodes.add(startName);
+                }
+
+                return {
+                    check: 'start_phase_exists',
+                    label: 'Start phase exists',
+                    passed: startExists || nodes.length === 0,
+                    details: startExists
+                        ? `Start phase "${startName}" found`
+                        : `Start phase "${startName}" not found`
+                };
+            }
+
+            /**
+             * Check 2: All phases reachable from start
+             */
+            _checkPhasesReachable(nodes, links, workflow) {
+                if (nodes.length === 0) {
+                    return {
+                        check: 'phases_reachable',
+                        label: 'All phases reachable from start',
+                        passed: true,
+                        details: 'No phases to check'
+                    };
+                }
+
+                const startName = workflow?.workflow?.start || workflow?.start || 'start';
+                const startNode = nodes.find(n => n.id === startName);
+
+                if (!startNode) {
+                    return {
+                        check: 'phases_reachable',
+                        label: 'All phases reachable from start',
+                        passed: false,
+                        details: 'Cannot check - start phase not found'
+                    };
+                }
+
+                // BFS to find all reachable nodes
+                const reachable = new Set();
+                const queue = [startName];
+
+                while (queue.length > 0) {
+                    const current = queue.shift();
+                    if (reachable.has(current)) continue;
+                    reachable.add(current);
+
+                    // Find all transitions from current
+                    links.forEach(link => {
+                        const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                        const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                        if (sourceId === current && !reachable.has(targetId)) {
+                            queue.push(targetId);
+                        }
+                    });
+                }
+
+                const unreachable = nodes.filter(n => !reachable.has(n.id));
+                unreachable.forEach(n => this.invalidNodes.add(n.id));
+
+                return {
+                    check: 'phases_reachable',
+                    label: 'All phases reachable from start',
+                    passed: unreachable.length === 0,
+                    details: unreachable.length === 0
+                        ? `All ${nodes.length} phases are reachable`
+                        : `Unreachable phases: ${unreachable.map(n => n.id).join(', ')}`
+                };
+            }
+
+            /**
+             * Check 3: At least one terminal phase exists
+             */
+            _checkTerminalPhaseExists(nodes) {
+                const terminalNodes = nodes.filter(n => n.type === 'terminal');
+
+                return {
+                    check: 'terminal_phase_exists',
+                    label: 'Terminal phase exists',
+                    passed: terminalNodes.length > 0 || nodes.length === 0,
+                    details: terminalNodes.length > 0
+                        ? `Found ${terminalNodes.length} terminal phase(s): ${terminalNodes.map(n => n.id).join(', ')}`
+                        : 'No terminal phase found'
+                };
+            }
+
+            /**
+             * Check 4: All transition targets are valid phase names
+             */
+            _checkTransitionTargets(nodes, links) {
+                const nodeIds = new Set(nodes.map(n => n.id));
+                const invalidTargets = [];
+
+                links.forEach(link => {
+                    const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                    if (!nodeIds.has(targetId)) {
+                        invalidTargets.push({ edge: link.id, target: targetId });
+                        this.invalidEdges.add(link.id);
+                    }
+                });
+
+                return {
+                    check: 'transition_targets_valid',
+                    label: 'All transition targets valid',
+                    passed: invalidTargets.length === 0,
+                    details: invalidTargets.length === 0
+                        ? `All ${links.length} transitions have valid targets`
+                        : `Invalid targets: ${invalidTargets.map(t => t.target).join(', ')}`
+                };
+            }
+
+            /**
+             * Check 5: Execute/evaluate phases have prompts
+             */
+            _checkPhasesHavePrompts(nodes) {
+                const missingPrompts = [];
+
+                nodes.forEach(node => {
+                    if ((node.type === 'execute' || node.type === 'evaluate') && !node.prompt) {
+                        missingPrompts.push(node.id);
+                        this.invalidNodes.add(node.id);
+                    }
+                });
+
+                const relevantPhases = nodes.filter(n => n.type === 'execute' || n.type === 'evaluate');
+
+                return {
+                    check: 'phases_have_prompts',
+                    label: 'Execute/evaluate phases have prompts',
+                    passed: missingPrompts.length === 0,
+                    details: missingPrompts.length === 0
+                        ? `All ${relevantPhases.length} execute/evaluate phases have prompts`
+                        : `Missing prompts: ${missingPrompts.join(', ')}`
+                };
+            }
+
+            /**
+             * Check 6: Script phases have commands
+             */
+            _checkScriptPhasesHaveCommands(nodes) {
+                const missingCommands = [];
+
+                nodes.forEach(node => {
+                    if (node.type === 'script' && !node.command) {
+                        missingCommands.push(node.id);
+                        this.invalidNodes.add(node.id);
+                    }
+                });
+
+                const scriptPhases = nodes.filter(n => n.type === 'script');
+
+                return {
+                    check: 'script_phases_have_commands',
+                    label: 'Script phases have commands',
+                    passed: missingCommands.length === 0,
+                    details: missingCommands.length === 0
+                        ? (scriptPhases.length > 0 ? `All ${scriptPhases.length} script phases have commands` : 'No script phases')
+                        : `Missing commands: ${missingCommands.join(', ')}`
+                };
+            }
+
+            /**
+             * Check 7: Guard expression syntax is valid
+             */
+            _checkGuardExpressions(links) {
+                const invalidGuards = [];
+
+                links.forEach(link => {
+                    if (link.guard) {
+                        const error = this._validateGuardSyntax(link.guard);
+                        if (error) {
+                            invalidGuards.push({ edge: link.id, guard: link.guard, error });
+                            this.invalidEdges.add(link.id);
+                        }
+                    }
+                });
+
+                const guardsCount = links.filter(l => l.guard).length;
+
+                return {
+                    check: 'guard_expressions_valid',
+                    label: 'Guard expression syntax valid',
+                    passed: invalidGuards.length === 0,
+                    details: invalidGuards.length === 0
+                        ? (guardsCount > 0 ? `All ${guardsCount} guard expressions are valid` : 'No guard expressions')
+                        : `Invalid guards: ${invalidGuards.map(g => g.error).join('; ')}`
+                };
+            }
+
+            /**
+             * Validate guard expression syntax
+             * @param {string} expr - Guard expression
+             * @returns {string|null} Error message or null if valid
+             */
+            _validateGuardSyntax(expr) {
+                if (!expr || typeof expr !== 'string') {
+                    return null;
+                }
+
+                const trimmed = expr.trim();
+                if (!trimmed) {
+                    return null;
+                }
+
+                // Check for balanced parentheses
+                let parenCount = 0;
+                for (const char of trimmed) {
+                    if (char === '(') parenCount++;
+                    if (char === ')') parenCount--;
+                    if (parenCount < 0) {
+                        return 'Unbalanced parentheses';
+                    }
+                }
+                if (parenCount !== 0) {
+                    return 'Unbalanced parentheses';
+                }
+
+                // Check for valid operators (basic check)
+                // Single = without being part of == or !=
+                if (/[^!=]=[^=]/.test(trimmed) || /^=[^=]/.test(trimmed)) {
+                    return 'Use == for equality (found single =)';
+                }
+
+                // Check for empty field names (e.g., " == true")
+                if (/^\s*(==|!=)/.test(trimmed)) {
+                    return 'Missing field name before operator';
+                }
+
+                // Check for empty values (e.g., "field == ")
+                if (/(==|!=)\s*$/.test(trimmed)) {
+                    return 'Missing value after operator';
+                }
+
+                return null;
+            }
+
+            /**
+             * Render validation results in the panel
+             */
+            _renderResults() {
+                const content = this.panel.querySelector('.workflow-validation-content');
+                const statusIcon = this.panel.querySelector('.workflow-validation-status');
+
+                const allPassed = this.validationResults.every(r => r.passed);
+                const failedCount = this.validationResults.filter(r => !r.passed).length;
+
+                // Update status icon
+                statusIcon.className = `workflow-validation-status ${allPassed ? 'valid' : 'invalid'}`;
+                statusIcon.textContent = allPassed ? '✓' : failedCount.toString();
+
+                // Render items
+                content.innerHTML = this.validationResults.map(result => `
+                    <div class="workflow-validation-item ${result.passed ? 'passed' : 'failed'}">
+                        <span class="workflow-validation-icon">${result.passed ? '✓' : '✗'}</span>
+                        <div>
+                            <div class="workflow-validation-message">${result.label}</div>
+                            <div class="workflow-validation-details">${result.details}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            /**
+             * Update graph element highlighting based on validation results
+             */
+            _updateGraphHighlighting() {
+                if (!this.workflowGraph || !this.workflowGraph.nodeElements) {
+                    return;
+                }
+
+                // Update node highlighting
+                this.workflowGraph.nodeElements.classed('invalid', d => this.invalidNodes.has(d.id));
+
+                // Update edge highlighting
+                if (this.workflowGraph.edgeElements) {
+                    this.workflowGraph.edgeElements.classed('invalid', d => this.invalidEdges.has(d.id));
+                }
+            }
+
+            /**
+             * Get the validation panel element (for positioning)
+             * @returns {HTMLElement} The panel element
+             */
+            getPanel() {
+                return this.panel;
+            }
+
+            /**
+             * Show the panel
+             */
+            show() {
+                this.panel.style.display = '';
+            }
+
+            /**
+             * Hide the panel
+             */
+            hide() {
+                this.panel.style.display = 'none';
+            }
+
+            /**
+             * Destroy the validator and clean up
+             */
+            destroy() {
+                if (this.panel && this.panel.parentNode) {
+                    this.panel.parentNode.removeChild(this.panel);
                 }
             }
         }
@@ -6204,6 +6811,7 @@
         let workflowGraph = null;
         let phaseEditor = null;
         let transitionEditor = null;
+        let workflowValidator = null;
 
         // Track unsaved changes indicator element
         let unsavedIndicator = null;
@@ -6339,6 +6947,10 @@
                             workflowGraph.setWorkflowName(name);
                             workflowGraph.render(data);
                             workflowGraph.clearModified();
+                        }
+                        // Run validation after loading
+                        if (workflowValidator) {
+                            workflowValidator.validate();
                         }
                         // Update selector
                         const select = document.getElementById('workflowSelect');
@@ -6887,8 +7499,26 @@
                     if (unsavedIndicator) {
                         unsavedIndicator.classList.toggle('visible', isModified);
                     }
+                    // Trigger real-time validation on every change
+                    if (workflowValidator) {
+                        workflowValidator.validate();
+                    }
                 }
             });
+
+            // Create WorkflowValidator for real-time validation
+            workflowValidator = new WorkflowValidator({
+                onValidationComplete: (results) => {
+                    // Optional: log validation results
+                    // console.log('Validation:', results.allPassed ? 'PASSED' : 'FAILED', results);
+                }
+            });
+
+            // Attach validator to graph and position panel in container
+            workflowValidator.attachToGraph(workflowGraph);
+            const validationPanel = workflowValidator.getPanel();
+            validationPanel.style.position = 'absolute';
+            container.appendChild(validationPanel);
 
             // Wire up Add Phase button
             const addPhaseBtn = document.getElementById('workflowAddPhaseBtn');
@@ -6903,12 +7533,15 @@
             // Render workflow data if provided
             if (workflowData) {
                 workflowGraph.render(workflowData);
+                // Run initial validation
+                workflowValidator.validate();
             }
 
             return {
                 workflowGraph,
                 phaseEditor,
                 transitionEditor,
+                workflowValidator,
                 loadWorkflowList,
                 loadWorkflow,
                 saveWorkflow,
@@ -6953,6 +7586,7 @@
         window.getWorkflowGraph = () => workflowGraph;
         window.getPhaseEditor = () => phaseEditor;
         window.getTransitionEditor = () => transitionEditor;
+        window.getWorkflowValidator = () => workflowValidator;
     </script>
 </body>
 </html>

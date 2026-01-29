@@ -1339,6 +1339,86 @@
             font-size: 8px;
         }
 
+        /* Workflow Selector Styles */
+        .workflow-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 16px;
+            padding-right: 16px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .workflow-selector label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .workflow-selector select {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            min-width: 150px;
+        }
+
+        .workflow-selector select:hover {
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-selector select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        /* Toolbar Separator */
+        .workflow-toolbar-separator {
+            width: 1px;
+            height: 24px;
+            background: var(--border-color);
+            margin: 0 8px;
+        }
+
+        /* Toolbar Action Group */
+        .workflow-toolbar-group {
+            display: flex;
+            gap: 4px;
+        }
+
+        .workflow-toolbar button.primary {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .workflow-toolbar button.primary:hover {
+            background: #1f6feb;
+            border-color: #1f6feb;
+        }
+
+        .workflow-toolbar button.danger {
+            color: var(--accent-red);
+        }
+
+        .workflow-toolbar button.danger:hover {
+            background: rgba(248, 81, 73, 0.15);
+            border-color: var(--accent-red);
+        }
+
+        .workflow-toolbar button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Hidden file input for import */
+        .workflow-import-input {
+            display: none;
+        }
+
         /* Phase Editor Panel Styles */
         .phase-editor-panel {
             position: fixed;
@@ -3204,6 +3284,81 @@
              */
             hasUnsavedChanges() {
                 return this.isModified === true;
+            }
+
+            /**
+             * Get the current workflow data in a format suitable for saving
+             * @returns {Object} Workflow data with phases and transitions
+             */
+            getWorkflowData() {
+                const phases = {};
+
+                this.nodes.forEach(node => {
+                    const phaseData = {
+                        type: node.type || 'execute'
+                    };
+
+                    if (node.description) {
+                        phaseData.description = node.description;
+                    }
+                    if (node.prompt) {
+                        phaseData.prompt = node.prompt;
+                    }
+                    if (node.command) {
+                        phaseData.command = node.command;
+                    }
+                    if (node.allowed_writes) {
+                        phaseData.allowed_writes = node.allowed_writes;
+                    }
+
+                    // Find transitions from this node
+                    const nodeTransitions = this.links
+                        .filter(link => {
+                            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                            return sourceId === node.id;
+                        })
+                        .map(link => {
+                            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                            const transition = { to: targetId };
+                            if (link.guard) {
+                                transition.when = link.guard;
+                            }
+                            if (link.auto) {
+                                transition.auto = link.auto;
+                            }
+                            if (link.priority && link.priority !== 0) {
+                                transition.priority = link.priority;
+                            }
+                            return transition;
+                        });
+
+                    if (nodeTransitions.length > 0) {
+                        phaseData.transitions = nodeTransitions;
+                    }
+
+                    phases[node.id] = phaseData;
+                });
+
+                return {
+                    workflow: this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 },
+                    phases: phases
+                };
+            }
+
+            /**
+             * Set the workflow name (used for save operations)
+             * @param {string} name - The workflow name
+             */
+            setWorkflowName(name) {
+                this.workflowName = name;
+            }
+
+            /**
+             * Get the current workflow name
+             * @returns {string} The workflow name
+             */
+            getWorkflowName() {
+                return this.workflowName || this.workflow?.workflow?.name || 'default';
             }
 
             /**
@@ -6072,13 +6227,46 @@
             // Ensure container has relative positioning for absolute children
             container.style.position = 'relative';
 
-            // Create toolbar with Add Phase button
+            // Track current workflow name
+            let currentWorkflowName = 'default';
+
+            // Create toolbar with workflow controls
             const toolbar = document.createElement('div');
             toolbar.className = 'workflow-toolbar';
             toolbar.innerHTML = `
-                <button id="workflowAddPhaseBtn" title="Add new phase (or double-click canvas)">
-                    <span>+</span> Add Phase
-                </button>
+                <div class="workflow-selector">
+                    <label for="workflowSelect">Workflow:</label>
+                    <select id="workflowSelect" title="Select workflow to edit">
+                        <option value="default">Loading...</option>
+                    </select>
+                </div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowSaveBtn" class="primary" title="Save workflow (Ctrl+S)">
+                        <span>💾</span> Save
+                    </button>
+                    <button id="workflowNewBtn" title="Create new blank workflow">
+                        <span>📄</span> New
+                    </button>
+                    <button id="workflowDuplicateBtn" title="Duplicate current workflow">
+                        <span>📋</span> Duplicate
+                    </button>
+                </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowAddPhaseBtn" title="Add new phase (or double-click canvas)">
+                        <span>+</span> Add Phase
+                    </button>
+                </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowExportBtn" title="Export workflow as YAML file">
+                        <span>⬇️</span> Export
+                    </button>
+                    <button id="workflowImportBtn" title="Import workflow from YAML file">
+                        <span>⬆️</span> Import
+                    </button>
+                </div>
+                <input type="file" id="workflowImportInput" class="workflow-import-input" accept=".yaml,.yml" />
             `;
             container.appendChild(toolbar);
 
@@ -6087,6 +6275,524 @@
             unsavedIndicator.className = 'workflow-unsaved-indicator';
             unsavedIndicator.textContent = 'Unsaved changes';
             container.appendChild(unsavedIndicator);
+
+            // === Workflow List/Load Functions ===
+
+            /**
+             * Load the list of available workflows into the selector dropdown
+             */
+            async function loadWorkflowList() {
+                const select = document.getElementById('workflowSelect');
+                if (!select) return;
+
+                try {
+                    const response = await fetch('/api/workflows');
+                    const data = await response.json();
+
+                    if (data.ok && data.workflows) {
+                        select.innerHTML = '';
+                        data.workflows.forEach(wf => {
+                            const option = document.createElement('option');
+                            option.value = wf.name;
+                            option.textContent = wf.name;
+                            select.appendChild(option);
+                        });
+
+                        // Select the current workflow if it exists
+                        if (currentWorkflowName && Array.from(select.options).some(o => o.value === currentWorkflowName)) {
+                            select.value = currentWorkflowName;
+                        } else if (select.options.length > 0) {
+                            currentWorkflowName = select.options[0].value;
+                            select.value = currentWorkflowName;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to load workflow list:', e);
+                    select.innerHTML = '<option value="default">default</option>';
+                }
+            }
+
+            /**
+             * Load a workflow by name and render it in the graph
+             * @param {string} name - Workflow name to load
+             * @param {boolean} skipConfirm - Skip unsaved changes confirmation
+             */
+            async function loadWorkflow(name, skipConfirm = false) {
+                // Check for unsaved changes
+                if (!skipConfirm && workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                    const confirmed = confirm('You have unsaved changes. Are you sure you want to switch workflows? All changes will be lost.');
+                    if (!confirmed) {
+                        // Restore the selector to the current workflow
+                        const select = document.getElementById('workflowSelect');
+                        if (select) select.value = currentWorkflowName;
+                        return;
+                    }
+                }
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(name)}/full`);
+                    const data = await response.json();
+
+                    if (data.ok) {
+                        currentWorkflowName = name;
+                        if (workflowGraph) {
+                            workflowGraph.setWorkflowName(name);
+                            workflowGraph.render(data);
+                            workflowGraph.clearModified();
+                        }
+                        // Update selector
+                        const select = document.getElementById('workflowSelect');
+                        if (select) select.value = name;
+                    } else {
+                        alert(`Failed to load workflow: ${data.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to load workflow:', e);
+                    alert(`Failed to load workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Save the current workflow to the backend
+             */
+            async function saveWorkflow() {
+                if (!workflowGraph) return;
+
+                const workflowData = workflowGraph.getWorkflowData();
+                const name = currentWorkflowName || 'default';
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(name)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(workflowData)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        workflowGraph.clearModified();
+                        // Brief visual feedback
+                        const saveBtn = document.getElementById('workflowSaveBtn');
+                        if (saveBtn) {
+                            const originalText = saveBtn.innerHTML;
+                            saveBtn.innerHTML = '<span>✓</span> Saved!';
+                            setTimeout(() => { saveBtn.innerHTML = originalText; }, 1500);
+                        }
+                    } else {
+                        alert(`Failed to save workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to save workflow:', e);
+                    alert(`Failed to save workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Create a new blank workflow
+             */
+            async function createNewWorkflow() {
+                // Check for unsaved changes
+                if (workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                    const confirmed = confirm('You have unsaved changes. Are you sure you want to create a new workflow? All changes will be lost.');
+                    if (!confirmed) return;
+                }
+
+                const name = prompt('Enter name for new workflow:', 'new_workflow');
+                if (!name || !name.trim()) return;
+
+                const safeName = name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                // Create minimal workflow data
+                const newWorkflowData = {
+                    workflow: { name: safeName, version: 1, start: 'start' },
+                    phases: {
+                        start: {
+                            type: 'execute',
+                            description: 'Initial phase',
+                            transitions: [{ to: 'end' }]
+                        },
+                        end: {
+                            type: 'terminal',
+                            description: 'End phase'
+                        }
+                    }
+                };
+
+                try {
+                    // Save the new workflow
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(safeName)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newWorkflowData)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        // Reload workflow list and select new workflow
+                        await loadWorkflowList();
+                        await loadWorkflow(safeName, true);
+                    } else {
+                        alert(`Failed to create workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to create workflow:', e);
+                    alert(`Failed to create workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Duplicate the current workflow
+             */
+            async function duplicateWorkflow() {
+                if (!currentWorkflowName) {
+                    alert('No workflow loaded to duplicate.');
+                    return;
+                }
+
+                const newName = prompt('Enter name for duplicated workflow:', currentWorkflowName + '_copy');
+                if (!newName || !newName.trim()) return;
+
+                const safeName = newName.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(currentWorkflowName)}/duplicate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ target_name: safeName })
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        // Reload workflow list and select duplicated workflow
+                        await loadWorkflowList();
+                        await loadWorkflow(result.name, true);
+                    } else {
+                        alert(`Failed to duplicate workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to duplicate workflow:', e);
+                    alert(`Failed to duplicate workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Export the current workflow as a YAML file download
+             */
+            function exportWorkflow() {
+                if (!workflowGraph) return;
+
+                const workflowData = workflowGraph.getWorkflowData();
+                const name = currentWorkflowName || 'workflow';
+
+                // Convert to YAML-like format (simplified)
+                // The backend stores as YAML, but we'll export the JSON for now
+                // with proper formatting that can be read by the backend
+                const yamlContent = generateYamlString(workflowData);
+
+                // Create download
+                const blob = new Blob([yamlContent], { type: 'text/yaml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${name}.yaml`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            /**
+             * Generate YAML string from workflow data
+             */
+            function generateYamlString(data) {
+                let yaml = '';
+
+                // Workflow section
+                if (data.workflow) {
+                    yaml += 'workflow:\n';
+                    yaml += `  name: ${data.workflow.name || 'default'}\n`;
+                    yaml += `  version: ${data.workflow.version || 1}\n`;
+                    if (data.workflow.start) {
+                        yaml += `  start: ${data.workflow.start}\n`;
+                    }
+                    yaml += '\n';
+                }
+
+                // Phases section
+                yaml += 'phases:\n';
+                for (const [phaseName, phase] of Object.entries(data.phases || {})) {
+                    yaml += `  ${phaseName}:\n`;
+                    yaml += `    type: ${phase.type || 'execute'}\n`;
+
+                    if (phase.description) {
+                        yaml += `    description: "${phase.description.replace(/"/g, '\\"')}"\n`;
+                    }
+                    if (phase.prompt) {
+                        yaml += `    prompt: ${phase.prompt}\n`;
+                    }
+                    if (phase.command) {
+                        yaml += `    command: ${phase.command}\n`;
+                    }
+                    if (phase.allowed_writes && phase.allowed_writes.length > 0) {
+                        yaml += `    allowed_writes:\n`;
+                        phase.allowed_writes.forEach(w => {
+                            yaml += `      - ${w}\n`;
+                        });
+                    }
+                    if (phase.transitions && phase.transitions.length > 0) {
+                        yaml += `    transitions:\n`;
+                        phase.transitions.forEach(t => {
+                            yaml += `      - to: ${t.to}\n`;
+                            if (t.when) {
+                                yaml += `        when: "${t.when.replace(/"/g, '\\"')}"\n`;
+                            }
+                            if (t.auto) {
+                                yaml += `        auto: true\n`;
+                            }
+                            if (t.priority && t.priority !== 0) {
+                                yaml += `        priority: ${t.priority}\n`;
+                            }
+                        });
+                    }
+                    yaml += '\n';
+                }
+
+                return yaml;
+            }
+
+            /**
+             * Import a workflow from a YAML file
+             */
+            function importWorkflow(file) {
+                const reader = new FileReader();
+
+                reader.onload = async (e) => {
+                    try {
+                        const content = e.target.result;
+
+                        // Parse YAML (simplified parsing for common cases)
+                        const workflowData = parseYamlContent(content);
+
+                        if (!workflowData || !workflowData.phases) {
+                            alert('Invalid workflow file: no phases found');
+                            return;
+                        }
+
+                        // Prompt for workflow name
+                        const defaultName = file.name.replace(/\.(yaml|yml)$/i, '');
+                        const name = prompt('Enter name for imported workflow:', defaultName);
+                        if (!name || !name.trim()) return;
+
+                        const safeName = name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                        // Save the imported workflow
+                        const response = await fetch(`/api/workflow/${encodeURIComponent(safeName)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(workflowData)
+                        });
+
+                        const result = await response.json();
+
+                        if (result.ok) {
+                            // Reload workflow list and select imported workflow
+                            await loadWorkflowList();
+                            await loadWorkflow(safeName, true);
+                        } else {
+                            alert(`Failed to import workflow: ${result.error || 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        console.error('Failed to import workflow:', err);
+                        alert(`Failed to import workflow: ${err.message}`);
+                    }
+                };
+
+                reader.onerror = () => {
+                    alert('Failed to read file');
+                };
+
+                reader.readAsText(file);
+            }
+
+            /**
+             * Parse YAML content into workflow data object
+             * This is a simplified parser for common workflow YAML structures
+             */
+            function parseYamlContent(content) {
+                // Use js-yaml if available, otherwise do basic parsing
+                if (typeof jsyaml !== 'undefined') {
+                    return jsyaml.load(content);
+                }
+
+                // Simple YAML parser for basic workflow files
+                const lines = content.split('\n');
+                const result = { phases: {} };
+                let currentSection = null;
+                let currentPhase = null;
+                let currentTransitions = null;
+                let currentAllowedWrites = null;
+
+                for (let line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed.startsWith('#')) continue;
+
+                    const indent = line.search(/\S/);
+
+                    // Top-level sections
+                    if (indent === 0) {
+                        if (trimmed === 'workflow:') {
+                            currentSection = 'workflow';
+                            result.workflow = {};
+                        } else if (trimmed === 'phases:') {
+                            currentSection = 'phases';
+                        }
+                        currentPhase = null;
+                        currentTransitions = null;
+                        currentAllowedWrites = null;
+                        continue;
+                    }
+
+                    // Workflow properties
+                    if (currentSection === 'workflow' && indent === 2) {
+                        const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                        if (match) {
+                            result.workflow[match[1]] = match[2].replace(/^["']|["']$/g, '');
+                        }
+                        continue;
+                    }
+
+                    // Phase names
+                    if (currentSection === 'phases' && indent === 2 && trimmed.endsWith(':')) {
+                        currentPhase = trimmed.slice(0, -1);
+                        result.phases[currentPhase] = {};
+                        currentTransitions = null;
+                        currentAllowedWrites = null;
+                        continue;
+                    }
+
+                    // Phase properties
+                    if (currentPhase && indent === 4) {
+                        if (trimmed === 'transitions:') {
+                            currentTransitions = [];
+                            result.phases[currentPhase].transitions = currentTransitions;
+                            currentAllowedWrites = null;
+                        } else if (trimmed === 'allowed_writes:') {
+                            currentAllowedWrites = [];
+                            result.phases[currentPhase].allowed_writes = currentAllowedWrites;
+                            currentTransitions = null;
+                        } else {
+                            const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                            if (match) {
+                                result.phases[currentPhase][match[1]] = match[2].replace(/^["']|["']$/g, '');
+                            }
+                            currentTransitions = null;
+                            currentAllowedWrites = null;
+                        }
+                        continue;
+                    }
+
+                    // Transitions array items
+                    if (currentTransitions !== null && indent >= 6) {
+                        if (trimmed.startsWith('- to:')) {
+                            const toMatch = trimmed.match(/^- to:\s*(.+)$/);
+                            if (toMatch) {
+                                currentTransitions.push({ to: toMatch[1].replace(/^["']|["']$/g, '') });
+                            }
+                        } else if (currentTransitions.length > 0) {
+                            const lastTransition = currentTransitions[currentTransitions.length - 1];
+                            const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                            if (match) {
+                                let value = match[2].replace(/^["']|["']$/g, '');
+                                if (value === 'true') value = true;
+                                else if (value === 'false') value = false;
+                                else if (/^\d+$/.test(value)) value = parseInt(value);
+                                lastTransition[match[1]] = value;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Allowed writes array items
+                    if (currentAllowedWrites !== null && indent >= 6 && trimmed.startsWith('- ')) {
+                        currentAllowedWrites.push(trimmed.slice(2).replace(/^["']|["']$/g, ''));
+                        continue;
+                    }
+                }
+
+                return result;
+            }
+
+            // === Wire up toolbar event handlers ===
+
+            // Workflow selector change
+            const workflowSelect = document.getElementById('workflowSelect');
+            if (workflowSelect) {
+                workflowSelect.addEventListener('change', (e) => {
+                    loadWorkflow(e.target.value);
+                });
+            }
+
+            // Save button
+            const saveBtn = document.getElementById('workflowSaveBtn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', saveWorkflow);
+            }
+
+            // New workflow button
+            const newBtn = document.getElementById('workflowNewBtn');
+            if (newBtn) {
+                newBtn.addEventListener('click', createNewWorkflow);
+            }
+
+            // Duplicate workflow button
+            const duplicateBtn = document.getElementById('workflowDuplicateBtn');
+            if (duplicateBtn) {
+                duplicateBtn.addEventListener('click', duplicateWorkflow);
+            }
+
+            // Export button
+            const exportBtn = document.getElementById('workflowExportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', exportWorkflow);
+            }
+
+            // Import button and file input
+            const importBtn = document.getElementById('workflowImportBtn');
+            const importInput = document.getElementById('workflowImportInput');
+            if (importBtn && importInput) {
+                importBtn.addEventListener('click', () => {
+                    // Check for unsaved changes
+                    if (workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                        const confirmed = confirm('You have unsaved changes. Are you sure you want to import a workflow? All changes will be lost.');
+                        if (!confirmed) return;
+                    }
+                    importInput.click();
+                });
+
+                importInput.addEventListener('change', (e) => {
+                    if (e.target.files && e.target.files[0]) {
+                        importWorkflow(e.target.files[0]);
+                        e.target.value = ''; // Reset for next import
+                    }
+                });
+            }
+
+            // Keyboard shortcut for save (Ctrl+S)
+            container.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveWorkflow();
+                }
+            });
+
+            // Make container focusable for keyboard events
+            container.tabIndex = -1;
+
+            // Load workflow list on initialization
+            loadWorkflowList();
 
             // Create PhaseEditor with callbacks
             phaseEditor = new PhaseEditor({
@@ -6199,11 +6905,27 @@
                 workflowGraph.render(workflowData);
             }
 
-            return { workflowGraph, phaseEditor, transitionEditor };
+            return {
+                workflowGraph,
+                phaseEditor,
+                transitionEditor,
+                loadWorkflowList,
+                loadWorkflow,
+                saveWorkflow,
+                createNewWorkflow,
+                duplicateWorkflow,
+                exportWorkflow,
+                importWorkflow,
+                getCurrentWorkflowName: () => currentWorkflowName
+            };
         }
 
         /**
          * Load and render a workflow in the graph
+         * @param {string} workflowName - Name of the workflow to load
+         */
+        /**
+         * Load and render a workflow in the graph (legacy function, use loadWorkflow from initWorkflowEditor)
          * @param {string} workflowName - Name of the workflow to load
          */
         async function loadWorkflowIntoGraph(workflowName) {
@@ -6213,16 +6935,12 @@
             }
 
             try {
-                const response = await fetch(`/api/workflow`);
+                const response = await fetch(`/api/workflow/${encodeURIComponent(workflowName || 'default')}/full`);
                 const data = await response.json();
-                if (data.ok && data.phases) {
-                    // Convert phases object to workflow format expected by WorkflowGraph
-                    const workflowData = {
-                        name: workflowName || 'default',
-                        phases: data.phases,
-                        phase_order: data.phase_order || []
-                    };
-                    workflowGraph.render(workflowData);
+                if (data.ok) {
+                    workflowGraph.setWorkflowName(workflowName || 'default');
+                    workflowGraph.render(data);
+                    workflowGraph.clearModified();
                 }
             } catch (e) {
                 console.error('Failed to load workflow into graph:', e);

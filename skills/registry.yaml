@@ -13,6 +13,7 @@ version: 1
 common:
   - jeeves
   - progress-tracker
+  - sonarqube
 
 # Phase-specific skill mappings
 # Keys are phase names from workflow YAML (e.g., design_draft, implement_task)
@@ -25,10 +26,16 @@ phases:
     - architecture-patterns
   implement_task:
     - test-driven-dev
+    - frontend-design
   task_spec_check:
     - code-quality
   code_review:
     - code-quality
+    - pr-review
+    - pr-evidence
+    - pr-requirements
+    - pr-audit
+    - differential-review
   code_fix:
     - code-quality
 

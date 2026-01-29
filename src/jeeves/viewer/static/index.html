@@ -1462,10 +1462,11 @@
                 outputTokensEl.textContent = sdkOutput.tokens.output.toLocaleString();
                 if (tokensStatEl) tokensStatEl.style.display = 'inline';
 
-                // Update context bar
+                // Update context bar (percentage is now bounded 0-100 from server)
                 const contextPct = sdkOutput.stats?.context_percentage || 0;
                 if (contextBarEl) {
-                    contextBarEl.style.width = `${Math.min(contextPct, 100)}%`;
+                    // No Math.min needed - already bounded from server
+                    contextBarEl.style.width = `${contextPct}%`;
                     // Color based on usage level
                     contextBarEl.className = 'context-bar ' + (
                         contextPct >= 80 ? 'context-high' :
@@ -1473,6 +1474,7 @@
                     );
                 }
                 if (contextPctEl) {
+                    // Already bounded from server
                     contextPctEl.textContent = `${contextPct.toFixed(1)}%`;
                 }
             } else {

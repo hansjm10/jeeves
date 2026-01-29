@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..context import ContextService
+
 
 @dataclass
 class ToolCall:
@@ -138,13 +140,17 @@ class SDKOutput:
                 "cache_creation": self.cache_creation_tokens,
                 "cache_read": self.cache_read_tokens,
             }
-            # Calculate context percentage
-            total_input = self.input_tokens + self.cache_creation_tokens + self.cache_read_tokens
-            if self.context_window_size > 0:
-                stats["context_percentage"] = round(
-                    (total_input / self.context_window_size) * 100, 1
-                )
-            stats["context_window_size"] = self.context_window_size
+            # Use ContextService for bounded calculation
+            context_svc = ContextService()
+            context_svc.update(
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                cache_creation_tokens=self.cache_creation_tokens,
+                cache_read_tokens=self.cache_read_tokens,
+            )
+            context_stats = context_svc.get_stats()
+            stats["context_percentage"] = context_stats.percentage
+            stats["context_window_size"] = context_stats.context_window_size
         # Include cost when available
         if self.total_cost_usd is not None:
             stats["cost_usd"] = self.total_cost_usd
@@ -222,13 +228,15 @@ class SDKOutput:
                 lines.append(
                     f"Cache: {self.cache_creation_tokens:,} created / {self.cache_read_tokens:,} read"
                 )
-            # Calculate context percentage
-            total_input = self.input_tokens + self.cache_creation_tokens + self.cache_read_tokens
-            if self.context_window_size > 0:
-                context_pct = (total_input / self.context_window_size) * 100
-                lines.append(
-                    f"Context: {context_pct:.1f}% of {self.context_window_size:,}"
-                )
+            # Use ContextService for consistent, bounded calculation
+            context_svc = ContextService()
+            context_svc.update(
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                cache_creation_tokens=self.cache_creation_tokens,
+                cache_read_tokens=self.cache_read_tokens,
+            )
+            lines.append(context_svc.format_summary())
             if self.total_cost_usd is not None:
                 lines.append(f"Cost: ${self.total_cost_usd:.4f}")
 

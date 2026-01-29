@@ -30,14 +30,29 @@ class TestWorkflowIntegration:
         next_phase = engine.evaluate_transitions("design_draft", context)
         assert next_phase == "design_review"
 
-        # design_review with designApproved -> implement
+        # design_review with designApproved -> task_decomposition
         context = {"status": {"designApproved": True}}
         next_phase = engine.evaluate_transitions("design_review", context)
-        assert next_phase == "implement"
+        assert next_phase == "task_decomposition"
 
-        # implement has auto transition to code_review
+        # task_decomposition with taskDecompositionComplete -> implement_task
+        context = {"status": {"taskDecompositionComplete": True}}
+        next_phase = engine.evaluate_transitions("task_decomposition", context)
+        assert next_phase == "implement_task"
+
+        # implement_task has auto transition to task_spec_check
         context = {"status": {}}
-        next_phase = engine.evaluate_transitions("implement", context)
+        next_phase = engine.evaluate_transitions("implement_task", context)
+        assert next_phase == "task_spec_check"
+
+        # task_spec_check with allTasksComplete -> completeness_verification
+        context = {"status": {"allTasksComplete": True}}
+        next_phase = engine.evaluate_transitions("task_spec_check", context)
+        assert next_phase == "completeness_verification"
+
+        # completeness_verification with implementationComplete -> code_review
+        context = {"status": {"implementationComplete": True}}
+        next_phase = engine.evaluate_transitions("completeness_verification", context)
         assert next_phase == "code_review"
 
         # code_review with reviewClean -> complete
@@ -112,14 +127,16 @@ class TestWorkflowIntegration:
         workflow = load_workflow(Path("workflows/default.yaml"))
 
         # Execute phases (can modify code)
-        execute_phases = ["design_draft", "design_edit", "implement", "code_fix"]
+        execute_phases = ["design_draft", "design_edit", "task_decomposition",
+                         "implement_task", "code_fix"]
         for name in execute_phases:
             phase = workflow.get_phase(name)
             assert phase is not None, f"Phase {name} should exist"
             assert phase.type == PhaseType.EXECUTE, f"Phase {name} should be EXECUTE"
 
         # Evaluate phases (read-only analysis)
-        evaluate_phases = ["design_review", "code_review"]
+        evaluate_phases = ["design_review", "task_spec_check",
+                          "completeness_verification", "code_review"]
         for name in evaluate_phases:
             phase = workflow.get_phase(name)
             assert phase is not None, f"Phase {name} should exist"
@@ -144,7 +161,8 @@ class TestWorkflowIntegration:
         """Verify evaluate phases have restricted allowed_writes."""
         workflow = load_workflow(Path("workflows/default.yaml"))
 
-        evaluate_phases = ["design_review", "code_review"]
+        evaluate_phases = ["design_review", "task_spec_check",
+                          "completeness_verification", "code_review"]
         for name in evaluate_phases:
             phase = workflow.get_phase(name)
             assert phase is not None
@@ -158,7 +176,7 @@ class TestWorkflowIntegration:
         workflow = load_workflow(Path("workflows/default.yaml"))
 
         assert workflow.name == "default"
-        assert workflow.version == 1
+        assert workflow.version == 2
         assert workflow.start == "design_draft"
 
     def test_no_transition_when_no_status_match(self):
@@ -199,7 +217,7 @@ class TestWorkflowLoaderIntegration:
         """Test that the default workflow loads successfully."""
         workflow = load_workflow(Path("workflows/default.yaml"))
         assert workflow is not None
-        assert len(workflow.phases) == 7  # All phases including complete
+        assert len(workflow.phases) == 10  # All phases including task phases and complete
 
     def test_workflow_phases_are_connected(self):
         """Verify all phases are reachable from start."""

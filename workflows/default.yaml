@@ -1,6 +1,6 @@
 workflow:
   name: default
-  version: 1
+  version: 2
   start: design_draft
 
 phases:
@@ -22,7 +22,7 @@ phases:
     transitions:
       - to: design_edit
         when: "status.designNeedsChanges == true"
-      - to: implement
+      - to: task_decomposition
         when: "status.designApproved == true"
 
   design_edit:
@@ -33,14 +33,50 @@ phases:
       - to: design_review
         auto: true
 
-  # Implementation phase
-  implement:
-    prompt: implement.md
+  # Task decomposition phase
+  task_decomposition:
+    prompt: task.decompose.md
     type: execute
-    description: Implement the design
+    description: Extract tasks from design document
     transitions:
-      - to: code_review
+      - to: implement_task
+        when: "status.taskDecompositionComplete == true"
+
+  # Task implementation loop
+  implement_task:
+    prompt: task.implement.md
+    type: execute
+    description: Implement current task
+    transitions:
+      - to: task_spec_check
         auto: true
+
+  task_spec_check:
+    prompt: task.spec_check.md
+    type: evaluate
+    description: Verify task meets acceptance criteria
+    allowed_writes:
+      - ".jeeves/*"
+    transitions:
+      - to: implement_task
+        when: "status.taskFailed == true"
+      - to: implement_task
+        when: "status.taskPassed == true and status.hasMoreTasks == true"
+      - to: completeness_verification
+        when: "status.allTasksComplete == true"
+
+  # Final completeness check
+  completeness_verification:
+    prompt: verify.completeness.md
+    type: evaluate
+    description: Verify complete implementation against design
+    allowed_writes:
+      - ".jeeves/*"
+    transitions:
+      - to: implement_task
+        when: "status.missingWork == true"
+      - to: code_review
+        when: "status.implementationComplete == true"
 
   # Code review loop
   code_review:

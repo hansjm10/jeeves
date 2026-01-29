@@ -1509,6 +1509,213 @@
             background: rgba(63, 185, 80, 0.2);
             color: #3fb950;
         }
+
+        /* Transition Editor Panel - reuses phase-editor styles */
+        .transition-editor-panel {
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 320px;
+            height: calc(100vh - 60px);
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.3s ease-out;
+            overflow: hidden;
+        }
+
+        .transition-editor-panel.open {
+            transform: translateX(0);
+        }
+
+        .transition-editor-header {
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .transition-editor-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .transition-editor-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+            padding: 4px;
+            transition: color 0.2s;
+        }
+
+        .transition-editor-close:hover {
+            color: var(--text-primary);
+        }
+
+        .transition-editor-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .transition-editor-field {
+            margin-bottom: 16px;
+        }
+
+        .transition-editor-field:last-child {
+            margin-bottom: 0;
+        }
+
+        .transition-editor-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .transition-editor-input,
+        .transition-editor-select,
+        .transition-editor-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .transition-editor-input:focus,
+        .transition-editor-select:focus,
+        .transition-editor-textarea:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        .transition-editor-select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        .transition-editor-textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        /* Toggle switch for auto-transition */
+        .transition-toggle-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .transition-toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .transition-toggle.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .transition-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .transition-toggle.active::after {
+            transform: translateX(20px);
+        }
+
+        .transition-editor-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .transition-editor-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .transition-editor-btn-danger {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .transition-editor-btn-danger:hover {
+            background: rgba(248, 81, 73, 0.2);
+        }
+
+        /* Transition source/target info */
+        .transition-route-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .transition-route-info .route-phase {
+            padding: 2px 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .transition-route-info .route-arrow {
+            color: var(--text-muted);
+        }
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -2163,6 +2370,73 @@
                     this._renderNodes();
                     this._markModified();
                 }
+            }
+
+            /**
+             * Update a single edge's data and re-render
+             * @param {string} edgeId - The edge ID to update
+             * @param {Object} data - New edge data (target, auto, priority, guard)
+             */
+            updateEdge(edgeId, data) {
+                const edge = this.links.find(l => l.id === edgeId);
+                if (edge) {
+                    // Handle target change - need to update the link's target reference
+                    if (data.target && data.target !== (typeof edge.target === 'object' ? edge.target.id : edge.target)) {
+                        const newTarget = this.nodes.find(n => n.id === data.target);
+                        if (newTarget) {
+                            edge.target = newTarget;
+                            // Update edge id to reflect new target
+                            const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                            // Keep track of index for id
+                            const parts = edge.id.split('-');
+                            const idx = parts.length > 2 ? parts[parts.length - 1] : '0';
+                            edge.id = `${sourceName}-${data.target}-${idx}`;
+                        }
+                    }
+
+                    // Update other properties
+                    if (data.auto !== undefined) edge.auto = data.auto;
+                    if (data.priority !== undefined) edge.priority = data.priority;
+                    if (data.guard !== undefined) edge.guard = data.guard;
+
+                    // Re-render edges to update labels and styles
+                    this._renderEdges();
+                    // Restart simulation slightly to update paths
+                    if (this.simulation) {
+                        this.simulation.alpha(0.1).restart();
+                    }
+                    this._markModified();
+                }
+            }
+
+            /**
+             * Delete an edge from the graph
+             * @param {string} edgeId - The edge ID to delete
+             */
+            deleteEdge(edgeId) {
+                const edgeIndex = this.links.findIndex(l => l.id === edgeId);
+                if (edgeIndex !== -1) {
+                    // Remove the edge
+                    this.links.splice(edgeIndex, 1);
+
+                    // Update the simulation with new links
+                    if (this.simulation) {
+                        this.simulation.force('link').links(this.links);
+                        this.simulation.alpha(0.3).restart();
+                    }
+
+                    // Re-render edges
+                    this._renderEdges();
+                    this._markModified();
+                }
+            }
+
+            /**
+             * Get list of all phase names in the graph
+             * @returns {string[]} Array of phase/node names
+             */
+            getPhaseNames() {
+                return this.nodes.map(n => n.id);
             }
 
             /**
@@ -2841,6 +3115,262 @@
                 }
                 this.phase = null;
                 this.prompts = [];
+            }
+        }
+
+        /**
+         * TransitionEditor - Panel for editing workflow transition properties
+         * Used to modify transitions (edges) between workflow phases
+         */
+        class TransitionEditor {
+            constructor(options = {}) {
+                this.options = {
+                    onChange: options.onChange || null,     // Called when transition data changes
+                    onDelete: options.onDelete || null,     // Called when delete is clicked
+                    getPhaseNames: options.getPhaseNames || (() => []), // Function to get current phase names
+                    ...options
+                };
+
+                this.edge = null;
+                this.isOpen = false;
+
+                this._createPanel();
+            }
+
+            /**
+             * Create the panel DOM structure
+             */
+            _createPanel() {
+                // Check if panel already exists
+                this.panel = document.getElementById('transitionEditorPanel');
+                if (this.panel) {
+                    this._bindElements();
+                    return;
+                }
+
+                // Create panel element
+                this.panel = document.createElement('div');
+                this.panel.id = 'transitionEditorPanel';
+                this.panel.className = 'transition-editor-panel';
+                this.panel.innerHTML = `
+                    <div class="transition-editor-header">
+                        <span class="transition-editor-title">
+                            <span>Edit Transition</span>
+                        </span>
+                        <button class="transition-editor-close" id="transitionEditorClose" title="Close">&times;</button>
+                    </div>
+                    <div class="transition-editor-content">
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label">Route</label>
+                            <div class="transition-route-info" id="transitionRouteInfo">
+                                <span class="route-phase" id="transitionSourcePhase">source</span>
+                                <span class="route-arrow">→</span>
+                                <span class="route-phase" id="transitionTargetDisplay">target</span>
+                            </div>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label" for="transitionEditorTarget">Target Phase</label>
+                            <select class="transition-editor-select" id="transitionEditorTarget">
+                            </select>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label">Auto Transition</label>
+                            <div class="transition-toggle-wrapper">
+                                <span style="font-size: 12px; color: var(--text-secondary);">Automatically transition when guard is met</span>
+                                <div class="transition-toggle" id="transitionEditorAuto" title="Toggle auto-transition"></div>
+                            </div>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label" for="transitionEditorPriority">Priority</label>
+                            <input type="number" class="transition-editor-input" id="transitionEditorPriority" placeholder="0" min="0" step="1">
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label" for="transitionEditorGuard">Guard Expression</label>
+                            <textarea class="transition-editor-textarea" id="transitionEditorGuard" placeholder="e.g., status.taskPassed == true"></textarea>
+                        </div>
+                    </div>
+                    <div class="transition-editor-footer">
+                        <button class="transition-editor-btn transition-editor-btn-danger" id="transitionEditorDelete">Delete Transition</button>
+                    </div>
+                `;
+
+                document.body.appendChild(this.panel);
+                this._bindElements();
+            }
+
+            /**
+             * Bind DOM elements and event listeners
+             */
+            _bindElements() {
+                this.closeBtn = document.getElementById('transitionEditorClose');
+                this.targetSelect = document.getElementById('transitionEditorTarget');
+                this.autoToggle = document.getElementById('transitionEditorAuto');
+                this.priorityInput = document.getElementById('transitionEditorPriority');
+                this.guardInput = document.getElementById('transitionEditorGuard');
+                this.deleteBtn = document.getElementById('transitionEditorDelete');
+                this.sourcePhaseEl = document.getElementById('transitionSourcePhase');
+                this.targetDisplayEl = document.getElementById('transitionTargetDisplay');
+
+                // Close button
+                if (this.closeBtn) {
+                    this.closeBtn.addEventListener('click', () => this.hide());
+                }
+
+                // Auto toggle
+                if (this.autoToggle) {
+                    this.autoToggle.addEventListener('click', () => {
+                        this.autoToggle.classList.toggle('active');
+                        this._emitChange();
+                    });
+                }
+
+                // Target change
+                if (this.targetSelect) {
+                    this.targetSelect.addEventListener('change', () => {
+                        // Update display
+                        if (this.targetDisplayEl) {
+                            this.targetDisplayEl.textContent = this.targetSelect.value || 'target';
+                        }
+                        this._emitChange();
+                    });
+                }
+
+                // Priority and guard change handlers
+                if (this.priorityInput) {
+                    this.priorityInput.addEventListener('input', () => this._emitChange());
+                    this.priorityInput.addEventListener('change', () => this._emitChange());
+                }
+
+                if (this.guardInput) {
+                    this.guardInput.addEventListener('input', () => this._emitChange());
+                    this.guardInput.addEventListener('change', () => this._emitChange());
+                }
+
+                // Delete button
+                if (this.deleteBtn) {
+                    this.deleteBtn.addEventListener('click', () => {
+                        if (this.edge && this.options.onDelete) {
+                            this.options.onDelete(this.edge);
+                        }
+                    });
+                }
+            }
+
+            /**
+             * Populate the target dropdown with current phase names
+             */
+            _populateTargetDropdown() {
+                if (!this.targetSelect) return;
+
+                const phaseNames = this.options.getPhaseNames();
+                const currentValue = this.targetSelect.value;
+
+                // Clear existing options
+                this.targetSelect.innerHTML = '';
+
+                // Add phase options
+                for (const name of phaseNames) {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    this.targetSelect.appendChild(option);
+                }
+
+                // Restore selection if it still exists
+                if (currentValue && phaseNames.includes(currentValue)) {
+                    this.targetSelect.value = currentValue;
+                }
+            }
+
+            /**
+             * Emit change event with current transition data
+             */
+            _emitChange() {
+                if (!this.edge || !this.options.onChange) return;
+
+                const data = this.getTransitionData();
+                this.options.onChange(this.edge.id, data);
+            }
+
+            /**
+             * Show the panel with an edge's data
+             * @param {Object} edge - Edge object to edit
+             */
+            show(edge) {
+                if (!edge) return;
+
+                this.edge = edge;
+
+                // Populate target dropdown with current phases
+                this._populateTargetDropdown();
+
+                // Get source name (could be string id or object with id)
+                const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                const targetName = typeof edge.target === 'object' ? edge.target.id : edge.target;
+
+                // Populate form fields
+                if (this.sourcePhaseEl) this.sourcePhaseEl.textContent = sourceName || 'source';
+                if (this.targetDisplayEl) this.targetDisplayEl.textContent = targetName || 'target';
+                if (this.targetSelect) this.targetSelect.value = targetName || '';
+                if (this.autoToggle) {
+                    this.autoToggle.classList.toggle('active', !!edge.auto);
+                }
+                if (this.priorityInput) this.priorityInput.value = edge.priority || 0;
+                if (this.guardInput) this.guardInput.value = edge.guard || '';
+
+                // Show panel
+                this.panel.classList.add('open');
+                this.isOpen = true;
+            }
+
+            /**
+             * Hide the panel
+             */
+            hide() {
+                this.panel.classList.remove('open');
+                this.isOpen = false;
+                this.edge = null;
+            }
+
+            /**
+             * Get current transition data from the form
+             * @returns {Object} Transition data
+             */
+            getTransitionData() {
+                return {
+                    target: this.targetSelect ? this.targetSelect.value : '',
+                    auto: this.autoToggle ? this.autoToggle.classList.contains('active') : false,
+                    priority: this.priorityInput ? parseInt(this.priorityInput.value, 10) || 0 : 0,
+                    guard: this.guardInput ? this.guardInput.value.trim() : ''
+                };
+            }
+
+            /**
+             * Validate the form fields
+             * @returns {Object} Validation result with isValid and errors array
+             */
+            validate() {
+                const errors = [];
+                const data = this.getTransitionData();
+
+                if (!data.target) {
+                    errors.push('Target phase is required');
+                }
+
+                return {
+                    isValid: errors.length === 0,
+                    errors: errors
+                };
+            }
+
+            /**
+             * Destroy the panel and clean up
+             */
+            destroy() {
+                if (this.panel && this.panel.parentNode) {
+                    this.panel.parentNode.removeChild(this.panel);
+                }
+                this.edge = null;
             }
         }
 
@@ -4471,6 +5001,7 @@
         // Global references for workflow editing
         let workflowGraph = null;
         let phaseEditor = null;
+        let transitionEditor = null;
 
         // Track unsaved changes indicator element
         let unsavedIndicator = null;
@@ -4540,21 +5071,53 @@
                 }
             });
 
-            // Create WorkflowGraph with node selection callback
+            // Create TransitionEditor with callbacks
+            transitionEditor = new TransitionEditor({
+                onChange: (edgeId, data) => {
+                    // When form changes, update the graph edge visually
+                    if (workflowGraph) {
+                        workflowGraph.updateEdge(edgeId, data);
+                    }
+                },
+                onDelete: (edge) => {
+                    // Delete the transition from the graph
+                    if (workflowGraph && edge) {
+                        const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                        const targetName = typeof edge.target === 'object' ? edge.target.id : edge.target;
+                        const confirmed = confirm(`Delete transition from "${sourceName}" to "${targetName}"?`);
+                        if (confirmed) {
+                            workflowGraph.deleteEdge(edge.id);
+                            transitionEditor.hide();
+                        }
+                    }
+                },
+                getPhaseNames: () => {
+                    // Return current phase names for target dropdown
+                    return workflowGraph ? workflowGraph.getPhaseNames() : [];
+                }
+            });
+
+            // Create WorkflowGraph with node and edge selection callbacks
             workflowGraph = new WorkflowGraph(graphContainer, {
                 onNodeSelect: (node) => {
                     // When a node is clicked, open the phase editor panel
+                    // Close transition editor if open
+                    if (transitionEditor && transitionEditor.isOpen) {
+                        transitionEditor.hide();
+                    }
                     if (phaseEditor) {
                         phaseEditor.show(node);
                     }
                 },
                 onEdgeSelect: (edge) => {
-                    // Edge selection will be handled in T5
-                    // For now, close the phase editor if open
+                    // When an edge is clicked, open the transition editor panel
+                    // Close phase editor if open
                     if (phaseEditor && phaseEditor.isOpen) {
                         phaseEditor.hide();
                     }
-                    console.log('Edge selected:', edge.id);
+                    if (transitionEditor) {
+                        transitionEditor.show(edge);
+                    }
                 },
                 onModified: (isModified) => {
                     // Show/hide unsaved changes indicator
@@ -4579,7 +5142,7 @@
                 workflowGraph.render(workflowData);
             }
 
-            return { workflowGraph, phaseEditor };
+            return { workflowGraph, phaseEditor, transitionEditor };
         }
 
         /**
@@ -4614,6 +5177,7 @@
         window.loadWorkflowIntoGraph = loadWorkflowIntoGraph;
         window.getWorkflowGraph = () => workflowGraph;
         window.getPhaseEditor = () => phaseEditor;
+        window.getTransitionEditor = () => transitionEditor;
     </script>
 </body>
 </html>

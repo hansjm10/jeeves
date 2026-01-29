@@ -1077,7 +1077,115 @@
             border: 1px solid var(--border-color);
             font-family: inherit;
         }
+
+        /* Workflow Graph Styles */
+        .workflow-graph-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .workflow-graph-container svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .workflow-node {
+            cursor: pointer;
+        }
+
+        .workflow-node rect {
+            stroke-width: 2px;
+            rx: 8;
+            ry: 8;
+            transition: stroke 0.2s, stroke-width 0.2s;
+        }
+
+        .workflow-node:hover rect {
+            stroke-width: 3px;
+            filter: brightness(1.1);
+        }
+
+        .workflow-node.selected rect {
+            stroke: var(--accent-blue) !important;
+            stroke-width: 3px;
+        }
+
+        .workflow-node text {
+            fill: var(--text-primary);
+            font-size: 12px;
+            font-weight: 500;
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+        }
+
+        .workflow-edge {
+            cursor: pointer;
+        }
+
+        .workflow-edge path {
+            fill: none;
+            stroke: var(--border-color);
+            stroke-width: 2px;
+            transition: stroke 0.2s, stroke-width 0.2s;
+        }
+
+        .workflow-edge:hover path {
+            stroke: var(--text-secondary);
+            stroke-width: 3px;
+        }
+
+        .workflow-edge.selected path {
+            stroke: var(--accent-blue);
+            stroke-width: 3px;
+        }
+
+        .workflow-edge-label {
+            fill: var(--text-muted);
+            font-size: 10px;
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+        }
+
+        .workflow-edge-arrow {
+            fill: var(--border-color);
+        }
+
+        .workflow-edge:hover .workflow-edge-arrow {
+            fill: var(--text-secondary);
+        }
+
+        .workflow-edge.selected .workflow-edge-arrow {
+            fill: var(--accent-blue);
+        }
+
+        /* Phase type colors */
+        .workflow-node.type-execute rect {
+            fill: rgba(210, 153, 34, 0.2);
+            stroke: #d29922;
+        }
+
+        .workflow-node.type-evaluate rect {
+            fill: rgba(163, 113, 247, 0.2);
+            stroke: #a371f7;
+        }
+
+        .workflow-node.type-script rect {
+            fill: rgba(219, 109, 40, 0.2);
+            stroke: #db6d28;
+        }
+
+        .workflow-node.type-terminal rect {
+            fill: rgba(63, 185, 80, 0.2);
+            stroke: #3fb950;
+        }
     </style>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
     <header class="header">
@@ -1293,6 +1401,472 @@
         let sdkOutput = null;
         let sdkShowTimeline = false;
         let sdkAutoScroll = true;
+
+        /**
+         * WorkflowGraph - D3.js force-directed graph for workflow visualization
+         *
+         * Renders phases as nodes colored by type and transitions as directed edges.
+         * Supports zoom/pan, node selection, and callbacks for interaction.
+         */
+        class WorkflowGraph {
+            constructor(container, options = {}) {
+                this.container = typeof container === 'string'
+                    ? document.querySelector(container)
+                    : container;
+
+                if (!this.container) {
+                    throw new Error('WorkflowGraph: container not found');
+                }
+
+                // Options with defaults
+                this.options = {
+                    nodeWidth: 140,
+                    nodeHeight: 40,
+                    onNodeSelect: options.onNodeSelect || null,
+                    onEdgeSelect: options.onEdgeSelect || null,
+                    ...options
+                };
+
+                // State
+                this.workflow = null;
+                this.nodes = [];
+                this.links = [];
+                this.selectedNode = null;
+                this.selectedEdge = null;
+                this.simulation = null;
+
+                // Phase type colors
+                this.typeColors = {
+                    execute: '#d29922',
+                    evaluate: '#a371f7',
+                    script: '#db6d28',
+                    terminal: '#3fb950'
+                };
+
+                // Initialize SVG and groups
+                this._initSvg();
+            }
+
+            /**
+             * Initialize SVG container and groups
+             */
+            _initSvg() {
+                // Clear any existing content
+                this.container.innerHTML = '';
+                this.container.classList.add('workflow-graph-container');
+
+                // Create SVG
+                this.svg = d3.select(this.container)
+                    .append('svg')
+                    .attr('width', '100%')
+                    .attr('height', '100%');
+
+                // Get actual dimensions
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                // Define arrow marker for edges
+                const defs = this.svg.append('defs');
+                defs.append('marker')
+                    .attr('id', 'workflow-arrow')
+                    .attr('viewBox', '0 -5 10 10')
+                    .attr('refX', 8)
+                    .attr('refY', 0)
+                    .attr('markerWidth', 6)
+                    .attr('markerHeight', 6)
+                    .attr('orient', 'auto')
+                    .append('path')
+                    .attr('d', 'M0,-5L10,0L0,5')
+                    .attr('class', 'workflow-edge-arrow');
+
+                // Create zoom container group
+                this.zoomGroup = this.svg.append('g')
+                    .attr('class', 'zoom-container');
+
+                // Create groups for edges and nodes (edges below nodes)
+                this.edgeGroup = this.zoomGroup.append('g')
+                    .attr('class', 'edges');
+                this.nodeGroup = this.zoomGroup.append('g')
+                    .attr('class', 'nodes');
+
+                // Setup zoom behavior
+                this.zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', (event) => {
+                        this.zoomGroup.attr('transform', event.transform);
+                    });
+
+                this.svg.call(this.zoom);
+            }
+
+            /**
+             * Render a workflow
+             * @param {Object} workflow - Workflow data with phases
+             */
+            render(workflow) {
+                if (!workflow || !workflow.phases) {
+                    console.warn('WorkflowGraph.render: No workflow or phases provided');
+                    return;
+                }
+
+                this.workflow = workflow;
+                this._buildGraphData();
+                this._createSimulation();
+                this._renderElements();
+            }
+
+            /**
+             * Build nodes and links from workflow data
+             */
+            _buildGraphData() {
+                const phases = this.workflow.phases;
+                this.nodes = [];
+                this.links = [];
+
+                // Handle both object and array format for phases
+                const phaseEntries = Array.isArray(phases)
+                    ? phases.map(p => [p.name || p.id, p])
+                    : Object.entries(phases);
+
+                // Create nodes from phases
+                phaseEntries.forEach(([name, phase]) => {
+                    this.nodes.push({
+                        id: name,
+                        name: phase.name || name,
+                        type: phase.type || 'execute',
+                        description: phase.description || '',
+                        prompt: phase.prompt,
+                        command: phase.command,
+                        phase: phase  // Keep reference to original phase data
+                    });
+                });
+
+                // Create links from transitions
+                phaseEntries.forEach(([sourceName, phase]) => {
+                    const transitions = phase.transitions || [];
+                    transitions.forEach((transition, index) => {
+                        const targetName = transition.to || transition.target;
+                        if (targetName && this.nodes.find(n => n.id === targetName)) {
+                            this.links.push({
+                                id: `${sourceName}-${targetName}-${index}`,
+                                source: sourceName,
+                                target: targetName,
+                                guard: transition.when || transition.guard || '',
+                                auto: transition.auto || false,
+                                priority: transition.priority || 0,
+                                transition: transition  // Keep reference to original transition
+                            });
+                        }
+                    });
+                });
+            }
+
+            /**
+             * Create D3 force simulation
+             */
+            _createSimulation() {
+                // Stop any existing simulation
+                if (this.simulation) {
+                    this.simulation.stop();
+                }
+
+                // Get container dimensions
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                // Create force simulation
+                this.simulation = d3.forceSimulation(this.nodes)
+                    .force('link', d3.forceLink(this.links)
+                        .id(d => d.id)
+                        .distance(180)
+                        .strength(0.5))
+                    .force('charge', d3.forceManyBody()
+                        .strength(-400))
+                    .force('center', d3.forceCenter(this.width / 2, this.height / 2))
+                    .force('collision', d3.forceCollide()
+                        .radius(this.options.nodeWidth / 2 + 20))
+                    .on('tick', () => this._tick());
+
+                // Run simulation for initial positions
+                this.simulation.alpha(1).restart();
+            }
+
+            /**
+             * Render SVG elements for nodes and edges
+             */
+            _renderElements() {
+                this._renderEdges();
+                this._renderNodes();
+            }
+
+            /**
+             * Render edge elements
+             */
+            _renderEdges() {
+                // Remove existing edges
+                this.edgeGroup.selectAll('.workflow-edge').remove();
+
+                // Create edge groups
+                const edgeSelection = this.edgeGroup.selectAll('.workflow-edge')
+                    .data(this.links, d => d.id)
+                    .enter()
+                    .append('g')
+                    .attr('class', 'workflow-edge')
+                    .on('click', (event, d) => {
+                        event.stopPropagation();
+                        this._selectEdge(d);
+                    });
+
+                // Add path for each edge
+                edgeSelection.append('path')
+                    .attr('marker-end', 'url(#workflow-arrow)');
+
+                // Add label for guard expression
+                edgeSelection.append('text')
+                    .attr('class', 'workflow-edge-label')
+                    .text(d => this._formatGuardLabel(d.guard));
+
+                this.edgeElements = this.edgeGroup.selectAll('.workflow-edge');
+            }
+
+            /**
+             * Format guard expression for display as edge label
+             */
+            _formatGuardLabel(guard) {
+                if (!guard) return '';
+                // Truncate long guards
+                if (guard.length > 30) {
+                    return guard.substring(0, 27) + '...';
+                }
+                return guard;
+            }
+
+            /**
+             * Render node elements
+             */
+            _renderNodes() {
+                // Remove existing nodes
+                this.nodeGroup.selectAll('.workflow-node').remove();
+
+                const self = this;
+                const { nodeWidth, nodeHeight } = this.options;
+
+                // Create node groups
+                const nodeSelection = this.nodeGroup.selectAll('.workflow-node')
+                    .data(this.nodes, d => d.id)
+                    .enter()
+                    .append('g')
+                    .attr('class', d => `workflow-node type-${d.type}`)
+                    .on('click', (event, d) => {
+                        event.stopPropagation();
+                        this._selectNode(d);
+                    })
+                    .call(d3.drag()
+                        .on('start', (event, d) => this._dragStarted(event, d))
+                        .on('drag', (event, d) => this._dragged(event, d))
+                        .on('end', (event, d) => this._dragEnded(event, d)));
+
+                // Add rectangle for each node
+                nodeSelection.append('rect')
+                    .attr('width', nodeWidth)
+                    .attr('height', nodeHeight)
+                    .attr('x', -nodeWidth / 2)
+                    .attr('y', -nodeHeight / 2);
+
+                // Add text label
+                nodeSelection.append('text')
+                    .text(d => d.name)
+                    .attr('dy', '0.35em');
+
+                this.nodeElements = this.nodeGroup.selectAll('.workflow-node');
+
+                // Click on background to deselect
+                this.svg.on('click', () => {
+                    this._clearSelection();
+                });
+            }
+
+            /**
+             * Update positions on simulation tick
+             */
+            _tick() {
+                // Update edge paths
+                if (this.edgeElements) {
+                    this.edgeElements.select('path')
+                        .attr('d', d => this._calculateEdgePath(d));
+
+                    // Update edge label positions
+                    this.edgeElements.select('text')
+                        .attr('x', d => (d.source.x + d.target.x) / 2)
+                        .attr('y', d => (d.source.y + d.target.y) / 2 - 10);
+                }
+
+                // Update node positions
+                if (this.nodeElements) {
+                    this.nodeElements.attr('transform', d => `translate(${d.x}, ${d.y})`);
+                }
+            }
+
+            /**
+             * Calculate edge path accounting for node dimensions
+             */
+            _calculateEdgePath(d) {
+                const { nodeWidth, nodeHeight } = this.options;
+
+                // Source and target positions
+                const sx = d.source.x;
+                const sy = d.source.y;
+                const tx = d.target.x;
+                const ty = d.target.y;
+
+                // Calculate angle
+                const angle = Math.atan2(ty - sy, tx - sx);
+
+                // Calculate edge points at node boundaries
+                const sourceX = sx + Math.cos(angle) * (nodeWidth / 2);
+                const sourceY = sy + Math.sin(angle) * (nodeHeight / 2);
+                const targetX = tx - Math.cos(angle) * (nodeWidth / 2 + 10);  // Extra offset for arrow
+                const targetY = ty - Math.sin(angle) * (nodeHeight / 2 + 10);
+
+                return `M${sourceX},${sourceY}L${targetX},${targetY}`;
+            }
+
+            /**
+             * Drag event handlers
+             */
+            _dragStarted(event, d) {
+                if (!event.active) this.simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            _dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+
+            _dragEnded(event, d) {
+                if (!event.active) this.simulation.alphaTarget(0);
+                // Keep the node fixed at its dragged position
+                // d.fx = null;
+                // d.fy = null;
+            }
+
+            /**
+             * Selection handlers
+             */
+            _selectNode(node) {
+                this._clearSelection();
+                this.selectedNode = node;
+
+                // Update visual state
+                this.nodeElements
+                    .classed('selected', d => d.id === node.id);
+
+                // Trigger callback
+                if (this.options.onNodeSelect) {
+                    this.options.onNodeSelect(node);
+                }
+            }
+
+            _selectEdge(edge) {
+                this._clearSelection();
+                this.selectedEdge = edge;
+
+                // Update visual state
+                this.edgeElements
+                    .classed('selected', d => d.id === edge.id);
+
+                // Trigger callback
+                if (this.options.onEdgeSelect) {
+                    this.options.onEdgeSelect(edge);
+                }
+            }
+
+            _clearSelection() {
+                this.selectedNode = null;
+                this.selectedEdge = null;
+
+                if (this.nodeElements) {
+                    this.nodeElements.classed('selected', false);
+                }
+                if (this.edgeElements) {
+                    this.edgeElements.classed('selected', false);
+                }
+            }
+
+            /**
+             * Public API methods
+             */
+
+            /**
+             * Set selection programmatically
+             */
+            setSelection(type, id) {
+                this._clearSelection();
+
+                if (type === 'node') {
+                    const node = this.nodes.find(n => n.id === id);
+                    if (node) this._selectNode(node);
+                } else if (type === 'edge') {
+                    const edge = this.links.find(l => l.id === id);
+                    if (edge) this._selectEdge(edge);
+                }
+            }
+
+            /**
+             * Update a single node's data and re-render
+             */
+            updateNode(nodeId, data) {
+                const node = this.nodes.find(n => n.id === nodeId);
+                if (node) {
+                    Object.assign(node, data);
+                    this._renderNodes();
+                }
+            }
+
+            /**
+             * Get current selection
+             */
+            getSelection() {
+                if (this.selectedNode) {
+                    return { type: 'node', data: this.selectedNode };
+                }
+                if (this.selectedEdge) {
+                    return { type: 'edge', data: this.selectedEdge };
+                }
+                return null;
+            }
+
+            /**
+             * Resize handler - call when container size changes
+             */
+            resize() {
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                if (this.simulation) {
+                    this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
+                    this.simulation.alpha(0.3).restart();
+                }
+            }
+
+            /**
+             * Destroy the graph and clean up
+             */
+            destroy() {
+                if (this.simulation) {
+                    this.simulation.stop();
+                }
+                if (this.container) {
+                    this.container.innerHTML = '';
+                    this.container.classList.remove('workflow-graph-container');
+                }
+            }
+        }
 
         // Schema version detection and normalization functions
         function detectSchemaVersion(data) {

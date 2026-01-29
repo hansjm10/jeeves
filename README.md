@@ -65,6 +65,35 @@ Typical layout:
 }
 ```
 
+## Skills
+
+Jeeves uses a phase-based skill provisioning system that provides contextual guidance during different workflow phases. Skills are markdown files with YAML frontmatter that get copied to `.claude/skills/` before each phase.
+
+### Integrated External Skills
+
+Jeeves includes high-quality skills adapted from external sources:
+
+| Skill | Purpose | Source |
+|-------|---------|--------|
+| **pr-review** | Evidence-based PR review orchestration with self-audit | codex-skills |
+| **pr-evidence** | Extract factual evidence from diffs | codex-skills |
+| **pr-requirements** | Extract acceptance criteria from issues | codex-skills |
+| **pr-audit** | Audit reviews for false positives | codex-skills |
+| **sonarqube** | SonarQube/SonarCloud API integration | codex-skills |
+| **differential-review** | Security-focused code review | [Trail of Bits](https://github.com/trailofbits/skills) |
+| **frontend-design** | Production-grade UI design guidance | [Anthropic](https://github.com/anthropics/skills) |
+
+### Phase Mappings
+
+| Phase | Skills Provisioned |
+|-------|-------------------|
+| All phases | jeeves, progress-tracker, sonarqube |
+| design_* | architecture-patterns |
+| implement_task | test-driven-dev, frontend-design |
+| code_review | code-quality, pr-review, pr-evidence, pr-requirements, pr-audit, differential-review |
+
+See [docs/integrated-skills.md](docs/integrated-skills.md) for detailed skill documentation.
+
 ## Repository Structure
 
 ```
@@ -73,6 +102,12 @@ jeeves/
 │   ├── core/                    # GitHub + worktree helpers
 │   ├── runner/                  # SDK runner
 │   └── viewer/                  # Web dashboard
+├── skills/                      # Skill definitions (SKILL.md files)
+│   ├── common/                  # Skills for all phases
+│   ├── design/                  # Design phase skills
+│   ├── implement/               # Implementation phase skills
+│   ├── review/                  # Code review skills
+│   └── registry.yaml            # Phase-to-skill mappings
 ├── prompts/                     # Prompt templates
 ├── scripts/                     # Helper scripts
 ├── tests/                       # Test suite

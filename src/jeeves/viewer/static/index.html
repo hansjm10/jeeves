@@ -1303,6 +1303,43 @@
             stroke: #3fb950;
         }
 
+        /* Current phase highlighting - pulsing animation */
+        .workflow-node.current rect {
+            animation: workflow-phase-pulse 1.5s infinite;
+            stroke-width: 3px !important;
+        }
+
+        @keyframes workflow-phase-pulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4);
+                filter: drop-shadow(0 0 0 rgba(88, 166, 255, 0.4));
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(88, 166, 255, 0);
+                filter: drop-shadow(0 0 8px rgba(88, 166, 255, 0.6));
+            }
+        }
+
+        .workflow-node.current text {
+            fill: var(--accent-blue);
+            font-weight: 700;
+        }
+
+        /* Completed phase styling with checkmark */
+        .workflow-node.completed rect {
+            opacity: 0.7;
+        }
+
+        .workflow-node.completed::after {
+            content: '✓';
+        }
+
+        .workflow-node.completed .completed-indicator {
+            fill: var(--accent-green);
+            font-size: 14px;
+            font-weight: bold;
+        }
+
         /* Workflow Graph Zoom Controls */
         .workflow-zoom-controls {
             position: absolute;
@@ -2609,6 +2646,10 @@
                 this.drawingLine = null;
                 this.dropTargetNode = null;
 
+                // Current/completed phase state for highlighting
+                this.currentPhaseId = null;
+                this.completedPhaseIds = [];
+
                 // Phase type colors
                 this.typeColors = {
                     execute: '#d29922',
@@ -2690,6 +2731,8 @@
                 this._buildGraphData();
                 this._createSimulation();
                 this._renderElements();
+                // Re-apply current/completed phase highlighting after re-rendering
+                this._updatePhaseHighlighting();
             }
 
             /**
@@ -3408,6 +3451,83 @@
                 this.svg.transition()
                     .duration(500)
                     .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Set the current phase for highlighting
+             * @param {string} phaseId - ID of the current phase
+             */
+            setCurrentPhase(phaseId) {
+                this.currentPhaseId = phaseId;
+                this._updatePhaseHighlighting();
+            }
+
+            /**
+             * Get the current phase ID
+             * @returns {string|null} The current phase ID
+             */
+            getCurrentPhase() {
+                return this.currentPhaseId || null;
+            }
+
+            /**
+             * Set the list of completed phases
+             * @param {Array<string>} phaseIds - Array of completed phase IDs
+             */
+            setCompletedPhases(phaseIds) {
+                this.completedPhaseIds = phaseIds || [];
+                this._updatePhaseHighlighting();
+            }
+
+            /**
+             * Get the list of completed phase IDs
+             * @returns {Array<string>} Array of completed phase IDs
+             */
+            getCompletedPhases() {
+                return this.completedPhaseIds || [];
+            }
+
+            /**
+             * Update the visual highlighting for current and completed phases
+             */
+            _updatePhaseHighlighting() {
+                if (!this.nodeElements) return;
+
+                const currentId = this.currentPhaseId;
+                const completedIds = this.completedPhaseIds || [];
+
+                // Update current phase class
+                this.nodeElements.classed('current', d => d.id === currentId);
+
+                // Update completed phases class
+                this.nodeElements.classed('completed', d => completedIds.includes(d.id));
+
+                // Add/remove checkmark indicators for completed phases
+                this.nodeElements.each(function(d) {
+                    const group = d3.select(this);
+                    const isCompleted = completedIds.includes(d.id);
+
+                    // Remove existing indicator
+                    group.select('.completed-indicator').remove();
+
+                    // Add checkmark for completed phases
+                    if (isCompleted) {
+                        group.append('text')
+                            .attr('class', 'completed-indicator')
+                            .attr('x', 60)  // Position to the right of node center
+                            .attr('y', -12) // Position above node
+                            .text('✓');
+                    }
+                });
+            }
+
+            /**
+             * Center on the current phase if one is set
+             */
+            centerOnCurrentPhase() {
+                if (this.currentPhaseId) {
+                    this.centerOnNode(this.currentPhaseId);
+                }
             }
 
             /**
@@ -6235,6 +6355,28 @@
                     runPhase.value = status.phase;
                 }
             }
+
+            // Update workflow graph current phase highlighting
+            updateWorkflowGraphHighlighting(status.phase, state.completed_phases);
+        }
+
+        /**
+         * Update the workflow graph to highlight current and completed phases
+         * @param {string} currentPhase - The current phase ID
+         * @param {Array<string>} completedPhases - Array of completed phase IDs
+         */
+        function updateWorkflowGraphHighlighting(currentPhase, completedPhases) {
+            if (!workflowGraph) return;
+
+            // Set the current phase for pulsing highlight
+            if (currentPhase) {
+                workflowGraph.setCurrentPhase(currentPhase);
+            }
+
+            // Set completed phases for checkmark styling
+            if (completedPhases && Array.isArray(completedPhases)) {
+                workflowGraph.setCompletedPhases(completedPhases);
+            }
         }
 
         function updateRunControls(run) {
@@ -7053,6 +7195,7 @@
                     <button id="workflowZoomInBtn" title="Zoom in">+</button>
                     <button id="workflowZoomOutBtn" title="Zoom out">−</button>
                     <button id="workflowFitBtn" title="Fit to view">Fit</button>
+                    <button id="workflowCenterCurrentBtn" title="Center on current phase">📍 Current</button>
                 </div>
                 <input type="file" id="workflowImportInput" class="workflow-import-input" accept=".yaml,.yml" />
             `;
@@ -7714,6 +7857,7 @@
             const zoomInBtn = document.getElementById('workflowZoomInBtn');
             const zoomOutBtn = document.getElementById('workflowZoomOutBtn');
             const fitBtn = document.getElementById('workflowFitBtn');
+            const centerCurrentBtn = document.getElementById('workflowCenterCurrentBtn');
 
             if (zoomInBtn) {
                 zoomInBtn.addEventListener('click', () => {
@@ -7728,6 +7872,11 @@
             if (fitBtn) {
                 fitBtn.addEventListener('click', () => {
                     if (workflowGraph) workflowGraph.fitToView();
+                });
+            }
+            if (centerCurrentBtn) {
+                centerCurrentBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.centerOnCurrentPhase();
                 });
             }
 

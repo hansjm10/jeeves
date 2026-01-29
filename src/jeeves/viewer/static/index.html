@@ -448,6 +448,19 @@
             color: white;
         }
 
+        .tab-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: var(--bg-tertiary);
+            border-color: var(--border-color);
+            color: var(--text-muted);
+        }
+
+        .tab-btn:disabled:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-color);
+        }
+
         .log-title {
             font-size: 13px;
             font-weight: 600;
@@ -1077,7 +1090,1283 @@
             border: 1px solid var(--border-color);
             font-family: inherit;
         }
+
+        /* Workflow Tab Panel */
+        .workflow-panel {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            background: var(--bg-primary);
+        }
+
+        .workflow-panel-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            position: relative;
+        }
+
+        .workflow-panel-graph {
+            flex: 1;
+            min-height: 300px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .workflow-panel-disabled {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(13, 17, 23, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            gap: 12px;
+        }
+
+        .workflow-panel-disabled-icon {
+            font-size: 48px;
+            opacity: 0.6;
+        }
+
+        .workflow-panel-disabled-text {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        /* Responsive adjustments for workflow tab */
+        @media (max-width: 1200px) {
+            .workflow-toolbar {
+                flex-wrap: wrap;
+            }
+            .workflow-toolbar-group {
+                flex-wrap: wrap;
+            }
+        }
+
+        @media (max-width: 800px) {
+            .workflow-panel-graph {
+                min-height: 250px;
+            }
+            .workflow-toolbar {
+                font-size: 11px;
+            }
+            .workflow-toolbar button {
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            .workflow-selector select {
+                max-width: 120px;
+            }
+        }
+
+        /* Workflow Graph Styles */
+        .workflow-graph-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .workflow-graph-container svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .workflow-node {
+            cursor: pointer;
+        }
+
+        .workflow-node rect {
+            stroke-width: 2px;
+            rx: 8;
+            ry: 8;
+            transition: stroke 0.2s, stroke-width 0.2s;
+        }
+
+        .workflow-node:hover rect {
+            stroke-width: 3px;
+            filter: brightness(1.1);
+        }
+
+        .workflow-node.selected rect {
+            stroke: var(--accent-blue) !important;
+            stroke-width: 3px;
+        }
+
+        .workflow-node text {
+            fill: var(--text-primary);
+            font-size: 12px;
+            font-weight: 500;
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+        }
+
+        .workflow-edge {
+            cursor: pointer;
+        }
+
+        .workflow-edge path {
+            fill: none;
+            stroke: var(--border-color);
+            stroke-width: 2px;
+            transition: stroke 0.2s, stroke-width 0.2s;
+        }
+
+        .workflow-edge:hover path {
+            stroke: var(--text-secondary);
+            stroke-width: 3px;
+        }
+
+        .workflow-edge.selected path {
+            stroke: var(--accent-blue);
+            stroke-width: 3px;
+        }
+
+        .workflow-edge-label {
+            fill: var(--text-muted);
+            font-size: 10px;
+            pointer-events: none;
+            text-anchor: middle;
+            dominant-baseline: middle;
+        }
+
+        .workflow-edge-arrow {
+            fill: var(--border-color);
+        }
+
+        .workflow-edge:hover .workflow-edge-arrow {
+            fill: var(--text-secondary);
+        }
+
+        .workflow-edge.selected .workflow-edge-arrow {
+            fill: var(--accent-blue);
+        }
+
+        /* Transition drawing line (temp line while dragging) */
+        .workflow-drawing-line {
+            stroke: var(--accent-blue);
+            stroke-width: 2px;
+            stroke-dasharray: 5, 5;
+            fill: none;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+
+        /* Node edge handle - invisible hotspot for starting transition drag */
+        .workflow-node-edge-handle {
+            fill: transparent;
+            cursor: crosshair;
+        }
+
+        .workflow-node-edge-handle:hover {
+            fill: rgba(88, 166, 255, 0.2);
+        }
+
+        /* Visual indicator when dragging over a valid drop target */
+        .workflow-node.drop-target rect {
+            stroke: var(--accent-blue) !important;
+            stroke-width: 4px;
+            filter: drop-shadow(0 0 6px var(--accent-blue));
+        }
+
+        /* Phase type colors */
+        .workflow-node.type-execute rect {
+            fill: rgba(210, 153, 34, 0.2);
+            stroke: #d29922;
+        }
+
+        .workflow-node.type-evaluate rect {
+            fill: rgba(163, 113, 247, 0.2);
+            stroke: #a371f7;
+        }
+
+        .workflow-node.type-script rect {
+            fill: rgba(219, 109, 40, 0.2);
+            stroke: #db6d28;
+        }
+
+        .workflow-node.type-terminal rect {
+            fill: rgba(63, 185, 80, 0.2);
+            stroke: #3fb950;
+        }
+
+        /* Current phase highlighting - pulsing animation */
+        .workflow-node.current rect {
+            animation: workflow-phase-pulse 1.5s infinite;
+            stroke-width: 3px !important;
+        }
+
+        @keyframes workflow-phase-pulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4);
+                filter: drop-shadow(0 0 0 rgba(88, 166, 255, 0.4));
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(88, 166, 255, 0);
+                filter: drop-shadow(0 0 8px rgba(88, 166, 255, 0.6));
+            }
+        }
+
+        .workflow-node.current text {
+            fill: var(--accent-blue);
+            font-weight: 700;
+        }
+
+        /* Completed phase styling with checkmark */
+        .workflow-node.completed rect {
+            opacity: 0.7;
+        }
+
+        .workflow-node.completed::after {
+            content: '✓';
+        }
+
+        .workflow-node.completed .completed-indicator {
+            fill: var(--accent-green);
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        /* Workflow Graph Zoom Controls */
+        .workflow-zoom-controls {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 100;
+        }
+
+        .workflow-zoom-controls button {
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .workflow-zoom-controls button:hover {
+            background: var(--bg-hover);
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-zoom-controls button:active {
+            background: var(--bg-active);
+        }
+
+        .workflow-zoom-controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .workflow-zoom-controls .zoom-level {
+            font-size: 11px;
+            text-align: center;
+            color: var(--text-muted);
+            padding: 4px 0;
+            min-width: 36px;
+        }
+
+        .workflow-zoom-controls .zoom-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 4px 0;
+        }
+
+        /* Fit to view icon using CSS */
+        .workflow-zoom-controls .btn-fit::before {
+            content: '⊡';
+            font-size: 16px;
+        }
+
+        .workflow-zoom-controls .btn-reset::before {
+            content: '⌖';
+            font-size: 16px;
+        }
+
+        /* Workflow Toolbar Styles */
+        .workflow-toolbar {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+
+        .workflow-toolbar button {
+            padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .workflow-toolbar button:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-toolbar button:active {
+            background: var(--bg-primary);
+        }
+
+        /* Unsaved Changes Indicator */
+        .workflow-unsaved-indicator {
+            position: absolute;
+            top: 16px;
+            right: 350px;
+            padding: 6px 12px;
+            background: rgba(210, 153, 34, 0.15);
+            border: 1px solid var(--accent-yellow);
+            border-radius: 20px;
+            color: var(--accent-yellow);
+            font-size: 12px;
+            font-weight: 500;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            z-index: 100;
+        }
+
+        .workflow-unsaved-indicator.visible {
+            display: flex;
+        }
+
+        .workflow-unsaved-indicator::before {
+            content: '●';
+            font-size: 8px;
+        }
+
+        /* Workflow Selector Styles */
+        .workflow-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 16px;
+            padding-right: 16px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .workflow-selector label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .workflow-selector select {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            min-width: 150px;
+        }
+
+        .workflow-selector select:hover {
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-selector select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        /* Toolbar Separator */
+        .workflow-toolbar-separator {
+            width: 1px;
+            height: 24px;
+            background: var(--border-color);
+            margin: 0 8px;
+        }
+
+        /* Toolbar Action Group */
+        .workflow-toolbar-group {
+            display: flex;
+            gap: 4px;
+        }
+
+        .workflow-toolbar button.primary {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .workflow-toolbar button.primary:hover {
+            background: #1f6feb;
+            border-color: #1f6feb;
+        }
+
+        .workflow-toolbar button.danger {
+            color: var(--accent-red);
+        }
+
+        .workflow-toolbar button.danger:hover {
+            background: rgba(248, 81, 73, 0.15);
+            border-color: var(--accent-red);
+        }
+
+        .workflow-toolbar button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Hidden file input for import */
+        .workflow-import-input {
+            display: none;
+        }
+
+        /* Phase Editor Panel Styles */
+        .phase-editor-panel {
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 320px;
+            height: calc(100vh - 60px);
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.3s ease-out;
+            overflow: hidden;
+        }
+
+        .phase-editor-panel.open {
+            transform: translateX(0);
+        }
+
+        .phase-editor-header {
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .phase-editor-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .phase-editor-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+            padding: 4px;
+            transition: color 0.2s;
+        }
+
+        .phase-editor-close:hover {
+            color: var(--text-primary);
+        }
+
+        .phase-editor-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .phase-editor-field {
+            margin-bottom: 16px;
+        }
+
+        .phase-editor-field:last-child {
+            margin-bottom: 0;
+        }
+
+        .phase-editor-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .phase-editor-input,
+        .phase-editor-select,
+        .phase-editor-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .phase-editor-input:focus,
+        .phase-editor-select:focus,
+        .phase-editor-textarea:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        .phase-editor-select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        .phase-editor-textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .phase-editor-field.hidden {
+            display: none;
+        }
+
+        .phase-editor-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .phase-editor-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .phase-editor-btn-primary {
+            background: var(--accent-blue);
+            border: 1px solid var(--accent-blue);
+            color: white;
+        }
+
+        .phase-editor-btn-primary:hover {
+            background: #4c8fda;
+            border-color: #4c8fda;
+        }
+
+        .phase-editor-btn-secondary {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .phase-editor-btn-secondary:hover {
+            background: var(--bg-primary);
+            border-color: var(--text-muted);
+        }
+
+        .phase-editor-btn-danger {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .phase-editor-btn-danger:hover {
+            background: rgba(248, 81, 73, 0.2);
+        }
+
+        /* Phase type indicator badge */
+        .phase-type-indicator {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-left: 8px;
+        }
+
+        .phase-type-indicator.type-execute {
+            background: rgba(210, 153, 34, 0.2);
+            color: #d29922;
+        }
+
+        .phase-type-indicator.type-evaluate {
+            background: rgba(163, 113, 247, 0.2);
+            color: #a371f7;
+        }
+
+        .phase-type-indicator.type-script {
+            background: rgba(219, 109, 40, 0.2);
+            color: #db6d28;
+        }
+
+        .phase-type-indicator.type-terminal {
+            background: rgba(63, 185, 80, 0.2);
+            color: #3fb950;
+        }
+
+        /* Transition Editor Panel - reuses phase-editor styles */
+        .transition-editor-panel {
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 320px;
+            height: calc(100vh - 60px);
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.3s ease-out;
+            overflow: hidden;
+        }
+
+        .transition-editor-panel.open {
+            transform: translateX(0);
+        }
+
+        .transition-editor-header {
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .transition-editor-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .transition-editor-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+            padding: 4px;
+            transition: color 0.2s;
+        }
+
+        .transition-editor-close:hover {
+            color: var(--text-primary);
+        }
+
+        .transition-editor-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .transition-editor-field {
+            margin-bottom: 16px;
+        }
+
+        .transition-editor-field:last-child {
+            margin-bottom: 0;
+        }
+
+        .transition-editor-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .transition-editor-input,
+        .transition-editor-select,
+        .transition-editor-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .transition-editor-input:focus,
+        .transition-editor-select:focus,
+        .transition-editor-textarea:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        .transition-editor-select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        .transition-editor-textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        /* Toggle switch for auto-transition */
+        .transition-toggle-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .transition-toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .transition-toggle.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .transition-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .transition-toggle.active::after {
+            transform: translateX(20px);
+        }
+
+        .transition-editor-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .transition-editor-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .transition-editor-btn-danger {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .transition-editor-btn-danger:hover {
+            background: rgba(248, 81, 73, 0.2);
+        }
+
+        /* Transition source/target info */
+        .transition-route-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .transition-route-info .route-phase {
+            padding: 2px 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .transition-route-info .route-arrow {
+            color: var(--text-muted);
+        }
+
+        /* Guard Expression Builder Styles */
+        .guard-builder {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--bg-primary);
+        }
+
+        .guard-builder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .guard-builder-title {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .guard-builder-mode-toggle {
+            display: flex;
+            gap: 4px;
+        }
+
+        .guard-builder-mode-btn {
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-builder-mode-btn:first-child {
+            border-radius: 4px 0 0 4px;
+        }
+
+        .guard-builder-mode-btn:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+
+        .guard-builder-mode-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .guard-builder-mode-btn:hover:not(.active) {
+            background: var(--bg-tertiary);
+        }
+
+        .guard-builder-content {
+            padding: 12px;
+        }
+
+        /* Visual Mode Styles */
+        .guard-visual-mode {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .guard-condition-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        .guard-combinator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 0;
+        }
+
+        .guard-combinator-btn {
+            padding: 3px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-combinator-btn:first-child {
+            border-radius: 4px 0 0 4px;
+            border-right: none;
+        }
+
+        .guard-combinator-btn:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+
+        .guard-combinator-btn.active {
+            background: var(--accent-purple);
+            border-color: var(--accent-purple);
+            color: white;
+        }
+
+        .guard-combinator-btn:hover:not(.active) {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .guard-field-select,
+        .guard-operator-select,
+        .guard-value-input {
+            padding: 6px 8px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .guard-field-select {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .guard-field-select:focus,
+        .guard-operator-select:focus,
+        .guard-value-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .guard-operator-select {
+            width: 60px;
+        }
+
+        .guard-value-input {
+            width: 80px;
+        }
+
+        .guard-remove-btn {
+            padding: 4px 8px;
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .guard-remove-btn:hover {
+            background: rgba(248, 81, 73, 0.1);
+            color: var(--accent-red);
+        }
+
+        .guard-add-condition {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px;
+            margin-top: 4px;
+            border: 1px dashed var(--border-color);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-add-condition:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+            background: rgba(88, 166, 255, 0.05);
+        }
+
+        /* Raw Mode Styles */
+        .guard-raw-mode {
+            display: none;
+        }
+
+        .guard-raw-mode.active {
+            display: block;
+        }
+
+        .guard-visual-mode.hidden {
+            display: none;
+        }
+
+        .guard-raw-textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            border: none;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            resize: vertical;
+        }
+
+        .guard-raw-textarea:focus {
+            outline: none;
+            box-shadow: inset 0 0 0 1px var(--accent-blue);
+        }
+
+        /* Validation Error Styles */
+        .guard-validation {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .guard-validation.visible {
+            display: block;
+        }
+
+        .guard-validation.error {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.3);
+            color: var(--accent-red);
+        }
+
+        .guard-validation.valid {
+            background: rgba(63, 185, 80, 0.1);
+            border: 1px solid rgba(63, 185, 80, 0.3);
+            color: var(--accent-green);
+        }
+
+        /* Autocomplete/datalist styling for field dropdown */
+        .guard-field-select option {
+            padding: 4px 8px;
+        }
+
+        .guard-empty-state {
+            padding: 16px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* ========================================
+           Workflow Validation Panel Styles
+           ======================================== */
+        .workflow-validation-panel {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            width: 320px;
+            max-height: 300px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            z-index: 100;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .workflow-validation-panel.collapsed {
+            max-height: 40px;
+        }
+
+        .workflow-validation-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .workflow-validation-header:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .workflow-validation-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .workflow-validation-status {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            font-size: 11px;
+        }
+
+        .workflow-validation-status.valid {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--accent-green);
+        }
+
+        .workflow-validation-status.invalid {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-toggle {
+            color: var(--text-muted);
+            font-size: 10px;
+            transition: transform 0.2s;
+        }
+
+        .workflow-validation-panel.collapsed .workflow-validation-toggle {
+            transform: rotate(180deg);
+        }
+
+        .workflow-validation-content {
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+
+        .workflow-validation-panel.collapsed .workflow-validation-content {
+            display: none;
+        }
+
+        .workflow-validation-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 8px 12px;
+            gap: 10px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .workflow-validation-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .workflow-validation-icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .workflow-validation-item.passed .workflow-validation-icon {
+            color: var(--accent-green);
+        }
+
+        .workflow-validation-item.failed .workflow-validation-icon {
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-message {
+            flex: 1;
+            color: var(--text-secondary);
+        }
+
+        .workflow-validation-item.failed .workflow-validation-message {
+            color: var(--accent-red);
+        }
+
+        .workflow-validation-details {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .workflow-validation-item.failed .workflow-validation-details {
+            color: rgba(248, 81, 73, 0.7);
+        }
+
+        /* Invalid element highlighting in graph */
+        .workflow-node.invalid rect {
+            stroke: var(--accent-red) !important;
+            stroke-width: 3px;
+            stroke-dasharray: 5, 5;
+        }
+
+        .workflow-node.invalid text {
+            fill: var(--accent-red);
+        }
+
+        .workflow-edge.invalid path {
+            stroke: var(--accent-red) !important;
+            stroke-width: 2px;
+            stroke-dasharray: 4, 4;
+        }
+
+        .workflow-edge.invalid .workflow-edge-arrow {
+            fill: var(--accent-red) !important;
+        }
+
+        .workflow-edge.invalid .workflow-edge-label {
+            fill: var(--accent-red);
+        }
     </style>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
     <header class="header">
@@ -1200,6 +2489,7 @@
                         <button class="tab-btn active" id="tabLogs">Logs</button>
                         <button class="tab-btn" id="tabSdk">SDK</button>
                         <button class="tab-btn" id="tabPrompts">Prompts</button>
+                        <button class="tab-btn" id="tabWorkflow" title="Workflow Editor (disabled during runs)">Workflow</button>
                     </div>
                     <span class="log-count" id="logCount">0 lines</span>
                 </div>
@@ -1264,6 +2554,25 @@
                     <div class="sdk-timeline" id="sdkTimeline" style="display: none;"></div>
                 </div>
             </div>
+            <div class="workflow-panel" id="workflowBody" style="display: none;">
+                <div class="workflow-panel-container">
+                    <div class="workflow-panel-graph" id="workflowGraphContainer">
+                        <!-- Workflow graph and toolbar will be rendered here by initWorkflowEditor -->
+                        <div class="log-empty">
+                            <div class="log-empty-icon">🔗</div>
+                            <div>Workflow Editor</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Loading workflow editor...</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="workflow-panel-disabled" id="workflowDisabledOverlay" style="display: none;">
+                    <div class="workflow-panel-disabled-icon">🔒</div>
+                    <div class="workflow-panel-disabled-text">
+                        Workflow editing is disabled while a run is in progress.<br>
+                        Stop the run or wait for it to complete.
+                    </div>
+                </div>
+            </div>
         </section>
     </main>
     
@@ -1293,6 +2602,2817 @@
         let sdkOutput = null;
         let sdkShowTimeline = false;
         let sdkAutoScroll = true;
+
+        /**
+         * WorkflowGraph - D3.js force-directed graph for workflow visualization
+         *
+         * Renders phases as nodes colored by type and transitions as directed edges.
+         * Supports zoom/pan, node selection, and callbacks for interaction.
+         */
+        class WorkflowGraph {
+            constructor(container, options = {}) {
+                this.container = typeof container === 'string'
+                    ? document.querySelector(container)
+                    : container;
+
+                if (!this.container) {
+                    throw new Error('WorkflowGraph: container not found');
+                }
+
+                // Options with defaults
+                this.options = {
+                    nodeWidth: 140,
+                    nodeHeight: 40,
+                    edgeHandleWidth: 20,  // Width of edge handle area
+                    onNodeSelect: options.onNodeSelect || null,
+                    onEdgeSelect: options.onEdgeSelect || null,
+                    onEdgeCreated: options.onEdgeCreated || null,  // Called when new edge is created via drag
+                    onModified: options.onModified || null,
+                    ...options
+                };
+
+                // State
+                this.workflow = null;
+                this.nodes = [];
+                this.links = [];
+                this.selectedNode = null;
+                this.selectedEdge = null;
+                this.simulation = null;
+                this.isModified = false;
+
+                // Transition drawing state
+                this.isDrawingTransition = false;
+                this.drawingSourceNode = null;
+                this.drawingLine = null;
+                this.dropTargetNode = null;
+
+                // Current/completed phase state for highlighting
+                this.currentPhaseId = null;
+                this.completedPhaseIds = [];
+
+                // Phase type colors
+                this.typeColors = {
+                    execute: '#d29922',
+                    evaluate: '#a371f7',
+                    script: '#db6d28',
+                    terminal: '#3fb950'
+                };
+
+                // Initialize SVG and groups
+                this._initSvg();
+            }
+
+            /**
+             * Initialize SVG container and groups
+             */
+            _initSvg() {
+                // Clear any existing content
+                this.container.innerHTML = '';
+                this.container.classList.add('workflow-graph-container');
+
+                // Create SVG
+                this.svg = d3.select(this.container)
+                    .append('svg')
+                    .attr('width', '100%')
+                    .attr('height', '100%');
+
+                // Get actual dimensions
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                // Define arrow marker for edges
+                const defs = this.svg.append('defs');
+                defs.append('marker')
+                    .attr('id', 'workflow-arrow')
+                    .attr('viewBox', '0 -5 10 10')
+                    .attr('refX', 8)
+                    .attr('refY', 0)
+                    .attr('markerWidth', 6)
+                    .attr('markerHeight', 6)
+                    .attr('orient', 'auto')
+                    .append('path')
+                    .attr('d', 'M0,-5L10,0L0,5')
+                    .attr('class', 'workflow-edge-arrow');
+
+                // Create zoom container group
+                this.zoomGroup = this.svg.append('g')
+                    .attr('class', 'zoom-container');
+
+                // Create groups for edges and nodes (edges below nodes, drawing line on top)
+                this.edgeGroup = this.zoomGroup.append('g')
+                    .attr('class', 'edges');
+                this.nodeGroup = this.zoomGroup.append('g')
+                    .attr('class', 'nodes');
+                this.drawingGroup = this.zoomGroup.append('g')
+                    .attr('class', 'drawing');
+
+                // Setup zoom behavior
+                this.zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', (event) => {
+                        this.zoomGroup.attr('transform', event.transform);
+                    });
+
+                this.svg.call(this.zoom);
+            }
+
+            /**
+             * Render a workflow
+             * @param {Object} workflow - Workflow data with phases
+             */
+            render(workflow) {
+                if (!workflow || !workflow.phases) {
+                    console.warn('WorkflowGraph.render: No workflow or phases provided');
+                    return;
+                }
+
+                this.workflow = workflow;
+                this._buildGraphData();
+                this._createSimulation();
+                this._renderElements();
+                // Re-apply current/completed phase highlighting after re-rendering
+                this._updatePhaseHighlighting();
+            }
+
+            /**
+             * Build nodes and links from workflow data
+             */
+            _buildGraphData() {
+                const phases = this.workflow.phases;
+                this.nodes = [];
+                this.links = [];
+
+                // Handle both object and array format for phases
+                const phaseEntries = Array.isArray(phases)
+                    ? phases.map(p => [p.name || p.id, p])
+                    : Object.entries(phases);
+
+                // Create nodes from phases
+                phaseEntries.forEach(([name, phase]) => {
+                    this.nodes.push({
+                        id: name,
+                        name: phase.name || name,
+                        type: phase.type || 'execute',
+                        description: phase.description || '',
+                        prompt: phase.prompt,
+                        command: phase.command,
+                        phase: phase  // Keep reference to original phase data
+                    });
+                });
+
+                // Create links from transitions
+                phaseEntries.forEach(([sourceName, phase]) => {
+                    const transitions = phase.transitions || [];
+                    transitions.forEach((transition, index) => {
+                        const targetName = transition.to || transition.target;
+                        if (targetName && this.nodes.find(n => n.id === targetName)) {
+                            this.links.push({
+                                id: `${sourceName}-${targetName}-${index}`,
+                                source: sourceName,
+                                target: targetName,
+                                guard: transition.when || transition.guard || '',
+                                auto: transition.auto || false,
+                                priority: transition.priority || 0,
+                                transition: transition  // Keep reference to original transition
+                            });
+                        }
+                    });
+                });
+            }
+
+            /**
+             * Create D3 force simulation
+             */
+            _createSimulation() {
+                // Stop any existing simulation
+                if (this.simulation) {
+                    this.simulation.stop();
+                }
+
+                // Get container dimensions
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                // Create force simulation
+                this.simulation = d3.forceSimulation(this.nodes)
+                    .force('link', d3.forceLink(this.links)
+                        .id(d => d.id)
+                        .distance(180)
+                        .strength(0.5))
+                    .force('charge', d3.forceManyBody()
+                        .strength(-400))
+                    .force('center', d3.forceCenter(this.width / 2, this.height / 2))
+                    .force('collision', d3.forceCollide()
+                        .radius(this.options.nodeWidth / 2 + 20))
+                    .on('tick', () => this._tick());
+
+                // Run simulation for initial positions
+                this.simulation.alpha(1).restart();
+            }
+
+            /**
+             * Render SVG elements for nodes and edges
+             */
+            _renderElements() {
+                this._renderEdges();
+                this._renderNodes();
+            }
+
+            /**
+             * Render edge elements
+             */
+            _renderEdges() {
+                // Remove existing edges
+                this.edgeGroup.selectAll('.workflow-edge').remove();
+
+                // Create edge groups
+                const edgeSelection = this.edgeGroup.selectAll('.workflow-edge')
+                    .data(this.links, d => d.id)
+                    .enter()
+                    .append('g')
+                    .attr('class', 'workflow-edge')
+                    .on('click', (event, d) => {
+                        event.stopPropagation();
+                        this._selectEdge(d);
+                    });
+
+                // Add path for each edge
+                edgeSelection.append('path')
+                    .attr('marker-end', 'url(#workflow-arrow)');
+
+                // Add label for guard expression
+                edgeSelection.append('text')
+                    .attr('class', 'workflow-edge-label')
+                    .text(d => this._formatGuardLabel(d.guard));
+
+                this.edgeElements = this.edgeGroup.selectAll('.workflow-edge');
+            }
+
+            /**
+             * Format guard expression for display as edge label
+             */
+            _formatGuardLabel(guard) {
+                if (!guard) return '';
+                // Truncate long guards
+                if (guard.length > 30) {
+                    return guard.substring(0, 27) + '...';
+                }
+                return guard;
+            }
+
+            /**
+             * Render node elements
+             */
+            _renderNodes() {
+                // Remove existing nodes
+                this.nodeGroup.selectAll('.workflow-node').remove();
+
+                const self = this;
+                const { nodeWidth, nodeHeight, edgeHandleWidth } = this.options;
+
+                // Create node groups
+                const nodeSelection = this.nodeGroup.selectAll('.workflow-node')
+                    .data(this.nodes, d => d.id)
+                    .enter()
+                    .append('g')
+                    .attr('class', d => `workflow-node type-${d.type}`)
+                    .on('click', (event, d) => {
+                        event.stopPropagation();
+                        this._selectNode(d);
+                    });
+
+                // Add rectangle for each node (main body - draggable)
+                nodeSelection.append('rect')
+                    .attr('class', 'node-body')
+                    .attr('width', nodeWidth)
+                    .attr('height', nodeHeight)
+                    .attr('x', -nodeWidth / 2)
+                    .attr('y', -nodeHeight / 2)
+                    .call(d3.drag()
+                        .on('start', (event, d) => this._dragStarted(event, d))
+                        .on('drag', (event, d) => this._dragged(event, d))
+                        .on('end', (event, d) => this._dragEnded(event, d)));
+
+                // Add edge handle on the right side (for starting transition drawing)
+                nodeSelection.append('rect')
+                    .attr('class', 'workflow-node-edge-handle')
+                    .attr('width', edgeHandleWidth)
+                    .attr('height', nodeHeight)
+                    .attr('x', nodeWidth / 2 - edgeHandleWidth)
+                    .attr('y', -nodeHeight / 2)
+                    .attr('rx', 4)
+                    .call(d3.drag()
+                        .on('start', (event, d) => this._transitionDragStart(event, d))
+                        .on('drag', (event, d) => this._transitionDrag(event, d))
+                        .on('end', (event, d) => this._transitionDragEnd(event, d)));
+
+                // Add text label
+                nodeSelection.append('text')
+                    .text(d => d.name)
+                    .attr('dy', '0.35em');
+
+                this.nodeElements = this.nodeGroup.selectAll('.workflow-node');
+
+                // Click on background to deselect
+                this.svg.on('click', () => {
+                    this._clearSelection();
+                });
+
+                // Double-click on background to add new node
+                this.svg.on('dblclick', (event) => {
+                    // Get click position in graph coordinates
+                    const transform = d3.zoomTransform(this.svg.node());
+                    const [x, y] = d3.pointer(event, this.zoomGroup.node());
+
+                    // Create new node at click position
+                    this.addNode({}, x, y);
+                });
+            }
+
+            /**
+             * Update positions on simulation tick
+             */
+            _tick() {
+                // Update edge paths
+                if (this.edgeElements) {
+                    this.edgeElements.select('path')
+                        .attr('d', d => this._calculateEdgePath(d));
+
+                    // Update edge label positions
+                    this.edgeElements.select('text')
+                        .attr('x', d => (d.source.x + d.target.x) / 2)
+                        .attr('y', d => (d.source.y + d.target.y) / 2 - 10);
+                }
+
+                // Update node positions
+                if (this.nodeElements) {
+                    this.nodeElements.attr('transform', d => `translate(${d.x}, ${d.y})`);
+                }
+            }
+
+            /**
+             * Calculate edge path accounting for node dimensions
+             */
+            _calculateEdgePath(d) {
+                const { nodeWidth, nodeHeight } = this.options;
+
+                // Source and target positions
+                const sx = d.source.x;
+                const sy = d.source.y;
+                const tx = d.target.x;
+                const ty = d.target.y;
+
+                // Calculate angle
+                const angle = Math.atan2(ty - sy, tx - sx);
+
+                // Calculate edge points at node boundaries
+                const sourceX = sx + Math.cos(angle) * (nodeWidth / 2);
+                const sourceY = sy + Math.sin(angle) * (nodeHeight / 2);
+                const targetX = tx - Math.cos(angle) * (nodeWidth / 2 + 10);  // Extra offset for arrow
+                const targetY = ty - Math.sin(angle) * (nodeHeight / 2 + 10);
+
+                return `M${sourceX},${sourceY}L${targetX},${targetY}`;
+            }
+
+            /**
+             * Drag event handlers
+             */
+            _dragStarted(event, d) {
+                if (!event.active) this.simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+
+            _dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+
+            _dragEnded(event, d) {
+                if (!event.active) this.simulation.alphaTarget(0);
+                // Keep the node fixed at its dragged position
+                // d.fx = null;
+                // d.fy = null;
+            }
+
+            /**
+             * Transition drawing drag handlers
+             * These handle dragging from a node's edge handle to create a new transition
+             */
+            _transitionDragStart(event, d) {
+                event.sourceEvent.stopPropagation();
+
+                this.isDrawingTransition = true;
+                this.drawingSourceNode = d;
+
+                // Create the temporary drawing line
+                this.drawingLine = this.drawingGroup.append('line')
+                    .attr('class', 'workflow-drawing-line')
+                    .attr('x1', d.x)
+                    .attr('y1', d.y)
+                    .attr('x2', d.x)
+                    .attr('y2', d.y);
+            }
+
+            _transitionDrag(event, d) {
+                if (!this.isDrawingTransition || !this.drawingLine) return;
+
+                // Get mouse position in graph coordinates
+                const [mouseX, mouseY] = d3.pointer(event, this.zoomGroup.node());
+
+                // Update the line endpoint to follow the mouse
+                this.drawingLine
+                    .attr('x2', mouseX)
+                    .attr('y2', mouseY);
+
+                // Check for drop targets (nodes under the mouse)
+                const { nodeWidth, nodeHeight } = this.options;
+                const previousTarget = this.dropTargetNode;
+                this.dropTargetNode = null;
+
+                this.nodes.forEach(node => {
+                    // Don't allow connecting to self
+                    if (node.id === this.drawingSourceNode.id) return;
+
+                    // Check if mouse is within node bounds
+                    const inX = mouseX >= node.x - nodeWidth / 2 && mouseX <= node.x + nodeWidth / 2;
+                    const inY = mouseY >= node.y - nodeHeight / 2 && mouseY <= node.y + nodeHeight / 2;
+
+                    if (inX && inY) {
+                        this.dropTargetNode = node;
+                    }
+                });
+
+                // Update drop target visual state
+                if (this.nodeElements) {
+                    this.nodeElements.classed('drop-target', n =>
+                        this.dropTargetNode && n.id === this.dropTargetNode.id
+                    );
+                }
+            }
+
+            _transitionDragEnd(event, d) {
+                if (!this.isDrawingTransition) return;
+
+                // Remove the temporary drawing line
+                if (this.drawingLine) {
+                    this.drawingLine.remove();
+                    this.drawingLine = null;
+                }
+
+                // Clear drop target styling
+                if (this.nodeElements) {
+                    this.nodeElements.classed('drop-target', false);
+                }
+
+                // If we have a valid drop target, create the edge
+                if (this.dropTargetNode && this.drawingSourceNode) {
+                    const newEdge = this.addEdge(
+                        this.drawingSourceNode.id,
+                        this.dropTargetNode.id
+                    );
+
+                    // Select the new edge and trigger callback
+                    if (newEdge) {
+                        this._selectEdge(newEdge);
+
+                        // Trigger onEdgeCreated callback so the editor can open
+                        if (this.options.onEdgeCreated) {
+                            this.options.onEdgeCreated(newEdge);
+                        }
+                    }
+                }
+
+                // Reset drawing state
+                this.isDrawingTransition = false;
+                this.drawingSourceNode = null;
+                this.dropTargetNode = null;
+            }
+
+            /**
+             * Selection handlers
+             */
+            _selectNode(node) {
+                this._clearSelection();
+                this.selectedNode = node;
+
+                // Update visual state
+                this.nodeElements
+                    .classed('selected', d => d.id === node.id);
+
+                // Trigger callback
+                if (this.options.onNodeSelect) {
+                    this.options.onNodeSelect(node);
+                }
+            }
+
+            _selectEdge(edge) {
+                this._clearSelection();
+                this.selectedEdge = edge;
+
+                // Update visual state
+                this.edgeElements
+                    .classed('selected', d => d.id === edge.id);
+
+                // Trigger callback
+                if (this.options.onEdgeSelect) {
+                    this.options.onEdgeSelect(edge);
+                }
+            }
+
+            _clearSelection() {
+                this.selectedNode = null;
+                this.selectedEdge = null;
+
+                if (this.nodeElements) {
+                    this.nodeElements.classed('selected', false);
+                }
+                if (this.edgeElements) {
+                    this.edgeElements.classed('selected', false);
+                }
+            }
+
+            /**
+             * Public API methods
+             */
+
+            /**
+             * Set selection programmatically
+             */
+            setSelection(type, id) {
+                this._clearSelection();
+
+                if (type === 'node') {
+                    const node = this.nodes.find(n => n.id === id);
+                    if (node) this._selectNode(node);
+                } else if (type === 'edge') {
+                    const edge = this.links.find(l => l.id === id);
+                    if (edge) this._selectEdge(edge);
+                }
+            }
+
+            /**
+             * Update a single node's data and re-render
+             */
+            updateNode(nodeId, data) {
+                const node = this.nodes.find(n => n.id === nodeId);
+                if (node) {
+                    Object.assign(node, data);
+                    this._renderNodes();
+                    this._markModified();
+                }
+            }
+
+            /**
+             * Update a single edge's data and re-render
+             * @param {string} edgeId - The edge ID to update
+             * @param {Object} data - New edge data (target, auto, priority, guard)
+             */
+            updateEdge(edgeId, data) {
+                const edge = this.links.find(l => l.id === edgeId);
+                if (edge) {
+                    // Handle target change - need to update the link's target reference
+                    if (data.target && data.target !== (typeof edge.target === 'object' ? edge.target.id : edge.target)) {
+                        const newTarget = this.nodes.find(n => n.id === data.target);
+                        if (newTarget) {
+                            edge.target = newTarget;
+                            // Update edge id to reflect new target
+                            const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                            // Keep track of index for id
+                            const parts = edge.id.split('-');
+                            const idx = parts.length > 2 ? parts[parts.length - 1] : '0';
+                            edge.id = `${sourceName}-${data.target}-${idx}`;
+                        }
+                    }
+
+                    // Update other properties
+                    if (data.auto !== undefined) edge.auto = data.auto;
+                    if (data.priority !== undefined) edge.priority = data.priority;
+                    if (data.guard !== undefined) edge.guard = data.guard;
+
+                    // Re-render edges to update labels and styles
+                    this._renderEdges();
+                    // Restart simulation slightly to update paths
+                    if (this.simulation) {
+                        this.simulation.alpha(0.1).restart();
+                    }
+                    this._markModified();
+                }
+            }
+
+            /**
+             * Delete an edge from the graph
+             * @param {string} edgeId - The edge ID to delete
+             */
+            deleteEdge(edgeId) {
+                const edgeIndex = this.links.findIndex(l => l.id === edgeId);
+                if (edgeIndex !== -1) {
+                    // Remove the edge
+                    this.links.splice(edgeIndex, 1);
+
+                    // Update the simulation with new links
+                    if (this.simulation) {
+                        this.simulation.force('link').links(this.links);
+                        this.simulation.alpha(0.3).restart();
+                    }
+
+                    // Re-render edges
+                    this._renderEdges();
+                    this._markModified();
+                }
+            }
+
+            /**
+             * Add a new edge (transition) between two nodes
+             * @param {string} sourceId - ID of the source node
+             * @param {string} targetId - ID of the target node
+             * @param {Object} edgeData - Optional additional edge data (guard, auto, priority)
+             * @returns {Object} The created edge, or null if invalid
+             */
+            addEdge(sourceId, targetId, edgeData = {}) {
+                // Validate source and target exist
+                const sourceNode = this.nodes.find(n => n.id === sourceId);
+                const targetNode = this.nodes.find(n => n.id === targetId);
+
+                if (!sourceNode || !targetNode) {
+                    console.warn('WorkflowGraph.addEdge: Source or target node not found');
+                    return null;
+                }
+
+                // Don't allow self-loops
+                if (sourceId === targetId) {
+                    console.warn('WorkflowGraph.addEdge: Cannot create self-loop');
+                    return null;
+                }
+
+                // Generate unique edge ID
+                // Check for existing edges between these nodes to determine index
+                const existingEdges = this.links.filter(l => {
+                    const src = typeof l.source === 'object' ? l.source.id : l.source;
+                    const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+                    return src === sourceId && tgt === targetId;
+                });
+                const edgeIndex = existingEdges.length;
+                const edgeId = `${sourceId}-${targetId}-${edgeIndex}`;
+
+                // Create the new edge
+                const newEdge = {
+                    id: edgeId,
+                    source: sourceNode,
+                    target: targetNode,
+                    guard: edgeData.guard || '',
+                    auto: edgeData.auto || false,
+                    priority: edgeData.priority || 0,
+                    transition: edgeData.transition || {}
+                };
+
+                this.links.push(newEdge);
+
+                // Update the simulation with new links
+                if (this.simulation) {
+                    this.simulation.force('link').links(this.links);
+                    this.simulation.alpha(0.3).restart();
+                }
+
+                // Re-render edges
+                this._renderEdges();
+                this._markModified();
+
+                return newEdge;
+            }
+
+            /**
+             * Get list of all phase names in the graph
+             * @returns {string[]} Array of phase/node names
+             */
+            getPhaseNames() {
+                return this.nodes.map(n => n.id);
+            }
+
+            /**
+             * Get current selection
+             */
+            getSelection() {
+                if (this.selectedNode) {
+                    return { type: 'node', data: this.selectedNode };
+                }
+                if (this.selectedEdge) {
+                    return { type: 'edge', data: this.selectedEdge };
+                }
+                return null;
+            }
+
+            /**
+             * Resize handler - call when container size changes
+             */
+            resize() {
+                const rect = this.container.getBoundingClientRect();
+                this.width = rect.width || 800;
+                this.height = rect.height || 600;
+
+                if (this.simulation) {
+                    this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
+                    this.simulation.alpha(0.3).restart();
+                }
+            }
+
+            /**
+             * Zoom in by a fixed step
+             * @param {number} step - Zoom increment (default 0.3)
+             */
+            zoomIn(step = 0.3) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleBy, 1 + step);
+            }
+
+            /**
+             * Zoom out by a fixed step
+             * @param {number} step - Zoom decrement (default 0.3)
+             */
+            zoomOut(step = 0.3) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleBy, 1 - step);
+            }
+
+            /**
+             * Fit the graph to the viewport, centering and scaling appropriately
+             */
+            fitToView() {
+                if (!this.nodes || this.nodes.length === 0) {
+                    return;
+                }
+
+                // Calculate bounding box of all nodes
+                const padding = 50;
+                const { nodeWidth, nodeHeight } = this.options;
+
+                let minX = Infinity, minY = Infinity;
+                let maxX = -Infinity, maxY = -Infinity;
+
+                this.nodes.forEach(node => {
+                    const x = node.x || 0;
+                    const y = node.y || 0;
+                    minX = Math.min(minX, x - nodeWidth / 2);
+                    maxX = Math.max(maxX, x + nodeWidth / 2);
+                    minY = Math.min(minY, y - nodeHeight / 2);
+                    maxY = Math.max(maxY, y + nodeHeight / 2);
+                });
+
+                const graphWidth = maxX - minX + padding * 2;
+                const graphHeight = maxY - minY + padding * 2;
+
+                // Get viewport dimensions
+                const rect = this.container.getBoundingClientRect();
+                const viewportWidth = rect.width || 800;
+                const viewportHeight = rect.height || 600;
+
+                // Calculate scale to fit
+                const scaleX = viewportWidth / graphWidth;
+                const scaleY = viewportHeight / graphHeight;
+                const scale = Math.min(scaleX, scaleY, 2); // Cap at 2x zoom
+
+                // Calculate center offset
+                const graphCenterX = (minX + maxX) / 2;
+                const graphCenterY = (minY + maxY) / 2;
+
+                const translateX = viewportWidth / 2 - graphCenterX * scale;
+                const translateY = viewportHeight / 2 - graphCenterY * scale;
+
+                // Apply transform with animation
+                const transform = d3.zoomIdentity
+                    .translate(translateX, translateY)
+                    .scale(scale);
+
+                this.svg.transition()
+                    .duration(500)
+                    .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Reset zoom to default (1:1 scale, centered)
+             */
+            resetZoom() {
+                const rect = this.container.getBoundingClientRect();
+                const transform = d3.zoomIdentity
+                    .translate(0, 0)
+                    .scale(1);
+
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Get the current zoom level
+             * @returns {number} Current zoom scale
+             */
+            getZoomLevel() {
+                const transform = d3.zoomTransform(this.svg.node());
+                return transform.k;
+            }
+
+            /**
+             * Set zoom level to a specific value
+             * @param {number} level - Target zoom level
+             */
+            setZoomLevel(level) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleTo, level);
+            }
+
+            /**
+             * Center on a specific node
+             * @param {string} nodeId - ID of the node to center on
+             */
+            centerOnNode(nodeId) {
+                const node = this.nodes.find(n => n.id === nodeId);
+                if (!node) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const viewportWidth = rect.width || 800;
+                const viewportHeight = rect.height || 600;
+
+                // Get current zoom level to preserve it
+                const currentTransform = d3.zoomTransform(this.svg.node());
+                const scale = currentTransform.k;
+
+                const translateX = viewportWidth / 2 - node.x * scale;
+                const translateY = viewportHeight / 2 - node.y * scale;
+
+                const transform = d3.zoomIdentity
+                    .translate(translateX, translateY)
+                    .scale(scale);
+
+                this.svg.transition()
+                    .duration(500)
+                    .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Set the current phase for highlighting
+             * @param {string} phaseId - ID of the current phase
+             */
+            setCurrentPhase(phaseId) {
+                this.currentPhaseId = phaseId;
+                this._updatePhaseHighlighting();
+            }
+
+            /**
+             * Get the current phase ID
+             * @returns {string|null} The current phase ID
+             */
+            getCurrentPhase() {
+                return this.currentPhaseId || null;
+            }
+
+            /**
+             * Set the list of completed phases
+             * @param {Array<string>} phaseIds - Array of completed phase IDs
+             */
+            setCompletedPhases(phaseIds) {
+                this.completedPhaseIds = phaseIds || [];
+                this._updatePhaseHighlighting();
+            }
+
+            /**
+             * Get the list of completed phase IDs
+             * @returns {Array<string>} Array of completed phase IDs
+             */
+            getCompletedPhases() {
+                return this.completedPhaseIds || [];
+            }
+
+            /**
+             * Update the visual highlighting for current and completed phases
+             */
+            _updatePhaseHighlighting() {
+                if (!this.nodeElements) return;
+
+                const currentId = this.currentPhaseId;
+                const completedIds = this.completedPhaseIds || [];
+
+                // Update current phase class
+                this.nodeElements.classed('current', d => d.id === currentId);
+
+                // Update completed phases class
+                this.nodeElements.classed('completed', d => completedIds.includes(d.id));
+
+                // Add/remove checkmark indicators for completed phases
+                this.nodeElements.each(function(d) {
+                    const group = d3.select(this);
+                    const isCompleted = completedIds.includes(d.id);
+
+                    // Remove existing indicator
+                    group.select('.completed-indicator').remove();
+
+                    // Add checkmark for completed phases
+                    if (isCompleted) {
+                        group.append('text')
+                            .attr('class', 'completed-indicator')
+                            .attr('x', 60)  // Position to the right of node center
+                            .attr('y', -12) // Position above node
+                            .text('✓');
+                    }
+                });
+            }
+
+            /**
+             * Center on the current phase if one is set
+             */
+            centerOnCurrentPhase() {
+                if (this.currentPhaseId) {
+                    this.centerOnNode(this.currentPhaseId);
+                }
+            }
+
+            /**
+             * Add a new node to the graph
+             * @param {Object} nodeData - Optional node data (id, name, type, etc.)
+             * @param {number} x - Optional x position
+             * @param {number} y - Optional y position
+             * @returns {Object} The created node
+             */
+            addNode(nodeData = {}, x = null, y = null) {
+                // Generate unique ID if not provided
+                const existingIds = this.nodes.map(n => n.id);
+                let newId = nodeData.id || 'new_phase';
+                let counter = 1;
+                while (existingIds.includes(newId)) {
+                    newId = (nodeData.id || 'new_phase') + '_' + counter;
+                    counter++;
+                }
+
+                // Create new node with defaults
+                const newNode = {
+                    id: newId,
+                    name: nodeData.name || newId,
+                    type: nodeData.type || 'execute',
+                    description: nodeData.description || '',
+                    prompt: nodeData.prompt || '',
+                    command: nodeData.command || '',
+                    phase: nodeData.phase || {},
+                    // Position at specified location or center of viewport
+                    x: x !== null ? x : this.width / 2,
+                    y: y !== null ? y : this.height / 2
+                };
+
+                this.nodes.push(newNode);
+
+                // Re-create simulation with new nodes
+                this._createSimulation();
+                this._renderElements();
+
+                // Mark as modified
+                this._markModified();
+
+                // Select the new node
+                this._selectNode(newNode);
+
+                return newNode;
+            }
+
+            /**
+             * Delete a node and all its connected edges
+             * @param {string} nodeId - ID of the node to delete
+             * @returns {boolean} True if node was deleted
+             */
+            deleteNode(nodeId) {
+                const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
+                if (nodeIndex === -1) {
+                    console.warn('WorkflowGraph.deleteNode: Node not found:', nodeId);
+                    return false;
+                }
+
+                // Remove the node
+                this.nodes.splice(nodeIndex, 1);
+
+                // Remove all connected edges (source or target matches)
+                this.links = this.links.filter(l => {
+                    const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+                    const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+                    return sourceId !== nodeId && targetId !== nodeId;
+                });
+
+                // Clear selection if deleted node was selected
+                if (this.selectedNode && this.selectedNode.id === nodeId) {
+                    this._clearSelection();
+                }
+
+                // Re-create simulation with updated nodes/links
+                this._createSimulation();
+                this._renderElements();
+
+                // Mark as modified
+                this._markModified();
+
+                return true;
+            }
+
+            /**
+             * Duplicate a node with an incremented name
+             * @param {string} nodeId - ID of the node to duplicate
+             * @returns {Object} The duplicated node, or null if not found
+             */
+            duplicateNode(nodeId) {
+                const sourceNode = this.nodes.find(n => n.id === nodeId);
+                if (!sourceNode) {
+                    console.warn('WorkflowGraph.duplicateNode: Node not found:', nodeId);
+                    return null;
+                }
+
+                // Generate new name with increment
+                const baseName = sourceNode.name.replace(/_copy(?:_\d+)?$/, '');
+                const existingNames = this.nodes.map(n => n.name);
+                let newName = baseName + '_copy';
+                let counter = 2;
+                while (existingNames.includes(newName)) {
+                    newName = baseName + '_copy_' + counter;
+                    counter++;
+                }
+
+                // Create duplicate with offset position
+                const duplicatedNode = this.addNode({
+                    id: newName,
+                    name: newName,
+                    type: sourceNode.type,
+                    description: sourceNode.description,
+                    prompt: sourceNode.prompt,
+                    command: sourceNode.command,
+                    phase: { ...sourceNode.phase }
+                }, sourceNode.x + 50, sourceNode.y + 50);
+
+                return duplicatedNode;
+            }
+
+            /**
+             * Mark the graph as modified (unsaved changes)
+             */
+            _markModified() {
+                this.isModified = true;
+                if (this.options.onModified) {
+                    this.options.onModified(true);
+                }
+            }
+
+            /**
+             * Clear the modified state
+             */
+            clearModified() {
+                this.isModified = false;
+                if (this.options.onModified) {
+                    this.options.onModified(false);
+                }
+            }
+
+            /**
+             * Check if the graph has unsaved changes
+             * @returns {boolean}
+             */
+            hasUnsavedChanges() {
+                return this.isModified === true;
+            }
+
+            /**
+             * Get the current workflow data in a format suitable for saving
+             * @returns {Object} Workflow data with phases and transitions
+             */
+            getWorkflowData() {
+                const phases = {};
+
+                this.nodes.forEach(node => {
+                    const phaseData = {
+                        type: node.type || 'execute'
+                    };
+
+                    if (node.description) {
+                        phaseData.description = node.description;
+                    }
+                    if (node.prompt) {
+                        phaseData.prompt = node.prompt;
+                    }
+                    if (node.command) {
+                        phaseData.command = node.command;
+                    }
+                    if (node.allowed_writes) {
+                        phaseData.allowed_writes = node.allowed_writes;
+                    }
+
+                    // Find transitions from this node
+                    const nodeTransitions = this.links
+                        .filter(link => {
+                            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                            return sourceId === node.id;
+                        })
+                        .map(link => {
+                            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                            const transition = { to: targetId };
+                            if (link.guard) {
+                                transition.when = link.guard;
+                            }
+                            if (link.auto) {
+                                transition.auto = link.auto;
+                            }
+                            if (link.priority && link.priority !== 0) {
+                                transition.priority = link.priority;
+                            }
+                            return transition;
+                        });
+
+                    if (nodeTransitions.length > 0) {
+                        phaseData.transitions = nodeTransitions;
+                    }
+
+                    phases[node.id] = phaseData;
+                });
+
+                return {
+                    workflow: this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 },
+                    phases: phases
+                };
+            }
+
+            /**
+             * Set the workflow name (used for save operations)
+             * @param {string} name - The workflow name
+             */
+            setWorkflowName(name) {
+                this.workflowName = name;
+            }
+
+            /**
+             * Get the current workflow name
+             * @returns {string} The workflow name
+             */
+            getWorkflowName() {
+                return this.workflowName || this.workflow?.workflow?.name || 'default';
+            }
+
+            /**
+             * Destroy the graph and clean up
+             */
+            destroy() {
+                if (this.simulation) {
+                    this.simulation.stop();
+                }
+                if (this.container) {
+                    this.container.innerHTML = '';
+                    this.container.classList.remove('workflow-graph-container');
+                }
+            }
+        }
+
+        /**
+         * WorkflowValidator - Real-time validation for workflow graphs
+         *
+         * Performs validation checks on the workflow and displays results in a panel.
+         * Highlights invalid elements in the graph with visual indicators.
+         */
+        class WorkflowValidator {
+            constructor(options = {}) {
+                this.options = {
+                    onValidationComplete: options.onValidationComplete || null,  // Callback with results
+                    ...options
+                };
+
+                this.workflowGraph = null;
+                this.validationResults = [];
+                this.invalidNodes = new Set();
+                this.invalidEdges = new Set();
+                this.isCollapsed = false;
+
+                this._createPanel();
+            }
+
+            /**
+             * Create the validation panel DOM
+             */
+            _createPanel() {
+                this.panel = document.createElement('div');
+                this.panel.className = 'workflow-validation-panel';
+                this.panel.innerHTML = `
+                    <div class="workflow-validation-header">
+                        <div class="workflow-validation-title">
+                            <span class="workflow-validation-status valid">✓</span>
+                            Validation
+                        </div>
+                        <span class="workflow-validation-toggle">▼</span>
+                    </div>
+                    <div class="workflow-validation-content">
+                        <div class="workflow-validation-item passed">
+                            <span class="workflow-validation-icon">⏳</span>
+                            <span class="workflow-validation-message">Awaiting workflow data...</span>
+                        </div>
+                    </div>
+                `;
+
+                // Bind header toggle
+                const header = this.panel.querySelector('.workflow-validation-header');
+                header.addEventListener('click', () => this._toggleCollapsed());
+
+                document.body.appendChild(this.panel);
+            }
+
+            /**
+             * Toggle panel collapsed state
+             */
+            _toggleCollapsed() {
+                this.isCollapsed = !this.isCollapsed;
+                this.panel.classList.toggle('collapsed', this.isCollapsed);
+            }
+
+            /**
+             * Attach to a WorkflowGraph instance
+             * @param {WorkflowGraph} graph - The graph to validate
+             */
+            attachToGraph(graph) {
+                this.workflowGraph = graph;
+            }
+
+            /**
+             * Validate the current workflow
+             * @returns {Object} Validation results with passed/failed arrays
+             */
+            validate() {
+                if (!this.workflowGraph) {
+                    return { passed: [], failed: [], allPassed: false };
+                }
+
+                const nodes = this.workflowGraph.nodes || [];
+                const links = this.workflowGraph.links || [];
+                const workflow = this.workflowGraph.workflow || {};
+
+                // Clear previous invalid markers
+                this.invalidNodes.clear();
+                this.invalidEdges.clear();
+
+                const results = [];
+
+                // Check 1: Start phase exists
+                results.push(this._checkStartPhaseExists(nodes, workflow));
+
+                // Check 2: All phases reachable from start
+                results.push(this._checkPhasesReachable(nodes, links, workflow));
+
+                // Check 3: At least one terminal phase exists
+                results.push(this._checkTerminalPhaseExists(nodes));
+
+                // Check 4: All transition targets are valid phase names
+                results.push(this._checkTransitionTargets(nodes, links));
+
+                // Check 5: Execute/evaluate phases have prompts
+                results.push(this._checkPhasesHavePrompts(nodes));
+
+                // Check 6: Script phases have commands
+                results.push(this._checkScriptPhasesHaveCommands(nodes));
+
+                // Check 7: Guard expression syntax is valid
+                results.push(this._checkGuardExpressions(links));
+
+                this.validationResults = results;
+
+                // Update panel UI
+                this._renderResults();
+
+                // Update graph highlighting
+                this._updateGraphHighlighting();
+
+                const allPassed = results.every(r => r.passed);
+                const passed = results.filter(r => r.passed);
+                const failed = results.filter(r => !r.passed);
+
+                // Trigger callback
+                if (this.options.onValidationComplete) {
+                    this.options.onValidationComplete({ passed, failed, allPassed });
+                }
+
+                return { passed, failed, allPassed };
+            }
+
+            /**
+             * Check 1: Start phase exists
+             */
+            _checkStartPhaseExists(nodes, workflow) {
+                const startName = workflow?.workflow?.start || workflow?.start || 'start';
+                const startExists = nodes.some(n => n.id === startName);
+
+                if (!startExists && nodes.length > 0) {
+                    // Mark first node or default 'start' as expected
+                    this.invalidNodes.add(startName);
+                }
+
+                return {
+                    check: 'start_phase_exists',
+                    label: 'Start phase exists',
+                    passed: startExists || nodes.length === 0,
+                    details: startExists
+                        ? `Start phase "${startName}" found`
+                        : `Start phase "${startName}" not found`
+                };
+            }
+
+            /**
+             * Check 2: All phases reachable from start
+             */
+            _checkPhasesReachable(nodes, links, workflow) {
+                if (nodes.length === 0) {
+                    return {
+                        check: 'phases_reachable',
+                        label: 'All phases reachable from start',
+                        passed: true,
+                        details: 'No phases to check'
+                    };
+                }
+
+                const startName = workflow?.workflow?.start || workflow?.start || 'start';
+                const startNode = nodes.find(n => n.id === startName);
+
+                if (!startNode) {
+                    return {
+                        check: 'phases_reachable',
+                        label: 'All phases reachable from start',
+                        passed: false,
+                        details: 'Cannot check - start phase not found'
+                    };
+                }
+
+                // BFS to find all reachable nodes
+                const reachable = new Set();
+                const queue = [startName];
+
+                while (queue.length > 0) {
+                    const current = queue.shift();
+                    if (reachable.has(current)) continue;
+                    reachable.add(current);
+
+                    // Find all transitions from current
+                    links.forEach(link => {
+                        const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                        const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                        if (sourceId === current && !reachable.has(targetId)) {
+                            queue.push(targetId);
+                        }
+                    });
+                }
+
+                const unreachable = nodes.filter(n => !reachable.has(n.id));
+                unreachable.forEach(n => this.invalidNodes.add(n.id));
+
+                return {
+                    check: 'phases_reachable',
+                    label: 'All phases reachable from start',
+                    passed: unreachable.length === 0,
+                    details: unreachable.length === 0
+                        ? `All ${nodes.length} phases are reachable`
+                        : `Unreachable phases: ${unreachable.map(n => n.id).join(', ')}`
+                };
+            }
+
+            /**
+             * Check 3: At least one terminal phase exists
+             */
+            _checkTerminalPhaseExists(nodes) {
+                const terminalNodes = nodes.filter(n => n.type === 'terminal');
+
+                return {
+                    check: 'terminal_phase_exists',
+                    label: 'Terminal phase exists',
+                    passed: terminalNodes.length > 0 || nodes.length === 0,
+                    details: terminalNodes.length > 0
+                        ? `Found ${terminalNodes.length} terminal phase(s): ${terminalNodes.map(n => n.id).join(', ')}`
+                        : 'No terminal phase found'
+                };
+            }
+
+            /**
+             * Check 4: All transition targets are valid phase names
+             */
+            _checkTransitionTargets(nodes, links) {
+                const nodeIds = new Set(nodes.map(n => n.id));
+                const invalidTargets = [];
+
+                links.forEach(link => {
+                    const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                    if (!nodeIds.has(targetId)) {
+                        invalidTargets.push({ edge: link.id, target: targetId });
+                        this.invalidEdges.add(link.id);
+                    }
+                });
+
+                return {
+                    check: 'transition_targets_valid',
+                    label: 'All transition targets valid',
+                    passed: invalidTargets.length === 0,
+                    details: invalidTargets.length === 0
+                        ? `All ${links.length} transitions have valid targets`
+                        : `Invalid targets: ${invalidTargets.map(t => t.target).join(', ')}`
+                };
+            }
+
+            /**
+             * Check 5: Execute/evaluate phases have prompts
+             */
+            _checkPhasesHavePrompts(nodes) {
+                const missingPrompts = [];
+
+                nodes.forEach(node => {
+                    if ((node.type === 'execute' || node.type === 'evaluate') && !node.prompt) {
+                        missingPrompts.push(node.id);
+                        this.invalidNodes.add(node.id);
+                    }
+                });
+
+                const relevantPhases = nodes.filter(n => n.type === 'execute' || n.type === 'evaluate');
+
+                return {
+                    check: 'phases_have_prompts',
+                    label: 'Execute/evaluate phases have prompts',
+                    passed: missingPrompts.length === 0,
+                    details: missingPrompts.length === 0
+                        ? `All ${relevantPhases.length} execute/evaluate phases have prompts`
+                        : `Missing prompts: ${missingPrompts.join(', ')}`
+                };
+            }
+
+            /**
+             * Check 6: Script phases have commands
+             */
+            _checkScriptPhasesHaveCommands(nodes) {
+                const missingCommands = [];
+
+                nodes.forEach(node => {
+                    if (node.type === 'script' && !node.command) {
+                        missingCommands.push(node.id);
+                        this.invalidNodes.add(node.id);
+                    }
+                });
+
+                const scriptPhases = nodes.filter(n => n.type === 'script');
+
+                return {
+                    check: 'script_phases_have_commands',
+                    label: 'Script phases have commands',
+                    passed: missingCommands.length === 0,
+                    details: missingCommands.length === 0
+                        ? (scriptPhases.length > 0 ? `All ${scriptPhases.length} script phases have commands` : 'No script phases')
+                        : `Missing commands: ${missingCommands.join(', ')}`
+                };
+            }
+
+            /**
+             * Check 7: Guard expression syntax is valid
+             */
+            _checkGuardExpressions(links) {
+                const invalidGuards = [];
+
+                links.forEach(link => {
+                    if (link.guard) {
+                        const error = this._validateGuardSyntax(link.guard);
+                        if (error) {
+                            invalidGuards.push({ edge: link.id, guard: link.guard, error });
+                            this.invalidEdges.add(link.id);
+                        }
+                    }
+                });
+
+                const guardsCount = links.filter(l => l.guard).length;
+
+                return {
+                    check: 'guard_expressions_valid',
+                    label: 'Guard expression syntax valid',
+                    passed: invalidGuards.length === 0,
+                    details: invalidGuards.length === 0
+                        ? (guardsCount > 0 ? `All ${guardsCount} guard expressions are valid` : 'No guard expressions')
+                        : `Invalid guards: ${invalidGuards.map(g => g.error).join('; ')}`
+                };
+            }
+
+            /**
+             * Validate guard expression syntax
+             * @param {string} expr - Guard expression
+             * @returns {string|null} Error message or null if valid
+             */
+            _validateGuardSyntax(expr) {
+                if (!expr || typeof expr !== 'string') {
+                    return null;
+                }
+
+                const trimmed = expr.trim();
+                if (!trimmed) {
+                    return null;
+                }
+
+                // Check for balanced parentheses
+                let parenCount = 0;
+                for (const char of trimmed) {
+                    if (char === '(') parenCount++;
+                    if (char === ')') parenCount--;
+                    if (parenCount < 0) {
+                        return 'Unbalanced parentheses';
+                    }
+                }
+                if (parenCount !== 0) {
+                    return 'Unbalanced parentheses';
+                }
+
+                // Check for valid operators (basic check)
+                // Single = without being part of == or !=
+                if (/[^!=]=[^=]/.test(trimmed) || /^=[^=]/.test(trimmed)) {
+                    return 'Use == for equality (found single =)';
+                }
+
+                // Check for empty field names (e.g., " == true")
+                if (/^\s*(==|!=)/.test(trimmed)) {
+                    return 'Missing field name before operator';
+                }
+
+                // Check for empty values (e.g., "field == ")
+                if (/(==|!=)\s*$/.test(trimmed)) {
+                    return 'Missing value after operator';
+                }
+
+                return null;
+            }
+
+            /**
+             * Render validation results in the panel
+             */
+            _renderResults() {
+                const content = this.panel.querySelector('.workflow-validation-content');
+                const statusIcon = this.panel.querySelector('.workflow-validation-status');
+
+                const allPassed = this.validationResults.every(r => r.passed);
+                const failedCount = this.validationResults.filter(r => !r.passed).length;
+
+                // Update status icon
+                statusIcon.className = `workflow-validation-status ${allPassed ? 'valid' : 'invalid'}`;
+                statusIcon.textContent = allPassed ? '✓' : failedCount.toString();
+
+                // Render items
+                content.innerHTML = this.validationResults.map(result => `
+                    <div class="workflow-validation-item ${result.passed ? 'passed' : 'failed'}">
+                        <span class="workflow-validation-icon">${result.passed ? '✓' : '✗'}</span>
+                        <div>
+                            <div class="workflow-validation-message">${result.label}</div>
+                            <div class="workflow-validation-details">${result.details}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            /**
+             * Update graph element highlighting based on validation results
+             */
+            _updateGraphHighlighting() {
+                if (!this.workflowGraph || !this.workflowGraph.nodeElements) {
+                    return;
+                }
+
+                // Update node highlighting
+                this.workflowGraph.nodeElements.classed('invalid', d => this.invalidNodes.has(d.id));
+
+                // Update edge highlighting
+                if (this.workflowGraph.edgeElements) {
+                    this.workflowGraph.edgeElements.classed('invalid', d => this.invalidEdges.has(d.id));
+                }
+            }
+
+            /**
+             * Get the validation panel element (for positioning)
+             * @returns {HTMLElement} The panel element
+             */
+            getPanel() {
+                return this.panel;
+            }
+
+            /**
+             * Show the panel
+             */
+            show() {
+                this.panel.style.display = '';
+            }
+
+            /**
+             * Hide the panel
+             */
+            hide() {
+                this.panel.style.display = 'none';
+            }
+
+            /**
+             * Destroy the validator and clean up
+             */
+            destroy() {
+                if (this.panel && this.panel.parentNode) {
+                    this.panel.parentNode.removeChild(this.panel);
+                }
+            }
+        }
+
+        /**
+         * PhaseEditor - Property panel for editing workflow phase properties
+         *
+         * Displays form fields for editing phase name, type, description, prompt,
+         * command, and allowed_writes. Fields are shown/hidden based on phase type.
+         * Changes are emitted via callbacks to update the graph.
+         */
+        class PhaseEditor {
+            constructor(options = {}) {
+                this.options = {
+                    onChange: options.onChange || null,     // Called when phase data changes
+                    onDelete: options.onDelete || null,     // Called when delete is clicked
+                    onDuplicate: options.onDuplicate || null, // Called when duplicate is clicked
+                    ...options
+                };
+
+                this.phase = null;
+                this.prompts = [];
+                this.isOpen = false;
+
+                this._createPanel();
+                this._loadPrompts();
+            }
+
+            /**
+             * Create the panel DOM structure
+             */
+            _createPanel() {
+                // Check if panel already exists
+                this.panel = document.getElementById('phaseEditorPanel');
+                if (this.panel) {
+                    this._bindElements();
+                    return;
+                }
+
+                // Create panel element
+                this.panel = document.createElement('div');
+                this.panel.id = 'phaseEditorPanel';
+                this.panel.className = 'phase-editor-panel';
+                this.panel.innerHTML = `
+                    <div class="phase-editor-header">
+                        <span class="phase-editor-title">
+                            Edit Phase
+                            <span class="phase-type-indicator" id="phaseEditorTypeIndicator"></span>
+                        </span>
+                        <button class="phase-editor-close" id="phaseEditorClose" title="Close">&times;</button>
+                    </div>
+                    <div class="phase-editor-content">
+                        <div class="phase-editor-field">
+                            <label class="phase-editor-label" for="phaseEditorName">Name</label>
+                            <input type="text" class="phase-editor-input" id="phaseEditorName" placeholder="Phase name">
+                        </div>
+                        <div class="phase-editor-field">
+                            <label class="phase-editor-label" for="phaseEditorType">Type</label>
+                            <select class="phase-editor-select" id="phaseEditorType">
+                                <option value="execute">Execute (AI agent, can modify code)</option>
+                                <option value="evaluate">Evaluate (AI agent, read-only)</option>
+                                <option value="script">Script (Shell command)</option>
+                                <option value="terminal">Terminal (End state)</option>
+                            </select>
+                        </div>
+                        <div class="phase-editor-field">
+                            <label class="phase-editor-label" for="phaseEditorDescription">Description</label>
+                            <textarea class="phase-editor-textarea" id="phaseEditorDescription" placeholder="Describe what this phase does..."></textarea>
+                        </div>
+                        <div class="phase-editor-field" id="phaseEditorPromptField">
+                            <label class="phase-editor-label" for="phaseEditorPrompt">Prompt</label>
+                            <select class="phase-editor-select" id="phaseEditorPrompt">
+                                <option value="">-- Select prompt --</option>
+                            </select>
+                        </div>
+                        <div class="phase-editor-field hidden" id="phaseEditorCommandField">
+                            <label class="phase-editor-label" for="phaseEditorCommand">Command</label>
+                            <input type="text" class="phase-editor-input" id="phaseEditorCommand" placeholder="Shell command to execute">
+                        </div>
+                        <div class="phase-editor-field hidden" id="phaseEditorAllowedWritesField">
+                            <label class="phase-editor-label" for="phaseEditorAllowedWrites">Allowed Writes</label>
+                            <input type="text" class="phase-editor-input" id="phaseEditorAllowedWrites" placeholder="Glob patterns (comma-separated)">
+                        </div>
+                    </div>
+                    <div class="phase-editor-footer">
+                        <button class="phase-editor-btn phase-editor-btn-danger" id="phaseEditorDelete">Delete</button>
+                        <button class="phase-editor-btn phase-editor-btn-secondary" id="phaseEditorDuplicate">Duplicate</button>
+                    </div>
+                `;
+
+                document.body.appendChild(this.panel);
+                this._bindElements();
+            }
+
+            /**
+             * Bind DOM elements and event listeners
+             */
+            _bindElements() {
+                this.closeBtn = document.getElementById('phaseEditorClose');
+                this.nameInput = document.getElementById('phaseEditorName');
+                this.typeSelect = document.getElementById('phaseEditorType');
+                this.descriptionInput = document.getElementById('phaseEditorDescription');
+                this.promptSelect = document.getElementById('phaseEditorPrompt');
+                this.commandInput = document.getElementById('phaseEditorCommand');
+                this.allowedWritesInput = document.getElementById('phaseEditorAllowedWrites');
+                this.promptField = document.getElementById('phaseEditorPromptField');
+                this.commandField = document.getElementById('phaseEditorCommandField');
+                this.allowedWritesField = document.getElementById('phaseEditorAllowedWritesField');
+                this.typeIndicator = document.getElementById('phaseEditorTypeIndicator');
+                this.deleteBtn = document.getElementById('phaseEditorDelete');
+                this.duplicateBtn = document.getElementById('phaseEditorDuplicate');
+
+                // Close button
+                if (this.closeBtn) {
+                    this.closeBtn.addEventListener('click', () => this.hide());
+                }
+
+                // Type change - update field visibility
+                if (this.typeSelect) {
+                    this.typeSelect.addEventListener('change', () => {
+                        this._updateFieldVisibility();
+                        this._updateTypeIndicator();
+                        this._emitChange();
+                    });
+                }
+
+                // Input change handlers
+                const inputs = [this.nameInput, this.descriptionInput, this.promptSelect, this.commandInput, this.allowedWritesInput];
+                inputs.forEach(input => {
+                    if (input) {
+                        input.addEventListener('input', () => this._emitChange());
+                        input.addEventListener('change', () => this._emitChange());
+                    }
+                });
+
+                // Delete button
+                if (this.deleteBtn) {
+                    this.deleteBtn.addEventListener('click', () => {
+                        if (this.phase && this.options.onDelete) {
+                            this.options.onDelete(this.phase);
+                        }
+                    });
+                }
+
+                // Duplicate button
+                if (this.duplicateBtn) {
+                    this.duplicateBtn.addEventListener('click', () => {
+                        if (this.phase && this.options.onDuplicate) {
+                            this.options.onDuplicate(this.phase);
+                        }
+                    });
+                }
+            }
+
+            /**
+             * Load available prompts from the API
+             */
+            async _loadPrompts() {
+                try {
+                    const response = await fetch('/api/prompts', { cache: 'no-store' });
+                    const data = await response.json();
+                    if (data && data.ok && Array.isArray(data.prompts)) {
+                        this.prompts = data.prompts;
+                        this._populatePromptDropdown();
+                    }
+                } catch (e) {
+                    console.error('PhaseEditor: Failed to load prompts', e);
+                }
+            }
+
+            /**
+             * Populate the prompt dropdown with available prompts
+             */
+            _populatePromptDropdown() {
+                if (!this.promptSelect) return;
+
+                // Preserve current selection
+                const currentValue = this.promptSelect.value;
+
+                // Clear existing options except the placeholder
+                this.promptSelect.innerHTML = '<option value="">-- Select prompt --</option>';
+
+                // Add prompt options
+                for (const prompt of this.prompts) {
+                    const option = document.createElement('option');
+                    option.value = prompt.id;
+                    option.textContent = prompt.name || prompt.id;
+                    this.promptSelect.appendChild(option);
+                }
+
+                // Restore selection if it still exists
+                if (currentValue) {
+                    this.promptSelect.value = currentValue;
+                }
+            }
+
+            /**
+             * Update field visibility based on phase type
+             */
+            _updateFieldVisibility() {
+                const type = this.typeSelect ? this.typeSelect.value : 'execute';
+
+                // Prompt field: visible for execute and evaluate
+                if (this.promptField) {
+                    this.promptField.classList.toggle('hidden', type === 'script' || type === 'terminal');
+                }
+
+                // Command field: visible only for script
+                if (this.commandField) {
+                    this.commandField.classList.toggle('hidden', type !== 'script');
+                }
+
+                // Allowed writes field: visible only for evaluate
+                if (this.allowedWritesField) {
+                    this.allowedWritesField.classList.toggle('hidden', type !== 'evaluate');
+                }
+            }
+
+            /**
+             * Update the type indicator badge
+             */
+            _updateTypeIndicator() {
+                if (!this.typeIndicator) return;
+
+                const type = this.typeSelect ? this.typeSelect.value : 'execute';
+
+                // Remove all type classes
+                this.typeIndicator.className = 'phase-type-indicator type-' + type;
+                this.typeIndicator.textContent = type;
+            }
+
+            /**
+             * Emit change event with current phase data
+             */
+            _emitChange() {
+                if (!this.phase || !this.options.onChange) return;
+
+                const data = this.getPhaseData();
+                this.options.onChange(this.phase.id, data);
+            }
+
+            /**
+             * Show the panel with a phase's data
+             * @param {Object} phase - Phase object to edit
+             */
+            show(phase) {
+                if (!phase) return;
+
+                this.phase = phase;
+
+                // Populate form fields
+                if (this.nameInput) this.nameInput.value = phase.name || phase.id || '';
+                if (this.typeSelect) this.typeSelect.value = phase.type || 'execute';
+                if (this.descriptionInput) this.descriptionInput.value = phase.description || '';
+
+                // Set prompt value
+                if (this.promptSelect) {
+                    // Ensure prompts are loaded
+                    if (this.prompts.length === 0) {
+                        this._loadPrompts().then(() => {
+                            this.promptSelect.value = phase.prompt || '';
+                        });
+                    } else {
+                        this.promptSelect.value = phase.prompt || '';
+                    }
+                }
+
+                if (this.commandInput) this.commandInput.value = phase.command || '';
+
+                // Handle allowed_writes (can be array or string)
+                if (this.allowedWritesInput) {
+                    const writes = phase.allowed_writes || phase.allowedWrites || [];
+                    this.allowedWritesInput.value = Array.isArray(writes) ? writes.join(', ') : writes;
+                }
+
+                this._updateFieldVisibility();
+                this._updateTypeIndicator();
+
+                // Show panel
+                this.panel.classList.add('open');
+                this.isOpen = true;
+            }
+
+            /**
+             * Hide the panel
+             */
+            hide() {
+                this.panel.classList.remove('open');
+                this.isOpen = false;
+                this.phase = null;
+            }
+
+            /**
+             * Get current phase data from the form
+             * @returns {Object} Phase data
+             */
+            getPhaseData() {
+                const type = this.typeSelect ? this.typeSelect.value : 'execute';
+
+                const data = {
+                    name: this.nameInput ? this.nameInput.value.trim() : '',
+                    type: type,
+                    description: this.descriptionInput ? this.descriptionInput.value.trim() : ''
+                };
+
+                // Add type-specific fields
+                if (type === 'execute' || type === 'evaluate') {
+                    data.prompt = this.promptSelect ? this.promptSelect.value : '';
+                }
+
+                if (type === 'script') {
+                    data.command = this.commandInput ? this.commandInput.value.trim() : '';
+                }
+
+                if (type === 'evaluate') {
+                    const writesValue = this.allowedWritesInput ? this.allowedWritesInput.value.trim() : '';
+                    data.allowed_writes = writesValue ? writesValue.split(',').map(s => s.trim()).filter(s => s) : [];
+                }
+
+                return data;
+            }
+
+            /**
+             * Validate the form fields
+             * @returns {Object} Validation result with isValid and errors array
+             */
+            validate() {
+                const errors = [];
+                const data = this.getPhaseData();
+
+                if (!data.name) {
+                    errors.push('Phase name is required');
+                }
+
+                if ((data.type === 'execute' || data.type === 'evaluate') && !data.prompt) {
+                    errors.push('Prompt is required for execute/evaluate phases');
+                }
+
+                if (data.type === 'script' && !data.command) {
+                    errors.push('Command is required for script phases');
+                }
+
+                return {
+                    isValid: errors.length === 0,
+                    errors: errors
+                };
+            }
+
+            /**
+             * Destroy the panel and clean up
+             */
+            destroy() {
+                if (this.panel && this.panel.parentNode) {
+                    this.panel.parentNode.removeChild(this.panel);
+                }
+                this.phase = null;
+                this.prompts = [];
+            }
+        }
+
+        /**
+         * TransitionEditor - Panel for editing workflow transition properties
+         * Used to modify transitions (edges) between workflow phases
+         */
+        class TransitionEditor {
+            constructor(options = {}) {
+                this.options = {
+                    onChange: options.onChange || null,     // Called when transition data changes
+                    onDelete: options.onDelete || null,     // Called when delete is clicked
+                    getPhaseNames: options.getPhaseNames || (() => []), // Function to get current phase names
+                    ...options
+                };
+
+                this.edge = null;
+                this.isOpen = false;
+
+                this._createPanel();
+            }
+
+            /**
+             * Create the panel DOM structure
+             */
+            _createPanel() {
+                // Check if panel already exists
+                this.panel = document.getElementById('transitionEditorPanel');
+                if (this.panel) {
+                    this._bindElements();
+                    return;
+                }
+
+                // Create panel element
+                this.panel = document.createElement('div');
+                this.panel.id = 'transitionEditorPanel';
+                this.panel.className = 'transition-editor-panel';
+                this.panel.innerHTML = `
+                    <div class="transition-editor-header">
+                        <span class="transition-editor-title">
+                            <span>Edit Transition</span>
+                        </span>
+                        <button class="transition-editor-close" id="transitionEditorClose" title="Close">&times;</button>
+                    </div>
+                    <div class="transition-editor-content">
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label">Route</label>
+                            <div class="transition-route-info" id="transitionRouteInfo">
+                                <span class="route-phase" id="transitionSourcePhase">source</span>
+                                <span class="route-arrow">→</span>
+                                <span class="route-phase" id="transitionTargetDisplay">target</span>
+                            </div>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label" for="transitionEditorTarget">Target Phase</label>
+                            <select class="transition-editor-select" id="transitionEditorTarget">
+                            </select>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label">Auto Transition</label>
+                            <div class="transition-toggle-wrapper">
+                                <span style="font-size: 12px; color: var(--text-secondary);">Automatically transition when guard is met</span>
+                                <div class="transition-toggle" id="transitionEditorAuto" title="Toggle auto-transition"></div>
+                            </div>
+                        </div>
+                        <div class="transition-editor-field">
+                            <label class="transition-editor-label" for="transitionEditorPriority">Priority</label>
+                            <input type="number" class="transition-editor-input" id="transitionEditorPriority" placeholder="0" min="0" step="1">
+                        </div>
+                        <div class="transition-editor-field">
+                            <div id="transitionEditorGuardContainer"></div>
+                        </div>
+                    </div>
+                    <div class="transition-editor-footer">
+                        <button class="transition-editor-btn transition-editor-btn-danger" id="transitionEditorDelete">Delete Transition</button>
+                    </div>
+                `;
+
+                document.body.appendChild(this.panel);
+                this._bindElements();
+            }
+
+            /**
+             * Bind DOM elements and event listeners
+             */
+            _bindElements() {
+                this.closeBtn = document.getElementById('transitionEditorClose');
+                this.targetSelect = document.getElementById('transitionEditorTarget');
+                this.autoToggle = document.getElementById('transitionEditorAuto');
+                this.priorityInput = document.getElementById('transitionEditorPriority');
+                this.guardContainer = document.getElementById('transitionEditorGuardContainer');
+                this.deleteBtn = document.getElementById('transitionEditorDelete');
+                this.sourcePhaseEl = document.getElementById('transitionSourcePhase');
+                this.targetDisplayEl = document.getElementById('transitionTargetDisplay');
+
+                // Initialize GuardBuilder in the container
+                if (this.guardContainer) {
+                    this.guardBuilder = new GuardBuilder(this.guardContainer, {
+                        onChange: () => this._emitChange(),
+                        statusFields: ['designApproved', 'designNeedsChanges', 'taskPassed', 'taskFailed',
+                                       'commitFailed', 'pushFailed', 'hasMoreTasks', 'allTasksComplete',
+                                       'designDraftComplete', 'taskDecompositionComplete', 'currentTaskId']
+                    });
+                }
+
+                // Close button
+                if (this.closeBtn) {
+                    this.closeBtn.addEventListener('click', () => this.hide());
+                }
+
+                // Auto toggle
+                if (this.autoToggle) {
+                    this.autoToggle.addEventListener('click', () => {
+                        this.autoToggle.classList.toggle('active');
+                        this._emitChange();
+                    });
+                }
+
+                // Target change
+                if (this.targetSelect) {
+                    this.targetSelect.addEventListener('change', () => {
+                        // Update display
+                        if (this.targetDisplayEl) {
+                            this.targetDisplayEl.textContent = this.targetSelect.value || 'target';
+                        }
+                        this._emitChange();
+                    });
+                }
+
+                // Priority change handler
+                if (this.priorityInput) {
+                    this.priorityInput.addEventListener('input', () => this._emitChange());
+                    this.priorityInput.addEventListener('change', () => this._emitChange());
+                }
+
+                // Delete button
+                if (this.deleteBtn) {
+                    this.deleteBtn.addEventListener('click', () => {
+                        if (this.edge && this.options.onDelete) {
+                            this.options.onDelete(this.edge);
+                        }
+                    });
+                }
+            }
+
+            /**
+             * Populate the target dropdown with current phase names
+             */
+            _populateTargetDropdown() {
+                if (!this.targetSelect) return;
+
+                const phaseNames = this.options.getPhaseNames();
+                const currentValue = this.targetSelect.value;
+
+                // Clear existing options
+                this.targetSelect.innerHTML = '';
+
+                // Add phase options
+                for (const name of phaseNames) {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    this.targetSelect.appendChild(option);
+                }
+
+                // Restore selection if it still exists
+                if (currentValue && phaseNames.includes(currentValue)) {
+                    this.targetSelect.value = currentValue;
+                }
+            }
+
+            /**
+             * Emit change event with current transition data
+             */
+            _emitChange() {
+                if (!this.edge || !this.options.onChange) return;
+
+                const data = this.getTransitionData();
+                this.options.onChange(this.edge.id, data);
+            }
+
+            /**
+             * Show the panel with an edge's data
+             * @param {Object} edge - Edge object to edit
+             */
+            show(edge) {
+                if (!edge) return;
+
+                this.edge = edge;
+
+                // Populate target dropdown with current phases
+                this._populateTargetDropdown();
+
+                // Get source name (could be string id or object with id)
+                const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                const targetName = typeof edge.target === 'object' ? edge.target.id : edge.target;
+
+                // Populate form fields
+                if (this.sourcePhaseEl) this.sourcePhaseEl.textContent = sourceName || 'source';
+                if (this.targetDisplayEl) this.targetDisplayEl.textContent = targetName || 'target';
+                if (this.targetSelect) this.targetSelect.value = targetName || '';
+                if (this.autoToggle) {
+                    this.autoToggle.classList.toggle('active', !!edge.auto);
+                }
+                if (this.priorityInput) this.priorityInput.value = edge.priority || 0;
+                if (this.guardBuilder) this.guardBuilder.setExpression(edge.guard || '');
+
+                // Show panel
+                this.panel.classList.add('open');
+                this.isOpen = true;
+            }
+
+            /**
+             * Hide the panel
+             */
+            hide() {
+                this.panel.classList.remove('open');
+                this.isOpen = false;
+                this.edge = null;
+            }
+
+            /**
+             * Get current transition data from the form
+             * @returns {Object} Transition data
+             */
+            getTransitionData() {
+                return {
+                    target: this.targetSelect ? this.targetSelect.value : '',
+                    auto: this.autoToggle ? this.autoToggle.classList.contains('active') : false,
+                    priority: this.priorityInput ? parseInt(this.priorityInput.value, 10) || 0 : 0,
+                    guard: this.guardBuilder ? this.guardBuilder.getExpression() : ''
+                };
+            }
+
+            /**
+             * Validate the form fields
+             * @returns {Object} Validation result with isValid and errors array
+             */
+            validate() {
+                const errors = [];
+                const data = this.getTransitionData();
+
+                if (!data.target) {
+                    errors.push('Target phase is required');
+                }
+
+                // Validate guard expression if present
+                if (this.guardBuilder && data.guard) {
+                    const guardValidation = this.guardBuilder.validate();
+                    if (!guardValidation.isValid) {
+                        errors.push(...guardValidation.errors);
+                    }
+                }
+
+                return {
+                    isValid: errors.length === 0,
+                    errors: errors
+                };
+            }
+
+            /**
+             * Destroy the panel and clean up
+             */
+            destroy() {
+                if (this.guardBuilder) {
+                    this.guardBuilder.destroy();
+                    this.guardBuilder = null;
+                }
+                if (this.panel && this.panel.parentNode) {
+                    this.panel.parentNode.removeChild(this.panel);
+                }
+                this.edge = null;
+            }
+        }
+
+        /**
+         * GuardBuilder - Visual and raw editor for guard expressions
+         * Supports building expressions like "status.fieldName == value and status.otherField != value"
+         */
+        class GuardBuilder {
+            constructor(container, options = {}) {
+                this.container = typeof container === 'string' ? document.querySelector(container) : container;
+                this.options = {
+                    onChange: options.onChange || null,     // Called when expression changes
+                    statusFields: options.statusFields || ['designApproved', 'designNeedsChanges', 'taskPassed', 'taskFailed', 'commitFailed', 'pushFailed', 'hasMoreTasks', 'allTasksComplete'],
+                    ...options
+                };
+
+                this.mode = 'visual'; // 'visual' or 'raw'
+                this.conditions = [];  // Array of {field, operator, value}
+                this.combinators = []; // Array of 'and' or 'or' between conditions
+                this.expression = '';  // Raw expression string
+
+                this._createUI();
+            }
+
+            /**
+             * Create the builder UI
+             */
+            _createUI() {
+                if (!this.container) return;
+
+                this.container.innerHTML = `
+                    <div class="guard-builder">
+                        <div class="guard-builder-header">
+                            <span class="guard-builder-title">Guard Expression</span>
+                            <div class="guard-builder-mode-toggle">
+                                <button class="guard-builder-mode-btn active" data-mode="visual">Visual</button>
+                                <button class="guard-builder-mode-btn" data-mode="raw">Raw</button>
+                            </div>
+                        </div>
+                        <div class="guard-builder-content">
+                            <div class="guard-visual-mode">
+                                <div class="guard-conditions-container"></div>
+                                <button class="guard-add-condition">+ Add Condition</button>
+                            </div>
+                            <div class="guard-raw-mode">
+                                <textarea class="guard-raw-textarea" placeholder="e.g., status.taskPassed == true and status.commitFailed != true"></textarea>
+                            </div>
+                            <div class="guard-validation"></div>
+                        </div>
+                    </div>
+                `;
+
+                this._bindElements();
+                this._renderConditions();
+            }
+
+            /**
+             * Bind DOM elements and event listeners
+             */
+            _bindElements() {
+                // Mode toggle buttons
+                this.visualModeBtn = this.container.querySelector('[data-mode="visual"]');
+                this.rawModeBtn = this.container.querySelector('[data-mode="raw"]');
+                this.visualModeContainer = this.container.querySelector('.guard-visual-mode');
+                this.rawModeContainer = this.container.querySelector('.guard-raw-mode');
+                this.conditionsContainer = this.container.querySelector('.guard-conditions-container');
+                this.addConditionBtn = this.container.querySelector('.guard-add-condition');
+                this.rawTextarea = this.container.querySelector('.guard-raw-textarea');
+                this.validationEl = this.container.querySelector('.guard-validation');
+
+                // Mode toggle
+                if (this.visualModeBtn) {
+                    this.visualModeBtn.addEventListener('click', () => this._setMode('visual'));
+                }
+                if (this.rawModeBtn) {
+                    this.rawModeBtn.addEventListener('click', () => this._setMode('raw'));
+                }
+
+                // Add condition button
+                if (this.addConditionBtn) {
+                    this.addConditionBtn.addEventListener('click', () => this._addCondition());
+                }
+
+                // Raw textarea changes
+                if (this.rawTextarea) {
+                    this.rawTextarea.addEventListener('input', () => {
+                        this.expression = this.rawTextarea.value;
+                        this._validateExpression();
+                        this._emitChange();
+                    });
+                }
+            }
+
+            /**
+             * Set the editing mode
+             * @param {string} mode - 'visual' or 'raw'
+             */
+            _setMode(mode) {
+                this.mode = mode;
+
+                // Update button states
+                if (this.visualModeBtn && this.rawModeBtn) {
+                    this.visualModeBtn.classList.toggle('active', mode === 'visual');
+                    this.rawModeBtn.classList.toggle('active', mode === 'raw');
+                }
+
+                // Update container visibility
+                if (this.visualModeContainer && this.rawModeContainer) {
+                    this.visualModeContainer.classList.toggle('hidden', mode !== 'visual');
+                    this.rawModeContainer.classList.toggle('active', mode === 'raw');
+                }
+
+                // Sync data between modes
+                if (mode === 'raw') {
+                    // Switching to raw mode - generate expression from conditions
+                    this.expression = this._conditionsToExpression();
+                    if (this.rawTextarea) {
+                        this.rawTextarea.value = this.expression;
+                    }
+                } else {
+                    // Switching to visual mode - parse expression into conditions
+                    this._parseExpressionToConditions(this.expression);
+                    this._renderConditions();
+                }
+
+                this._validateExpression();
+            }
+
+            /**
+             * Add a new condition row
+             */
+            _addCondition() {
+                // Add a combinator if this isn't the first condition
+                if (this.conditions.length > 0) {
+                    this.combinators.push('and');
+                }
+
+                this.conditions.push({
+                    field: 'status.',
+                    operator: '==',
+                    value: 'true'
+                });
+
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Remove a condition at the given index
+             * @param {number} index - Index of condition to remove
+             */
+            _removeCondition(index) {
+                if (index < 0 || index >= this.conditions.length) return;
+
+                this.conditions.splice(index, 1);
+
+                // Also remove the combinator
+                if (index > 0) {
+                    this.combinators.splice(index - 1, 1);
+                } else if (this.combinators.length > 0) {
+                    this.combinators.splice(0, 1);
+                }
+
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Toggle combinator between AND and OR
+             * @param {number} index - Index of combinator
+             */
+            _toggleCombinator(index) {
+                if (index < 0 || index >= this.combinators.length) return;
+                this.combinators[index] = this.combinators[index] === 'and' ? 'or' : 'and';
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Update a condition field
+             * @param {number} index - Condition index
+             * @param {string} field - Field name (field, operator, or value)
+             * @param {string} value - New value
+             */
+            _updateCondition(index, field, value) {
+                if (index < 0 || index >= this.conditions.length) return;
+                this.conditions[index][field] = value;
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Render the conditions in visual mode
+             */
+            _renderConditions() {
+                if (!this.conditionsContainer) return;
+
+                if (this.conditions.length === 0) {
+                    this.conditionsContainer.innerHTML = `
+                        <div class="guard-empty-state">
+                            No conditions defined. Click "Add Condition" to create one.
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = '';
+
+                for (let i = 0; i < this.conditions.length; i++) {
+                    const condition = this.conditions[i];
+
+                    // Add combinator before condition (except for first)
+                    if (i > 0 && this.combinators[i - 1]) {
+                        const combinator = this.combinators[i - 1];
+                        html += `
+                            <div class="guard-combinator" data-index="${i - 1}">
+                                <button class="guard-combinator-btn ${combinator === 'and' ? 'active' : ''}" data-combinator="and">AND</button>
+                                <button class="guard-combinator-btn ${combinator === 'or' ? 'active' : ''}" data-combinator="or">OR</button>
+                            </div>
+                        `;
+                    }
+
+                    html += `
+                        <div class="guard-condition-row" data-index="${i}">
+                            <select class="guard-field-select" data-field="field">
+                                <option value="">Select field...</option>
+                                ${this._getFieldOptions(condition.field)}
+                            </select>
+                            <select class="guard-operator-select" data-field="operator">
+                                <option value="==" ${condition.operator === '==' ? 'selected' : ''}>=</option>
+                                <option value="!=" ${condition.operator === '!=' ? 'selected' : ''}>≠</option>
+                            </select>
+                            <input type="text" class="guard-value-input" data-field="value"
+                                   value="${this._escapeHtml(condition.value)}"
+                                   placeholder="value"
+                                   list="guard-value-suggestions-${i}">
+                            <datalist id="guard-value-suggestions-${i}">
+                                <option value="true">
+                                <option value="false">
+                                <option value="null">
+                            </datalist>
+                            <button class="guard-remove-btn" title="Remove condition">&times;</button>
+                        </div>
+                    `;
+                }
+
+                this.conditionsContainer.innerHTML = html;
+                this._bindConditionEvents();
+            }
+
+            /**
+             * Get field dropdown options HTML
+             * @param {string} selectedValue - Currently selected value
+             * @returns {string} HTML options
+             */
+            _getFieldOptions(selectedValue) {
+                const fields = this.options.statusFields;
+                let html = '';
+
+                for (const field of fields) {
+                    const fullField = `status.${field}`;
+                    const selected = selectedValue === fullField ? 'selected' : '';
+                    html += `<option value="${fullField}" ${selected}>${fullField}</option>`;
+                }
+
+                // If current value isn't in the list, add it as custom
+                if (selectedValue && selectedValue.startsWith('status.') && !fields.includes(selectedValue.replace('status.', ''))) {
+                    html += `<option value="${selectedValue}" selected>${selectedValue}</option>`;
+                }
+
+                return html;
+            }
+
+            /**
+             * Bind events to condition row elements
+             */
+            _bindConditionEvents() {
+                if (!this.conditionsContainer) return;
+
+                // Combinator buttons
+                this.conditionsContainer.querySelectorAll('.guard-combinator-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const combinator = e.target.closest('.guard-combinator');
+                        const index = parseInt(combinator.dataset.index, 10);
+                        const newValue = e.target.dataset.combinator;
+                        this.combinators[index] = newValue;
+                        this._renderConditions();
+                        this._updateExpressionFromConditions();
+                    });
+                });
+
+                // Condition row inputs
+                this.conditionsContainer.querySelectorAll('.guard-condition-row').forEach(row => {
+                    const index = parseInt(row.dataset.index, 10);
+
+                    // Field select
+                    const fieldSelect = row.querySelector('[data-field="field"]');
+                    if (fieldSelect) {
+                        fieldSelect.addEventListener('change', (e) => {
+                            this._updateCondition(index, 'field', e.target.value);
+                        });
+                    }
+
+                    // Operator select
+                    const operatorSelect = row.querySelector('[data-field="operator"]');
+                    if (operatorSelect) {
+                        operatorSelect.addEventListener('change', (e) => {
+                            this._updateCondition(index, 'operator', e.target.value);
+                        });
+                    }
+
+                    // Value input
+                    const valueInput = row.querySelector('[data-field="value"]');
+                    if (valueInput) {
+                        valueInput.addEventListener('input', (e) => {
+                            this._updateCondition(index, 'value', e.target.value);
+                        });
+                    }
+
+                    // Remove button
+                    const removeBtn = row.querySelector('.guard-remove-btn');
+                    if (removeBtn) {
+                        removeBtn.addEventListener('click', () => {
+                            this._removeCondition(index);
+                        });
+                    }
+                });
+            }
+
+            /**
+             * Convert conditions array to expression string
+             * @returns {string} Expression string
+             */
+            _conditionsToExpression() {
+                if (this.conditions.length === 0) return '';
+
+                let expr = '';
+                for (let i = 0; i < this.conditions.length; i++) {
+                    const c = this.conditions[i];
+                    if (i > 0 && this.combinators[i - 1]) {
+                        expr += ` ${this.combinators[i - 1]} `;
+                    }
+                    expr += `${c.field} ${c.operator} ${c.value}`;
+                }
+                return expr;
+            }
+
+            /**
+             * Parse expression string into conditions array
+             * @param {string} expr - Expression to parse
+             */
+            _parseExpressionToConditions(expr) {
+                if (!expr || expr.trim() === '') {
+                    this.conditions = [];
+                    this.combinators = [];
+                    return;
+                }
+
+                // Simple parser for expressions like:
+                // status.field == value and status.other != value2
+                const conditions = [];
+                const combinators = [];
+
+                // Split by 'and' and 'or' (case insensitive)
+                const parts = expr.split(/\s+(and|or)\s+/i);
+
+                for (let i = 0; i < parts.length; i++) {
+                    const part = parts[i].trim();
+
+                    // Check if this part is a combinator
+                    if (part.toLowerCase() === 'and' || part.toLowerCase() === 'or') {
+                        combinators.push(part.toLowerCase());
+                        continue;
+                    }
+
+                    // Try to parse as condition: field operator value
+                    const match = part.match(/^(.+?)\s*(==|!=)\s*(.+)$/);
+                    if (match) {
+                        conditions.push({
+                            field: match[1].trim(),
+                            operator: match[2],
+                            value: match[3].trim()
+                        });
+                    } else if (part) {
+                        // Couldn't parse - add as raw field with defaults
+                        conditions.push({
+                            field: part,
+                            operator: '==',
+                            value: 'true'
+                        });
+                    }
+                }
+
+                this.conditions = conditions;
+                this.combinators = combinators;
+            }
+
+            /**
+             * Update expression from current conditions
+             */
+            _updateExpressionFromConditions() {
+                this.expression = this._conditionsToExpression();
+                if (this.rawTextarea) {
+                    this.rawTextarea.value = this.expression;
+                }
+                this._validateExpression();
+                this._emitChange();
+            }
+
+            /**
+             * Validate the current expression
+             * @returns {Object} Validation result {isValid, errors}
+             */
+            _validateExpression() {
+                const result = this.validate();
+
+                if (this.validationEl) {
+                    if (!this.expression || this.expression.trim() === '') {
+                        // No expression - no validation message
+                        this.validationEl.className = 'guard-validation';
+                        this.validationEl.textContent = '';
+                    } else if (result.isValid) {
+                        this.validationEl.className = 'guard-validation visible valid';
+                        this.validationEl.textContent = '✓ Valid expression';
+                    } else {
+                        this.validationEl.className = 'guard-validation visible error';
+                        this.validationEl.textContent = '✗ ' + result.errors.join('; ');
+                    }
+                }
+
+                return result;
+            }
+
+            /**
+             * Emit change event
+             */
+            _emitChange() {
+                if (this.options.onChange) {
+                    this.options.onChange(this.expression);
+                }
+            }
+
+            /**
+             * Escape HTML special characters
+             * @param {string} str - String to escape
+             * @returns {string} Escaped string
+             */
+            _escapeHtml(str) {
+                if (!str) return '';
+                return str.replace(/&/g, '&amp;')
+                         .replace(/</g, '&lt;')
+                         .replace(/>/g, '&gt;')
+                         .replace(/"/g, '&quot;')
+                         .replace(/'/g, '&#39;');
+            }
+
+            // --- Public API ---
+
+            /**
+             * Set the expression to edit
+             * @param {string} expr - Guard expression string
+             */
+            setExpression(expr) {
+                this.expression = expr || '';
+
+                if (this.mode === 'visual') {
+                    this._parseExpressionToConditions(this.expression);
+                    this._renderConditions();
+                } else {
+                    if (this.rawTextarea) {
+                        this.rawTextarea.value = this.expression;
+                    }
+                }
+
+                this._validateExpression();
+            }
+
+            /**
+             * Get the current expression
+             * @returns {string} Guard expression string
+             */
+            getExpression() {
+                if (this.mode === 'visual') {
+                    return this._conditionsToExpression();
+                }
+                return this.expression;
+            }
+
+            /**
+             * Set the available status fields for autocomplete
+             * @param {Array<string>} fields - Array of field names (without 'status.' prefix)
+             */
+            setStatusFields(fields) {
+                this.options.statusFields = fields;
+                if (this.mode === 'visual') {
+                    this._renderConditions();
+                }
+            }
+
+            /**
+             * Validate the current expression
+             * @returns {Object} {isValid: boolean, errors: string[]}
+             */
+            validate() {
+                const expr = this.getExpression().trim();
+                const errors = [];
+
+                if (!expr) {
+                    // Empty expression is valid (no guard)
+                    return { isValid: true, errors: [] };
+                }
+
+                // Basic syntax validation
+                // Check for balanced parentheses (if any)
+                let parenCount = 0;
+                for (const char of expr) {
+                    if (char === '(') parenCount++;
+                    if (char === ')') parenCount--;
+                    if (parenCount < 0) {
+                        errors.push('Unbalanced parentheses');
+                        break;
+                    }
+                }
+                if (parenCount !== 0 && !errors.includes('Unbalanced parentheses')) {
+                    errors.push('Unbalanced parentheses');
+                }
+
+                // Check for valid operators
+                const validOperatorPattern = /==|!=/;
+                const conditionParts = expr.split(/\s+(and|or)\s+/i).filter(p =>
+                    p.toLowerCase() !== 'and' && p.toLowerCase() !== 'or'
+                );
+
+                for (const part of conditionParts) {
+                    const trimmed = part.trim();
+                    if (trimmed && !validOperatorPattern.test(trimmed)) {
+                        errors.push(`Invalid condition: "${trimmed.substring(0, 30)}${trimmed.length > 30 ? '...' : ''}" - missing == or !=`);
+                    }
+                }
+
+                // Check that conditions have a field and value
+                for (const part of conditionParts) {
+                    const trimmed = part.trim();
+                    if (trimmed) {
+                        const match = trimmed.match(/^(.+?)\s*(==|!=)\s*(.*)$/);
+                        if (match) {
+                            if (!match[1].trim()) {
+                                errors.push('Missing field name');
+                            }
+                            if (!match[3].trim()) {
+                                errors.push('Missing value');
+                            }
+                        }
+                    }
+                }
+
+                // Check for common mistakes
+                if (/=(?!=)/.test(expr.replace(/==/g, '').replace(/!=/g, ''))) {
+                    errors.push('Use == for equality (not single =)');
+                }
+
+                return {
+                    isValid: errors.length === 0,
+                    errors: errors
+                };
+            }
+
+            /**
+             * Destroy the builder and clean up
+             */
+            destroy() {
+                if (this.container) {
+                    this.container.innerHTML = '';
+                }
+            }
+        }
 
         // Schema version detection and normalization functions
         function detectSchemaVersion(data) {
@@ -1704,9 +5824,13 @@
         const logsBody = document.getElementById('logsBody');
         const promptsBody = document.getElementById('promptsBody');
         const sdkBody = document.getElementById('sdkBody');
+        const workflowBody = document.getElementById('workflowBody');
+        const workflowGraphContainer = document.getElementById('workflowGraphContainer');
+        const workflowDisabledOverlay = document.getElementById('workflowDisabledOverlay');
         const tabLogs = document.getElementById('tabLogs');
         const tabSdk = document.getElementById('tabSdk');
         const tabPrompts = document.getElementById('tabPrompts');
+        const tabWorkflow = document.getElementById('tabWorkflow');
         const btnSdkRefresh = document.getElementById('btnSdkRefresh');
         const btnSdkTimeline = document.getElementById('btnSdkTimeline');
         const btnSdkAutoScroll = document.getElementById('btnSdkAutoScroll');
@@ -1846,14 +5970,24 @@
             setSidebarTab('setup');
         }
 
+        // Track whether workflow editor has been initialized
+        let workflowEditorInitialized = false;
+
         function setMainTab(tab) {
+            // Don't allow switching to workflow tab while running
+            if (tab === 'workflow' && runIsRunning) {
+                return;
+            }
+
             if (tab === 'prompts') mainTab = 'prompts';
             else if (tab === 'sdk') mainTab = 'sdk';
+            else if (tab === 'workflow') mainTab = 'workflow';
             else mainTab = 'logs';
 
             if (tabLogs) tabLogs.classList.toggle('active', mainTab === 'logs');
             if (tabSdk) tabSdk.classList.toggle('active', mainTab === 'sdk');
             if (tabPrompts) tabPrompts.classList.toggle('active', mainTab === 'prompts');
+            if (tabWorkflow) tabWorkflow.classList.toggle('active', mainTab === 'workflow');
 
             if (logsSearchContainer) logsSearchContainer.style.display = mainTab === 'logs' ? 'block' : 'none';
             if (logsBody) logsBody.style.display = mainTab === 'logs' ? 'flex' : 'none';
@@ -1866,6 +6000,11 @@
             if (sdkBody) sdkBody.style.display = mainTab === 'sdk' ? 'flex' : 'none';
             if (mainTab === 'sdk') loadSdkOutput();
 
+            if (workflowBody) workflowBody.style.display = mainTab === 'workflow' ? 'flex' : 'none';
+            if (mainTab === 'workflow') {
+                initializeWorkflowEditor();
+            }
+
             try {
                 localStorage.setItem('jeeves_viewer_main_tab', mainTab);
             } catch (e) {
@@ -1873,9 +6012,50 @@
             }
         }
 
+        /**
+         * Initialize the workflow editor (only once, on first tab switch)
+         */
+        function initializeWorkflowEditor() {
+            if (workflowEditorInitialized) return;
+            if (!workflowGraphContainer) return;
+
+            // Clear the loading message
+            workflowGraphContainer.innerHTML = '';
+
+            // Initialize the editor with the graph container
+            const editor = initWorkflowEditor(workflowGraphContainer);
+            if (editor) {
+                workflowEditorInitialized = true;
+                // Load the default workflow
+                editor.loadWorkflowList().then(() => {
+                    editor.loadWorkflow('default', true);
+                });
+            }
+        }
+
+        /**
+         * Update the workflow tab disabled state based on run status
+         */
+        function updateWorkflowTabState(running) {
+            if (tabWorkflow) {
+                tabWorkflow.disabled = running;
+                tabWorkflow.title = running
+                    ? 'Workflow Editor (disabled - run in progress)'
+                    : 'Workflow Editor';
+            }
+            if (workflowDisabledOverlay) {
+                workflowDisabledOverlay.style.display = running ? 'flex' : 'none';
+            }
+            // If currently on workflow tab and run starts, switch to logs
+            if (running && mainTab === 'workflow') {
+                setMainTab('logs');
+            }
+        }
+
         if (tabLogs) tabLogs.addEventListener('click', () => setMainTab('logs'));
         if (tabSdk) tabSdk.addEventListener('click', () => setMainTab('sdk'));
         if (tabPrompts) tabPrompts.addEventListener('click', () => setMainTab('prompts'));
+        if (tabWorkflow) tabWorkflow.addEventListener('click', () => setMainTab('workflow'));
 
         if (btnSdkRefresh) btnSdkRefresh.addEventListener('click', () => loadSdkOutput());
         if (btnSdkTimeline) btnSdkTimeline.addEventListener('click', () => {
@@ -2175,6 +6355,28 @@
                     runPhase.value = status.phase;
                 }
             }
+
+            // Update workflow graph current phase highlighting
+            updateWorkflowGraphHighlighting(status.phase, state.completed_phases);
+        }
+
+        /**
+         * Update the workflow graph to highlight current and completed phases
+         * @param {string} currentPhase - The current phase ID
+         * @param {Array<string>} completedPhases - Array of completed phase IDs
+         */
+        function updateWorkflowGraphHighlighting(currentPhase, completedPhases) {
+            if (!workflowGraph) return;
+
+            // Set the current phase for pulsing highlight
+            if (currentPhase) {
+                workflowGraph.setCurrentPhase(currentPhase);
+            }
+
+            // Set completed phases for checkmark styling
+            if (completedPhases && Array.isArray(completedPhases)) {
+                workflowGraph.setCompletedPhases(completedPhases);
+            }
         }
 
         function updateRunControls(run) {
@@ -2184,6 +6386,9 @@
 
             if (btnRun) btnRun.disabled = running;
             if (btnStop) btnStop.disabled = !running;
+
+            // Update workflow tab state when run status changes
+            updateWorkflowTabState(running);
 
             if (running) {
                 runStatusText.textContent = `Running (pid ${run.pid || '?'})\nStarted: ${run.started_at || ''}`;
@@ -2911,6 +7116,827 @@
         fetchWorkflow();
         loadPromptList();
         connect();
+
+        // ================================================================
+        // Workflow Graph + Phase Editor Integration
+        // ================================================================
+        // This section wires together the WorkflowGraph and PhaseEditor classes
+        // so that clicking a node in the graph opens the property panel.
+
+        // Global references for workflow editing
+        let workflowGraph = null;
+        let phaseEditor = null;
+        let transitionEditor = null;
+        let workflowValidator = null;
+
+        // Track unsaved changes indicator element
+        let unsavedIndicator = null;
+
+        /**
+         * Initialize the workflow editor components
+         * @param {HTMLElement|string} graphContainer - Container for the graph
+         * @param {Object} workflowData - Optional workflow data to render
+         */
+        function initWorkflowEditor(graphContainer, workflowData = null) {
+            // Get the container element
+            const container = typeof graphContainer === 'string'
+                ? document.querySelector(graphContainer)
+                : graphContainer;
+
+            if (!container) {
+                console.error('initWorkflowEditor: container not found');
+                return null;
+            }
+
+            // Ensure container has relative positioning for absolute children
+            container.style.position = 'relative';
+
+            // Track current workflow name
+            let currentWorkflowName = 'default';
+
+            // Create toolbar with workflow controls
+            const toolbar = document.createElement('div');
+            toolbar.className = 'workflow-toolbar';
+            toolbar.innerHTML = `
+                <div class="workflow-selector">
+                    <label for="workflowSelect">Workflow:</label>
+                    <select id="workflowSelect" title="Select workflow to edit">
+                        <option value="default">Loading...</option>
+                    </select>
+                </div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowSaveBtn" class="primary" title="Save workflow (Ctrl+S)">
+                        <span>💾</span> Save
+                    </button>
+                    <button id="workflowNewBtn" title="Create new blank workflow">
+                        <span>📄</span> New
+                    </button>
+                    <button id="workflowDuplicateBtn" title="Duplicate current workflow">
+                        <span>📋</span> Duplicate
+                    </button>
+                </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowAddPhaseBtn" title="Add new phase (or double-click canvas)">
+                        <span>+</span> Add Phase
+                    </button>
+                </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowExportBtn" title="Export workflow as YAML file">
+                        <span>⬇️</span> Export
+                    </button>
+                    <button id="workflowImportBtn" title="Import workflow from YAML file">
+                        <span>⬆️</span> Import
+                    </button>
+                </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowZoomInBtn" title="Zoom in">+</button>
+                    <button id="workflowZoomOutBtn" title="Zoom out">−</button>
+                    <button id="workflowFitBtn" title="Fit to view">Fit</button>
+                    <button id="workflowCenterCurrentBtn" title="Center on current phase">📍 Current</button>
+                </div>
+                <input type="file" id="workflowImportInput" class="workflow-import-input" accept=".yaml,.yml" />
+            `;
+            container.appendChild(toolbar);
+
+            // Create unsaved changes indicator
+            unsavedIndicator = document.createElement('div');
+            unsavedIndicator.className = 'workflow-unsaved-indicator';
+            unsavedIndicator.textContent = 'Unsaved changes';
+            container.appendChild(unsavedIndicator);
+
+            // === Workflow List/Load Functions ===
+
+            /**
+             * Load the list of available workflows into the selector dropdown
+             */
+            async function loadWorkflowList() {
+                const select = document.getElementById('workflowSelect');
+                if (!select) return;
+
+                try {
+                    const response = await fetch('/api/workflows');
+                    const data = await response.json();
+
+                    if (data.ok && data.workflows) {
+                        select.innerHTML = '';
+                        data.workflows.forEach(wf => {
+                            const option = document.createElement('option');
+                            option.value = wf.name;
+                            option.textContent = wf.name;
+                            select.appendChild(option);
+                        });
+
+                        // Select the current workflow if it exists
+                        if (currentWorkflowName && Array.from(select.options).some(o => o.value === currentWorkflowName)) {
+                            select.value = currentWorkflowName;
+                        } else if (select.options.length > 0) {
+                            currentWorkflowName = select.options[0].value;
+                            select.value = currentWorkflowName;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to load workflow list:', e);
+                    select.innerHTML = '<option value="default">default</option>';
+                }
+            }
+
+            /**
+             * Load a workflow by name and render it in the graph
+             * @param {string} name - Workflow name to load
+             * @param {boolean} skipConfirm - Skip unsaved changes confirmation
+             */
+            async function loadWorkflow(name, skipConfirm = false) {
+                // Check for unsaved changes
+                if (!skipConfirm && workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                    const confirmed = confirm('You have unsaved changes. Are you sure you want to switch workflows? All changes will be lost.');
+                    if (!confirmed) {
+                        // Restore the selector to the current workflow
+                        const select = document.getElementById('workflowSelect');
+                        if (select) select.value = currentWorkflowName;
+                        return;
+                    }
+                }
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(name)}/full`);
+                    const data = await response.json();
+
+                    if (data.ok) {
+                        currentWorkflowName = name;
+                        if (workflowGraph) {
+                            workflowGraph.setWorkflowName(name);
+                            workflowGraph.render(data);
+                            workflowGraph.clearModified();
+                        }
+                        // Run validation after loading
+                        if (workflowValidator) {
+                            workflowValidator.validate();
+                        }
+                        // Update selector
+                        const select = document.getElementById('workflowSelect');
+                        if (select) select.value = name;
+                    } else {
+                        alert(`Failed to load workflow: ${data.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to load workflow:', e);
+                    alert(`Failed to load workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Save the current workflow to the backend
+             */
+            async function saveWorkflow() {
+                if (!workflowGraph) return;
+
+                const workflowData = workflowGraph.getWorkflowData();
+                const name = currentWorkflowName || 'default';
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(name)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(workflowData)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        workflowGraph.clearModified();
+                        // Brief visual feedback
+                        const saveBtn = document.getElementById('workflowSaveBtn');
+                        if (saveBtn) {
+                            const originalText = saveBtn.innerHTML;
+                            saveBtn.innerHTML = '<span>✓</span> Saved!';
+                            setTimeout(() => { saveBtn.innerHTML = originalText; }, 1500);
+                        }
+                    } else {
+                        alert(`Failed to save workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to save workflow:', e);
+                    alert(`Failed to save workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Create a new blank workflow
+             */
+            async function createNewWorkflow() {
+                // Check for unsaved changes
+                if (workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                    const confirmed = confirm('You have unsaved changes. Are you sure you want to create a new workflow? All changes will be lost.');
+                    if (!confirmed) return;
+                }
+
+                const name = prompt('Enter name for new workflow:', 'new_workflow');
+                if (!name || !name.trim()) return;
+
+                const safeName = name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                // Create minimal workflow data
+                const newWorkflowData = {
+                    workflow: { name: safeName, version: 1, start: 'start' },
+                    phases: {
+                        start: {
+                            type: 'execute',
+                            description: 'Initial phase',
+                            transitions: [{ to: 'end' }]
+                        },
+                        end: {
+                            type: 'terminal',
+                            description: 'End phase'
+                        }
+                    }
+                };
+
+                try {
+                    // Save the new workflow
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(safeName)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newWorkflowData)
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        // Reload workflow list and select new workflow
+                        await loadWorkflowList();
+                        await loadWorkflow(safeName, true);
+                    } else {
+                        alert(`Failed to create workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to create workflow:', e);
+                    alert(`Failed to create workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Duplicate the current workflow
+             */
+            async function duplicateWorkflow() {
+                if (!currentWorkflowName) {
+                    alert('No workflow loaded to duplicate.');
+                    return;
+                }
+
+                const newName = prompt('Enter name for duplicated workflow:', currentWorkflowName + '_copy');
+                if (!newName || !newName.trim()) return;
+
+                const safeName = newName.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                try {
+                    const response = await fetch(`/api/workflow/${encodeURIComponent(currentWorkflowName)}/duplicate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ target_name: safeName })
+                    });
+
+                    const result = await response.json();
+
+                    if (result.ok) {
+                        // Reload workflow list and select duplicated workflow
+                        await loadWorkflowList();
+                        await loadWorkflow(result.name, true);
+                    } else {
+                        alert(`Failed to duplicate workflow: ${result.error || 'Unknown error'}`);
+                    }
+                } catch (e) {
+                    console.error('Failed to duplicate workflow:', e);
+                    alert(`Failed to duplicate workflow: ${e.message}`);
+                }
+            }
+
+            /**
+             * Export the current workflow as a YAML file download
+             */
+            function exportWorkflow() {
+                if (!workflowGraph) return;
+
+                const workflowData = workflowGraph.getWorkflowData();
+                const name = currentWorkflowName || 'workflow';
+
+                // Convert to YAML-like format (simplified)
+                // The backend stores as YAML, but we'll export the JSON for now
+                // with proper formatting that can be read by the backend
+                const yamlContent = generateYamlString(workflowData);
+
+                // Create download
+                const blob = new Blob([yamlContent], { type: 'text/yaml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${name}.yaml`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            /**
+             * Generate YAML string from workflow data
+             */
+            function generateYamlString(data) {
+                let yaml = '';
+
+                // Workflow section
+                if (data.workflow) {
+                    yaml += 'workflow:\n';
+                    yaml += `  name: ${data.workflow.name || 'default'}\n`;
+                    yaml += `  version: ${data.workflow.version || 1}\n`;
+                    if (data.workflow.start) {
+                        yaml += `  start: ${data.workflow.start}\n`;
+                    }
+                    yaml += '\n';
+                }
+
+                // Phases section
+                yaml += 'phases:\n';
+                for (const [phaseName, phase] of Object.entries(data.phases || {})) {
+                    yaml += `  ${phaseName}:\n`;
+                    yaml += `    type: ${phase.type || 'execute'}\n`;
+
+                    if (phase.description) {
+                        yaml += `    description: "${phase.description.replace(/"/g, '\\"')}"\n`;
+                    }
+                    if (phase.prompt) {
+                        yaml += `    prompt: ${phase.prompt}\n`;
+                    }
+                    if (phase.command) {
+                        yaml += `    command: ${phase.command}\n`;
+                    }
+                    if (phase.allowed_writes && phase.allowed_writes.length > 0) {
+                        yaml += `    allowed_writes:\n`;
+                        phase.allowed_writes.forEach(w => {
+                            yaml += `      - ${w}\n`;
+                        });
+                    }
+                    if (phase.transitions && phase.transitions.length > 0) {
+                        yaml += `    transitions:\n`;
+                        phase.transitions.forEach(t => {
+                            yaml += `      - to: ${t.to}\n`;
+                            if (t.when) {
+                                yaml += `        when: "${t.when.replace(/"/g, '\\"')}"\n`;
+                            }
+                            if (t.auto) {
+                                yaml += `        auto: true\n`;
+                            }
+                            if (t.priority && t.priority !== 0) {
+                                yaml += `        priority: ${t.priority}\n`;
+                            }
+                        });
+                    }
+                    yaml += '\n';
+                }
+
+                return yaml;
+            }
+
+            /**
+             * Import a workflow from a YAML file
+             */
+            function importWorkflow(file) {
+                const reader = new FileReader();
+
+                reader.onload = async (e) => {
+                    try {
+                        const content = e.target.result;
+
+                        // Parse YAML (simplified parsing for common cases)
+                        const workflowData = parseYamlContent(content);
+
+                        if (!workflowData || !workflowData.phases) {
+                            alert('Invalid workflow file: no phases found');
+                            return;
+                        }
+
+                        // Prompt for workflow name
+                        const defaultName = file.name.replace(/\.(yaml|yml)$/i, '');
+                        const name = prompt('Enter name for imported workflow:', defaultName);
+                        if (!name || !name.trim()) return;
+
+                        const safeName = name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                        // Save the imported workflow
+                        const response = await fetch(`/api/workflow/${encodeURIComponent(safeName)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(workflowData)
+                        });
+
+                        const result = await response.json();
+
+                        if (result.ok) {
+                            // Reload workflow list and select imported workflow
+                            await loadWorkflowList();
+                            await loadWorkflow(safeName, true);
+                        } else {
+                            alert(`Failed to import workflow: ${result.error || 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        console.error('Failed to import workflow:', err);
+                        alert(`Failed to import workflow: ${err.message}`);
+                    }
+                };
+
+                reader.onerror = () => {
+                    alert('Failed to read file');
+                };
+
+                reader.readAsText(file);
+            }
+
+            /**
+             * Parse YAML content into workflow data object
+             * This is a simplified parser for common workflow YAML structures
+             */
+            function parseYamlContent(content) {
+                // Use js-yaml if available, otherwise do basic parsing
+                if (typeof jsyaml !== 'undefined') {
+                    return jsyaml.load(content);
+                }
+
+                // Simple YAML parser for basic workflow files
+                const lines = content.split('\n');
+                const result = { phases: {} };
+                let currentSection = null;
+                let currentPhase = null;
+                let currentTransitions = null;
+                let currentAllowedWrites = null;
+
+                for (let line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed.startsWith('#')) continue;
+
+                    const indent = line.search(/\S/);
+
+                    // Top-level sections
+                    if (indent === 0) {
+                        if (trimmed === 'workflow:') {
+                            currentSection = 'workflow';
+                            result.workflow = {};
+                        } else if (trimmed === 'phases:') {
+                            currentSection = 'phases';
+                        }
+                        currentPhase = null;
+                        currentTransitions = null;
+                        currentAllowedWrites = null;
+                        continue;
+                    }
+
+                    // Workflow properties
+                    if (currentSection === 'workflow' && indent === 2) {
+                        const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                        if (match) {
+                            result.workflow[match[1]] = match[2].replace(/^["']|["']$/g, '');
+                        }
+                        continue;
+                    }
+
+                    // Phase names
+                    if (currentSection === 'phases' && indent === 2 && trimmed.endsWith(':')) {
+                        currentPhase = trimmed.slice(0, -1);
+                        result.phases[currentPhase] = {};
+                        currentTransitions = null;
+                        currentAllowedWrites = null;
+                        continue;
+                    }
+
+                    // Phase properties
+                    if (currentPhase && indent === 4) {
+                        if (trimmed === 'transitions:') {
+                            currentTransitions = [];
+                            result.phases[currentPhase].transitions = currentTransitions;
+                            currentAllowedWrites = null;
+                        } else if (trimmed === 'allowed_writes:') {
+                            currentAllowedWrites = [];
+                            result.phases[currentPhase].allowed_writes = currentAllowedWrites;
+                            currentTransitions = null;
+                        } else {
+                            const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                            if (match) {
+                                result.phases[currentPhase][match[1]] = match[2].replace(/^["']|["']$/g, '');
+                            }
+                            currentTransitions = null;
+                            currentAllowedWrites = null;
+                        }
+                        continue;
+                    }
+
+                    // Transitions array items
+                    if (currentTransitions !== null && indent >= 6) {
+                        if (trimmed.startsWith('- to:')) {
+                            const toMatch = trimmed.match(/^- to:\s*(.+)$/);
+                            if (toMatch) {
+                                currentTransitions.push({ to: toMatch[1].replace(/^["']|["']$/g, '') });
+                            }
+                        } else if (currentTransitions.length > 0) {
+                            const lastTransition = currentTransitions[currentTransitions.length - 1];
+                            const match = trimmed.match(/^(\w+):\s*(.*)$/);
+                            if (match) {
+                                let value = match[2].replace(/^["']|["']$/g, '');
+                                if (value === 'true') value = true;
+                                else if (value === 'false') value = false;
+                                else if (/^\d+$/.test(value)) value = parseInt(value);
+                                lastTransition[match[1]] = value;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Allowed writes array items
+                    if (currentAllowedWrites !== null && indent >= 6 && trimmed.startsWith('- ')) {
+                        currentAllowedWrites.push(trimmed.slice(2).replace(/^["']|["']$/g, ''));
+                        continue;
+                    }
+                }
+
+                return result;
+            }
+
+            // === Wire up toolbar event handlers ===
+
+            // Workflow selector change
+            const workflowSelect = document.getElementById('workflowSelect');
+            if (workflowSelect) {
+                workflowSelect.addEventListener('change', (e) => {
+                    loadWorkflow(e.target.value);
+                });
+            }
+
+            // Save button
+            const saveBtn = document.getElementById('workflowSaveBtn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', saveWorkflow);
+            }
+
+            // New workflow button
+            const newBtn = document.getElementById('workflowNewBtn');
+            if (newBtn) {
+                newBtn.addEventListener('click', createNewWorkflow);
+            }
+
+            // Duplicate workflow button
+            const duplicateBtn = document.getElementById('workflowDuplicateBtn');
+            if (duplicateBtn) {
+                duplicateBtn.addEventListener('click', duplicateWorkflow);
+            }
+
+            // Export button
+            const exportBtn = document.getElementById('workflowExportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', exportWorkflow);
+            }
+
+            // Import button and file input
+            const importBtn = document.getElementById('workflowImportBtn');
+            const importInput = document.getElementById('workflowImportInput');
+            if (importBtn && importInput) {
+                importBtn.addEventListener('click', () => {
+                    // Check for unsaved changes
+                    if (workflowGraph && workflowGraph.hasUnsavedChanges()) {
+                        const confirmed = confirm('You have unsaved changes. Are you sure you want to import a workflow? All changes will be lost.');
+                        if (!confirmed) return;
+                    }
+                    importInput.click();
+                });
+
+                importInput.addEventListener('change', (e) => {
+                    if (e.target.files && e.target.files[0]) {
+                        importWorkflow(e.target.files[0]);
+                        e.target.value = ''; // Reset for next import
+                    }
+                });
+            }
+
+            // Keyboard shortcut for save (Ctrl+S)
+            container.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveWorkflow();
+                }
+            });
+
+            // Make container focusable for keyboard events
+            container.tabIndex = -1;
+
+            // Load workflow list on initialization
+            loadWorkflowList();
+
+            // Create PhaseEditor with callbacks
+            phaseEditor = new PhaseEditor({
+                onChange: (nodeId, data) => {
+                    // When form changes, update the graph node visually
+                    if (workflowGraph) {
+                        workflowGraph.updateNode(nodeId, data);
+                    }
+                },
+                onDelete: (phase) => {
+                    // Delete the phase from the graph
+                    if (workflowGraph && phase) {
+                        const confirmed = confirm(`Delete phase "${phase.name || phase.id}"? This will also remove all connected transitions.`);
+                        if (confirmed) {
+                            workflowGraph.deleteNode(phase.id);
+                            phaseEditor.hide();
+                        }
+                    }
+                },
+                onDuplicate: (phase) => {
+                    // Duplicate the phase in the graph
+                    if (workflowGraph && phase) {
+                        const newNode = workflowGraph.duplicateNode(phase.id);
+                        if (newNode) {
+                            // Open the duplicated node in the editor
+                            phaseEditor.show(newNode);
+                        }
+                    }
+                }
+            });
+
+            // Create TransitionEditor with callbacks
+            transitionEditor = new TransitionEditor({
+                onChange: (edgeId, data) => {
+                    // When form changes, update the graph edge visually
+                    if (workflowGraph) {
+                        workflowGraph.updateEdge(edgeId, data);
+                    }
+                },
+                onDelete: (edge) => {
+                    // Delete the transition from the graph
+                    if (workflowGraph && edge) {
+                        const sourceName = typeof edge.source === 'object' ? edge.source.id : edge.source;
+                        const targetName = typeof edge.target === 'object' ? edge.target.id : edge.target;
+                        const confirmed = confirm(`Delete transition from "${sourceName}" to "${targetName}"?`);
+                        if (confirmed) {
+                            workflowGraph.deleteEdge(edge.id);
+                            transitionEditor.hide();
+                        }
+                    }
+                },
+                getPhaseNames: () => {
+                    // Return current phase names for target dropdown
+                    return workflowGraph ? workflowGraph.getPhaseNames() : [];
+                }
+            });
+
+            // Create WorkflowGraph with node and edge selection callbacks
+            workflowGraph = new WorkflowGraph(graphContainer, {
+                onNodeSelect: (node) => {
+                    // When a node is clicked, open the phase editor panel
+                    // Close transition editor if open
+                    if (transitionEditor && transitionEditor.isOpen) {
+                        transitionEditor.hide();
+                    }
+                    if (phaseEditor) {
+                        phaseEditor.show(node);
+                    }
+                },
+                onEdgeSelect: (edge) => {
+                    // When an edge is clicked, open the transition editor panel
+                    // Close phase editor if open
+                    if (phaseEditor && phaseEditor.isOpen) {
+                        phaseEditor.hide();
+                    }
+                    if (transitionEditor) {
+                        transitionEditor.show(edge);
+                    }
+                },
+                onEdgeCreated: (edge) => {
+                    // When a new edge is created via drag-to-draw, open the transition editor
+                    // Close phase editor if open
+                    if (phaseEditor && phaseEditor.isOpen) {
+                        phaseEditor.hide();
+                    }
+                    if (transitionEditor) {
+                        transitionEditor.show(edge);
+                    }
+                },
+                onModified: (isModified) => {
+                    // Show/hide unsaved changes indicator
+                    if (unsavedIndicator) {
+                        unsavedIndicator.classList.toggle('visible', isModified);
+                    }
+                    // Trigger real-time validation on every change
+                    if (workflowValidator) {
+                        workflowValidator.validate();
+                    }
+                }
+            });
+
+            // Create WorkflowValidator for real-time validation
+            workflowValidator = new WorkflowValidator({
+                onValidationComplete: (results) => {
+                    // Optional: log validation results
+                    // console.log('Validation:', results.allPassed ? 'PASSED' : 'FAILED', results);
+                }
+            });
+
+            // Attach validator to graph and position panel in container
+            workflowValidator.attachToGraph(workflowGraph);
+            const validationPanel = workflowValidator.getPanel();
+            validationPanel.style.position = 'absolute';
+            container.appendChild(validationPanel);
+
+            // Wire up Add Phase button
+            const addPhaseBtn = document.getElementById('workflowAddPhaseBtn');
+            if (addPhaseBtn) {
+                addPhaseBtn.addEventListener('click', () => {
+                    if (workflowGraph) {
+                        workflowGraph.addNode();
+                    }
+                });
+            }
+
+            // Wire up zoom controls
+            const zoomInBtn = document.getElementById('workflowZoomInBtn');
+            const zoomOutBtn = document.getElementById('workflowZoomOutBtn');
+            const fitBtn = document.getElementById('workflowFitBtn');
+            const centerCurrentBtn = document.getElementById('workflowCenterCurrentBtn');
+
+            if (zoomInBtn) {
+                zoomInBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.zoomIn();
+                });
+            }
+            if (zoomOutBtn) {
+                zoomOutBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.zoomOut();
+                });
+            }
+            if (fitBtn) {
+                fitBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.fitToView();
+                });
+            }
+            if (centerCurrentBtn) {
+                centerCurrentBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.centerOnCurrentPhase();
+                });
+            }
+
+            // Render workflow data if provided
+            if (workflowData) {
+                workflowGraph.render(workflowData);
+                // Run initial validation
+                workflowValidator.validate();
+            }
+
+            return {
+                workflowGraph,
+                phaseEditor,
+                transitionEditor,
+                workflowValidator,
+                loadWorkflowList,
+                loadWorkflow,
+                saveWorkflow,
+                createNewWorkflow,
+                duplicateWorkflow,
+                exportWorkflow,
+                importWorkflow,
+                getCurrentWorkflowName: () => currentWorkflowName
+            };
+        }
+
+        /**
+         * Load and render a workflow in the graph
+         * @param {string} workflowName - Name of the workflow to load
+         */
+        /**
+         * Load and render a workflow in the graph (legacy function, use loadWorkflow from initWorkflowEditor)
+         * @param {string} workflowName - Name of the workflow to load
+         */
+        async function loadWorkflowIntoGraph(workflowName) {
+            if (!workflowGraph) {
+                console.warn('Workflow graph not initialized');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/workflow/${encodeURIComponent(workflowName || 'default')}/full`);
+                const data = await response.json();
+                if (data.ok) {
+                    workflowGraph.setWorkflowName(workflowName || 'default');
+                    workflowGraph.render(data);
+                    workflowGraph.clearModified();
+                }
+            } catch (e) {
+                console.error('Failed to load workflow into graph:', e);
+            }
+        }
+
+        // Expose functions globally for console testing and future integration
+        window.initWorkflowEditor = initWorkflowEditor;
+        window.loadWorkflowIntoGraph = loadWorkflowIntoGraph;
+        window.getWorkflowGraph = () => workflowGraph;
+        window.getPhaseEditor = () => phaseEditor;
+        window.getTransitionEditor = () => transitionEditor;
+        window.getWorkflowValidator = () => workflowValidator;
     </script>
 </body>
 </html>

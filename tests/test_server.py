@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from jeeves.core.issue import GitHubIssue, IssueState, create_issue_state
 from jeeves.core.paths import get_issue_state_dir, get_worktree_path
-from jeeves.viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, ThreadingHTTPServer
+from jeeves.viewer.server import JeevesPromptManager, JeevesRunManager, JeevesState, JeevesViewerHandler, JeevesWorkflowManager, ThreadingHTTPServer
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -149,6 +149,9 @@ sleep 1
             runner_cmd_override=[str(self.dummy_script)],
         )
         self.prompt_manager = JeevesPromptManager(self.tools_dir)
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
@@ -156,6 +159,7 @@ sleep 1
                 state=state,
                 run_manager=self.run_manager,
                 prompt_manager=self.prompt_manager,
+                workflow_manager=workflow_manager,
                 allow_remote_run=True,
                 **kwargs,
             )
@@ -715,11 +719,14 @@ class SDKSSEEventTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -779,11 +786,14 @@ class SDKSSEEventTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -829,7 +839,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_tool_events_sent_for_tool_calls(self):
         """SSE stream sends sdk-tool-start and sdk-tool-complete events for tool calls."""
-        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, JeevesWorkflowManager, ThreadingHTTPServer
 
         sdk_data = {
             "schema": "jeeves.sdk.v1",
@@ -851,11 +861,14 @@ class SDKSSEEventTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -909,7 +922,7 @@ class SDKSSEEventTests(unittest.TestCase):
 
     def test_sdk_complete_event_sent_when_session_ends(self):
         """SSE stream sends sdk-complete event when session is marked complete."""
-        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, JeevesWorkflowManager, ThreadingHTTPServer
 
         sdk_data = {
             "schema": "jeeves.sdk.v1",
@@ -926,11 +939,14 @@ class SDKSSEEventTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -2165,7 +2181,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         4. Tool calls trigger sdk-tool-start and sdk-tool-complete events
         5. Session completion triggers sdk-complete event
         """
-        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, JeevesWorkflowManager, ThreadingHTTPServer
 
         # Create SDK output with complete session data
         sdk_data = {
@@ -2194,11 +2210,14 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -2459,7 +2478,7 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         Simulates a real scenario where SDK output is updated while
         the SSE connection is active, verifying incremental events.
         """
-        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, ThreadingHTTPServer
+        from jeeves.viewer.server import JeevesState, JeevesRunManager, JeevesPromptManager, JeevesViewerHandler, JeevesWorkflowManager, ThreadingHTTPServer
 
         # Start with empty session
         initial_data = {
@@ -2475,11 +2494,14 @@ class SDKStreamingIntegrationTests(unittest.TestCase):
         state = JeevesState(str(self.state_dir))
         run_manager = JeevesRunManager(state_dir=self.state_dir)
         prompt_manager = JeevesPromptManager(self.tmp_path)
+        workflows_dir = self.tmp_path / "workflows"
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        workflow_manager = JeevesWorkflowManager(workflows_dir)
 
         def handler(*args, **kwargs):
             return JeevesViewerHandler(
                 *args, state=state, run_manager=run_manager, prompt_manager=prompt_manager,
-                allow_remote_run=True, **kwargs
+                workflow_manager=workflow_manager, allow_remote_run=True, **kwargs
             )
 
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)

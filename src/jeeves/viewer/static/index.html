@@ -6427,13 +6427,21 @@
             if (!state) return null;
             if (state.mode === 'prd') return 'prompt.md';
             if (state.mode !== 'issue') return null;
-            const phase = (state.status && state.status.phase) ? state.status.phase : 'implement';
+            const phase = (state.status && state.status.phase) ? state.status.phase : 'implement_task';
             const map = {
-                'design': 'issue.design.md',
-                'implement': 'issue.implement.md',
-                'review': 'issue.review.md'
+                'design_draft': 'design.draft.md',
+                'design_review': 'design.review.md',
+                'design_edit': 'design.edit.md',
+                'task_decomposition': 'task.decompose.md',
+                'implement_task': 'task.implement.md',
+                'task_spec_check': 'task.spec_check.md',
+                'fix_ci': 'ci.fix.md',
+                'completeness_verification': 'verify.completeness.md',
+                'prepare_pr': 'pr.prepare.md',
+                'code_review': 'review.evaluate.md',
+                'code_fix': 'review.fix.md'
             };
-            return map[phase] || 'issue.implement.md';
+            return map[phase] || 'task.implement.md';
         }
 
         function promptTabLabel(promptId) {

@@ -6,6 +6,7 @@ them to the target .claude/skills/ directory before SDK invocation.
 """
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -206,8 +207,20 @@ class SkillManager:
         Returns:
             Path to skill directory, or None if not found
         """
-        # Implementation will be added in T4
-        raise NotImplementedError("SkillManager.find_skill_path will be implemented in T4")
+        search_paths = [
+            self.skills_source / "common" / skill_name,
+            self.skills_source / "design" / skill_name,
+            self.skills_source / "implement" / skill_name,
+            self.skills_source / "review" / skill_name,
+            self.skills_source / skill_name,  # Legacy flat structure
+        ]
+
+        for path in search_paths:
+            if path.is_dir() and (path / "SKILL.md").exists():
+                return path
+
+        logger.warning(f"Skill not found: {skill_name}")
+        return None
 
     def provision_skills(
         self,
@@ -231,5 +244,26 @@ class SkillManager:
         Returns:
             List of successfully provisioned skill names
         """
-        # Implementation will be added in T4
-        raise NotImplementedError("SkillManager.provision_skills will be implemented in T4")
+        skills_dir = target_dir / ".claude" / "skills"
+
+        # Clear existing skills (fresh per iteration)
+        if skills_dir.exists():
+            shutil.rmtree(skills_dir)
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve skills for this phase
+        skill_names = self.resolve_skills(phase, phase_type)
+        logger.info(f"Resolved skills for {phase} ({phase_type}): {skill_names}")
+
+        # Copy skill directories
+        provisioned: List[str] = []
+        for skill_name in skill_names:
+            src = self.find_skill_path(skill_name)
+            if src:
+                dst = skills_dir / skill_name
+                shutil.copytree(src, dst)
+                provisioned.append(skill_name)
+                logger.debug(f"Provisioned skill: {skill_name}")
+
+        logger.info(f"Provisioned {len(provisioned)} skills: {provisioned}")
+        return provisioned

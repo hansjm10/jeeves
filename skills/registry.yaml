@@ -12,22 +12,32 @@ version: 1
 # Skills available to all phases
 common:
   - jeeves
+  - progress-tracker
 
 # Phase-specific skill mappings
 # Keys are phase names from workflow YAML (e.g., design_draft, implement_task)
 phases:
-  design_draft: []
-  design_review: []
-  design_edit: []
-  implement_task: []
-  task_spec_check: []
-  code_review: []
-  code_fix: []
+  design_draft:
+    - architecture-patterns
+  design_review:
+    - architecture-patterns
+  design_edit:
+    - architecture-patterns
+  implement_task:
+    - test-driven-dev
+  task_spec_check:
+    - code-quality
+  code_review:
+    - code-quality
+  code_fix:
+    - code-quality
 
 # Phase type defaults (fallback if phase not explicitly listed)
 # Keys match PhaseType enum values: execute, evaluate, script, terminal
 phase_type_defaults:
-  execute: []
-  evaluate: []
+  execute:
+    - test-driven-dev
+  evaluate:
+    - code-quality
   script: []
   terminal: []

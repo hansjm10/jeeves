@@ -2,6 +2,17 @@
 
 ## Phase Type: evaluate
 
+## Inputs
+
+The `.jeeves/` directory is in your **current working directory**. Use relative paths only.
+
+- Issue config: `.jeeves/issue.json`
+- Progress log: `.jeeves/progress.txt`
+- Design doc template: `docs/design-document-template.md`
+- Do not use absolute paths - always use relative paths starting with `.jeeves/`
+
+
+
 IMPORTANT: This is a read-only evaluation phase.
 - You MUST NOT modify source code files
 - You CAN modify: `.jeeves/issue.json`, `.jeeves/progress.txt`, `.jeeves/review.md`

@@ -64,6 +64,35 @@ from jeeves.core.engine import WorkflowEngine
 from jeeves.core.script_runner import run_script_phase
 
 
+def _get_active_issue_file() -> Path:
+    """Get the path to the active issue config file."""
+    return get_data_dir() / "active-issue.json"
+
+
+def save_active_issue(issue_ref: str) -> None:
+    """Save the active issue reference to persistent storage."""
+    config_file = _get_active_issue_file()
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(config_file, "w") as f:
+            json.dump({"issue_ref": issue_ref, "saved_at": datetime.now().isoformat()}, f)
+    except OSError:
+        pass  # Non-critical - don't fail if we can't save
+
+
+def load_active_issue() -> Optional[str]:
+    """Load the active issue reference from persistent storage."""
+    config_file = _get_active_issue_file()
+    if not config_file.exists():
+        return None
+    try:
+        with open(config_file, "r") as f:
+            data = json.load(f)
+        return data.get("issue_ref")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def resolve_prompt_path(phase: str, prompts_dir: Path, engine: WorkflowEngine) -> Path:
     """Resolve the prompt file path for a phase using the workflow engine."""
     if engine.is_terminal(phase):
@@ -1175,6 +1204,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         if issue_ref:
             try:
                 self.run_manager.set_issue(issue_ref)
+                save_active_issue(issue_ref)  # Persist for server restarts
                 # Update the state tracker to point to the new state dir
                 self.state.state_dir = self.run_manager.state_dir
                 self.state.prd_file = self.state.state_dir / "prd.json"
@@ -1442,6 +1472,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             # Set this as the active issue
             issue_ref = f"{owner}/{repo_name}#{issue_number}"
             self.run_manager.set_issue(issue_ref)
+            save_active_issue(issue_ref)  # Persist for server restarts
 
             # Update the state tracker
             self.state.state_dir = self.run_manager.state_dir
@@ -1534,6 +1565,7 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
 
             # Set as active
             self.run_manager.set_issue(issue_ref)
+            save_active_issue(issue_ref)  # Persist for server restarts
 
             # Update the state tracker
             self.state.state_dir = self.run_manager.state_dir
@@ -1979,7 +2011,21 @@ def main():
             print(f"Error: Invalid issue reference: {e}")
             return 1
 
-    # If no issue specified, try to find the most recent one
+    # If no issue specified, try to load the last active issue
+    if not issue_ref:
+        saved_issue = load_active_issue()
+        if saved_issue:
+            try:
+                owner, repo, issue_number = parse_issue_ref(saved_issue)
+                saved_state_dir = get_issue_state_dir(owner, repo, issue_number)
+                if (saved_state_dir / "issue.json").exists():
+                    issue_ref = saved_issue
+                    state_dir = saved_state_dir
+                    print(f"  Restored last active issue: {issue_ref}")
+            except (ValueError, OSError):
+                pass  # Invalid saved issue, will fall through to auto-select
+
+    # If still no issue, try to find the most recent one
     if not issue_ref:
         issues = list_issues_from_jeeves()
         if issues:
@@ -1994,6 +2040,7 @@ def main():
                 issue_ref = f"{latest['owner']}/{latest['repo']}#{latest['issue_number']}"
                 state_dir = Path(latest["state_dir"])
                 print(f"  Auto-selected most recent issue: {issue_ref}")
+                save_active_issue(issue_ref)  # Save for future restarts
 
     # Create a default state dir if none found
     if not state_dir:

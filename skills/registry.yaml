@@ -1,0 +1,33 @@
+# Skill Registry Configuration
+# Maps workflow phases to skill sets for phase-based skill provisioning.
+#
+# Skills are resolved in order:
+# 1. Common skills (always included)
+# 2. Phase-specific skills (exact phase name match)
+# 3. Phase-type defaults (fallback if phase not explicitly mapped)
+
+# Schema version for future compatibility
+version: 1
+
+# Skills available to all phases
+common:
+  - jeeves
+
+# Phase-specific skill mappings
+# Keys are phase names from workflow YAML (e.g., design_draft, implement_task)
+phases:
+  design_draft: []
+  design_review: []
+  design_edit: []
+  implement_task: []
+  task_spec_check: []
+  code_review: []
+  code_fix: []
+
+# Phase type defaults (fallback if phase not explicitly listed)
+# Keys match PhaseType enum values: execute, evaluate, script, terminal
+phase_type_defaults:
+  execute: []
+  evaluate: []
+  script: []
+  terminal: []

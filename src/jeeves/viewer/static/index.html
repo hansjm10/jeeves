@@ -4240,6 +4240,102 @@
         fetchWorkflow();
         loadPromptList();
         connect();
+
+        // ================================================================
+        // Workflow Graph + Phase Editor Integration
+        // ================================================================
+        // This section wires together the WorkflowGraph and PhaseEditor classes
+        // so that clicking a node in the graph opens the property panel.
+
+        // Global references for workflow editing
+        let workflowGraph = null;
+        let phaseEditor = null;
+
+        /**
+         * Initialize the workflow editor components
+         * @param {HTMLElement|string} graphContainer - Container for the graph
+         * @param {Object} workflowData - Optional workflow data to render
+         */
+        function initWorkflowEditor(graphContainer, workflowData = null) {
+            // Create PhaseEditor with callbacks
+            phaseEditor = new PhaseEditor({
+                onChange: (nodeId, data) => {
+                    // When form changes, update the graph node visually
+                    if (workflowGraph) {
+                        workflowGraph.updateNode(nodeId, data);
+                    }
+                },
+                onDelete: (phase) => {
+                    // Close the panel after delete (actual deletion handled by T4)
+                    if (phaseEditor) {
+                        phaseEditor.hide();
+                    }
+                    console.log('Phase delete requested:', phase.id);
+                },
+                onDuplicate: (phase) => {
+                    // Duplicate handling will be added in T4
+                    console.log('Phase duplicate requested:', phase.id);
+                }
+            });
+
+            // Create WorkflowGraph with node selection callback
+            workflowGraph = new WorkflowGraph(graphContainer, {
+                onNodeSelect: (node) => {
+                    // When a node is clicked, open the phase editor panel
+                    if (phaseEditor) {
+                        phaseEditor.show(node);
+                    }
+                },
+                onEdgeSelect: (edge) => {
+                    // Edge selection will be handled in T5
+                    // For now, close the phase editor if open
+                    if (phaseEditor && phaseEditor.isOpen) {
+                        phaseEditor.hide();
+                    }
+                    console.log('Edge selected:', edge.id);
+                }
+            });
+
+            // Render workflow data if provided
+            if (workflowData) {
+                workflowGraph.render(workflowData);
+            }
+
+            return { workflowGraph, phaseEditor };
+        }
+
+        /**
+         * Load and render a workflow in the graph
+         * @param {string} workflowName - Name of the workflow to load
+         */
+        async function loadWorkflowIntoGraph(workflowName) {
+            if (!workflowGraph) {
+                console.warn('Workflow graph not initialized');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/workflow`);
+                const data = await response.json();
+                if (data.ok && data.phases) {
+                    // Convert phases object to workflow format expected by WorkflowGraph
+                    const workflowData = {
+                        name: workflowName || 'default',
+                        phases: data.phases,
+                        phase_order: data.phase_order || []
+                    };
+                    workflowGraph.render(workflowData);
+                }
+            } catch (e) {
+                console.error('Failed to load workflow into graph:', e);
+            }
+        }
+
+        // Expose functions globally for console testing and future integration
+        window.initWorkflowEditor = initWorkflowEditor;
+        window.loadWorkflowIntoGraph = loadWorkflowIntoGraph;
+        window.getWorkflowGraph = () => workflowGraph;
+        window.getPhaseEditor = () => phaseEditor;
     </script>
 </body>
 </html>

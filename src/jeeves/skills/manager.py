@@ -5,8 +5,13 @@ The SkillManager resolves which skills apply to a workflow phase and copies
 them to the target .claude/skills/ directory before SDK invocation.
 """
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class SkillRegistry:
@@ -47,14 +52,47 @@ class SkillRegistry:
         """
         Load registry from YAML file.
 
+        Handles missing files and partial configurations gracefully by using
+        empty defaults for any missing sections.
+
         Args:
             path: Path to the registry.yaml file
 
         Returns:
             A SkillRegistry instance with the parsed configuration
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            yaml.YAMLError: If the file contains invalid YAML
         """
-        # Implementation will be added in T2
-        raise NotImplementedError("SkillRegistry.from_yaml will be implemented in T2")
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        # Handle empty file (yaml.safe_load returns None)
+        if data is None:
+            data = {}
+
+        return cls(
+            version=data.get("version", 1),
+            common=data.get("common", []),
+            phases=data.get("phases", {}),
+            phase_type_defaults=data.get("phase_type_defaults", {}),
+        )
+
+    @classmethod
+    def empty(cls) -> "SkillRegistry":
+        """
+        Create an empty registry with default values.
+
+        Returns:
+            A SkillRegistry instance with empty configuration
+        """
+        return cls(
+            version=1,
+            common=[],
+            phases={},
+            phase_type_defaults={},
+        )
 
 
 class SkillManager:
@@ -99,11 +137,19 @@ class SkillManager:
         """
         Lazy-load the registry.
 
+        Returns empty defaults if the registry file doesn't exist.
+
         Returns:
             The SkillRegistry instance for this manager
         """
-        # Implementation will be completed in T2
-        raise NotImplementedError("SkillManager.registry will be implemented in T2")
+        if self._registry is None:
+            if self.registry_path.exists():
+                self._registry = SkillRegistry.from_yaml(self.registry_path)
+            else:
+                # Empty registry if file doesn't exist
+                self._registry = SkillRegistry.empty()
+                logger.warning(f"Registry not found at {self.registry_path}")
+        return self._registry
 
     def resolve_skills(
         self,

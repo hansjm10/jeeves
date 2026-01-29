@@ -48,10 +48,10 @@ class TestViewerWorkflowIntegration:
             workflow = load_workflow(workflows_dir / "default.yaml")
             engine = WorkflowEngine(workflow)
 
-            # With designApproved set, should go to implement
+            # With designApproved set, should go to task_decomposition
             context = {"status": {"designApproved": True}}
             next_phase = engine.evaluate_transitions("design_review", context)
-            assert next_phase == "implement"
+            assert next_phase == "task_decomposition"
 
     def test_code_review_clean_to_complete(self):
         """Test code review transition to complete when clean."""
@@ -66,16 +66,16 @@ class TestViewerWorkflowIntegration:
             assert next_phase == "complete"
             assert engine.is_terminal("complete")
 
-    def test_implement_to_code_review_auto(self):
-        """Test auto-transition from implement to code_review."""
+    def test_implement_task_to_spec_check_auto(self):
+        """Test auto-transition from implement_task to task_spec_check."""
         workflows_dir = Path(__file__).parent.parent / "workflows"
         if (workflows_dir / "default.yaml").exists():
             workflow = load_workflow(workflows_dir / "default.yaml")
             engine = WorkflowEngine(workflow)
 
-            # After implement completes, should auto-transition to code_review
-            next_phase = engine.evaluate_transitions("implement", {})
-            assert next_phase == "code_review"
+            # After implement_task completes, should auto-transition to task_spec_check
+            next_phase = engine.evaluate_transitions("implement_task", {})
+            assert next_phase == "task_spec_check"
 
     def test_terminal_phase_no_transitions(self):
         """Test that terminal phases have no transitions."""
@@ -98,7 +98,10 @@ class TestViewerWorkflowIntegration:
             # Check prompts for key phases
             assert engine.get_prompt_for_phase("design_draft") == "design.draft.md"
             assert engine.get_prompt_for_phase("design_review") == "design.review.md"
-            assert engine.get_prompt_for_phase("implement") == "implement.md"
+            assert engine.get_prompt_for_phase("task_decomposition") == "task.decompose.md"
+            assert engine.get_prompt_for_phase("implement_task") == "task.implement.md"
+            assert engine.get_prompt_for_phase("task_spec_check") == "task.spec_check.md"
+            assert engine.get_prompt_for_phase("completeness_verification") == "verify.completeness.md"
             assert engine.get_prompt_for_phase("code_review") == "review.evaluate.md"
             # Terminal phase has no prompt
             assert engine.get_prompt_for_phase("complete") is None

@@ -1251,6 +1251,67 @@
             font-size: 16px;
         }
 
+        /* Workflow Toolbar Styles */
+        .workflow-toolbar {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+
+        .workflow-toolbar button {
+            padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .workflow-toolbar button:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-toolbar button:active {
+            background: var(--bg-primary);
+        }
+
+        /* Unsaved Changes Indicator */
+        .workflow-unsaved-indicator {
+            position: absolute;
+            top: 16px;
+            right: 350px;
+            padding: 6px 12px;
+            background: rgba(210, 153, 34, 0.15);
+            border: 1px solid var(--accent-yellow);
+            border-radius: 20px;
+            color: var(--accent-yellow);
+            font-size: 12px;
+            font-weight: 500;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            z-index: 100;
+        }
+
+        .workflow-unsaved-indicator.visible {
+            display: flex;
+        }
+
+        .workflow-unsaved-indicator::before {
+            content: '●';
+            font-size: 8px;
+        }
+
         /* Phase Editor Panel Styles */
         .phase-editor-panel {
             position: fixed;
@@ -1688,6 +1749,7 @@
                     nodeHeight: 40,
                     onNodeSelect: options.onNodeSelect || null,
                     onEdgeSelect: options.onEdgeSelect || null,
+                    onModified: options.onModified || null,
                     ...options
                 };
 
@@ -1698,6 +1760,7 @@
                 this.selectedNode = null;
                 this.selectedEdge = null;
                 this.simulation = null;
+                this.isModified = false;
 
                 // Phase type colors
                 this.typeColors = {
@@ -1950,6 +2013,16 @@
                 this.svg.on('click', () => {
                     this._clearSelection();
                 });
+
+                // Double-click on background to add new node
+                this.svg.on('dblclick', (event) => {
+                    // Get click position in graph coordinates
+                    const transform = d3.zoomTransform(this.svg.node());
+                    const [x, y] = d3.pointer(event, this.zoomGroup.node());
+
+                    // Create new node at click position
+                    this.addNode({}, x, y);
+                });
             }
 
             /**
@@ -2088,6 +2161,7 @@
                 if (node) {
                     Object.assign(node, data);
                     this._renderNodes();
+                    this._markModified();
                 }
             }
 
@@ -2251,6 +2325,153 @@
                 this.svg.transition()
                     .duration(500)
                     .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Add a new node to the graph
+             * @param {Object} nodeData - Optional node data (id, name, type, etc.)
+             * @param {number} x - Optional x position
+             * @param {number} y - Optional y position
+             * @returns {Object} The created node
+             */
+            addNode(nodeData = {}, x = null, y = null) {
+                // Generate unique ID if not provided
+                const existingIds = this.nodes.map(n => n.id);
+                let newId = nodeData.id || 'new_phase';
+                let counter = 1;
+                while (existingIds.includes(newId)) {
+                    newId = (nodeData.id || 'new_phase') + '_' + counter;
+                    counter++;
+                }
+
+                // Create new node with defaults
+                const newNode = {
+                    id: newId,
+                    name: nodeData.name || newId,
+                    type: nodeData.type || 'execute',
+                    description: nodeData.description || '',
+                    prompt: nodeData.prompt || '',
+                    command: nodeData.command || '',
+                    phase: nodeData.phase || {},
+                    // Position at specified location or center of viewport
+                    x: x !== null ? x : this.width / 2,
+                    y: y !== null ? y : this.height / 2
+                };
+
+                this.nodes.push(newNode);
+
+                // Re-create simulation with new nodes
+                this._createSimulation();
+                this._renderElements();
+
+                // Mark as modified
+                this._markModified();
+
+                // Select the new node
+                this._selectNode(newNode);
+
+                return newNode;
+            }
+
+            /**
+             * Delete a node and all its connected edges
+             * @param {string} nodeId - ID of the node to delete
+             * @returns {boolean} True if node was deleted
+             */
+            deleteNode(nodeId) {
+                const nodeIndex = this.nodes.findIndex(n => n.id === nodeId);
+                if (nodeIndex === -1) {
+                    console.warn('WorkflowGraph.deleteNode: Node not found:', nodeId);
+                    return false;
+                }
+
+                // Remove the node
+                this.nodes.splice(nodeIndex, 1);
+
+                // Remove all connected edges (source or target matches)
+                this.links = this.links.filter(l => {
+                    const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+                    const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+                    return sourceId !== nodeId && targetId !== nodeId;
+                });
+
+                // Clear selection if deleted node was selected
+                if (this.selectedNode && this.selectedNode.id === nodeId) {
+                    this._clearSelection();
+                }
+
+                // Re-create simulation with updated nodes/links
+                this._createSimulation();
+                this._renderElements();
+
+                // Mark as modified
+                this._markModified();
+
+                return true;
+            }
+
+            /**
+             * Duplicate a node with an incremented name
+             * @param {string} nodeId - ID of the node to duplicate
+             * @returns {Object} The duplicated node, or null if not found
+             */
+            duplicateNode(nodeId) {
+                const sourceNode = this.nodes.find(n => n.id === nodeId);
+                if (!sourceNode) {
+                    console.warn('WorkflowGraph.duplicateNode: Node not found:', nodeId);
+                    return null;
+                }
+
+                // Generate new name with increment
+                const baseName = sourceNode.name.replace(/_copy(?:_\d+)?$/, '');
+                const existingNames = this.nodes.map(n => n.name);
+                let newName = baseName + '_copy';
+                let counter = 2;
+                while (existingNames.includes(newName)) {
+                    newName = baseName + '_copy_' + counter;
+                    counter++;
+                }
+
+                // Create duplicate with offset position
+                const duplicatedNode = this.addNode({
+                    id: newName,
+                    name: newName,
+                    type: sourceNode.type,
+                    description: sourceNode.description,
+                    prompt: sourceNode.prompt,
+                    command: sourceNode.command,
+                    phase: { ...sourceNode.phase }
+                }, sourceNode.x + 50, sourceNode.y + 50);
+
+                return duplicatedNode;
+            }
+
+            /**
+             * Mark the graph as modified (unsaved changes)
+             */
+            _markModified() {
+                this.isModified = true;
+                if (this.options.onModified) {
+                    this.options.onModified(true);
+                }
+            }
+
+            /**
+             * Clear the modified state
+             */
+            clearModified() {
+                this.isModified = false;
+                if (this.options.onModified) {
+                    this.options.onModified(false);
+                }
+            }
+
+            /**
+             * Check if the graph has unsaved changes
+             * @returns {boolean}
+             */
+            hasUnsavedChanges() {
+                return this.isModified === true;
             }
 
             /**
@@ -4251,12 +4472,44 @@
         let workflowGraph = null;
         let phaseEditor = null;
 
+        // Track unsaved changes indicator element
+        let unsavedIndicator = null;
+
         /**
          * Initialize the workflow editor components
          * @param {HTMLElement|string} graphContainer - Container for the graph
          * @param {Object} workflowData - Optional workflow data to render
          */
         function initWorkflowEditor(graphContainer, workflowData = null) {
+            // Get the container element
+            const container = typeof graphContainer === 'string'
+                ? document.querySelector(graphContainer)
+                : graphContainer;
+
+            if (!container) {
+                console.error('initWorkflowEditor: container not found');
+                return null;
+            }
+
+            // Ensure container has relative positioning for absolute children
+            container.style.position = 'relative';
+
+            // Create toolbar with Add Phase button
+            const toolbar = document.createElement('div');
+            toolbar.className = 'workflow-toolbar';
+            toolbar.innerHTML = `
+                <button id="workflowAddPhaseBtn" title="Add new phase (or double-click canvas)">
+                    <span>+</span> Add Phase
+                </button>
+            `;
+            container.appendChild(toolbar);
+
+            // Create unsaved changes indicator
+            unsavedIndicator = document.createElement('div');
+            unsavedIndicator.className = 'workflow-unsaved-indicator';
+            unsavedIndicator.textContent = 'Unsaved changes';
+            container.appendChild(unsavedIndicator);
+
             // Create PhaseEditor with callbacks
             phaseEditor = new PhaseEditor({
                 onChange: (nodeId, data) => {
@@ -4266,15 +4519,24 @@
                     }
                 },
                 onDelete: (phase) => {
-                    // Close the panel after delete (actual deletion handled by T4)
-                    if (phaseEditor) {
-                        phaseEditor.hide();
+                    // Delete the phase from the graph
+                    if (workflowGraph && phase) {
+                        const confirmed = confirm(`Delete phase "${phase.name || phase.id}"? This will also remove all connected transitions.`);
+                        if (confirmed) {
+                            workflowGraph.deleteNode(phase.id);
+                            phaseEditor.hide();
+                        }
                     }
-                    console.log('Phase delete requested:', phase.id);
                 },
                 onDuplicate: (phase) => {
-                    // Duplicate handling will be added in T4
-                    console.log('Phase duplicate requested:', phase.id);
+                    // Duplicate the phase in the graph
+                    if (workflowGraph && phase) {
+                        const newNode = workflowGraph.duplicateNode(phase.id);
+                        if (newNode) {
+                            // Open the duplicated node in the editor
+                            phaseEditor.show(newNode);
+                        }
+                    }
                 }
             });
 
@@ -4293,8 +4555,24 @@
                         phaseEditor.hide();
                     }
                     console.log('Edge selected:', edge.id);
+                },
+                onModified: (isModified) => {
+                    // Show/hide unsaved changes indicator
+                    if (unsavedIndicator) {
+                        unsavedIndicator.classList.toggle('visible', isModified);
+                    }
                 }
             });
+
+            // Wire up Add Phase button
+            const addPhaseBtn = document.getElementById('workflowAddPhaseBtn');
+            if (addPhaseBtn) {
+                addPhaseBtn.addEventListener('click', () => {
+                    if (workflowGraph) {
+                        workflowGraph.addNode();
+                    }
+                });
+            }
 
             // Render workflow data if provided
             if (workflowData) {

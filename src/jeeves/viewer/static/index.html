@@ -1164,6 +1164,33 @@
             fill: var(--accent-blue);
         }
 
+        /* Transition drawing line (temp line while dragging) */
+        .workflow-drawing-line {
+            stroke: var(--accent-blue);
+            stroke-width: 2px;
+            stroke-dasharray: 5, 5;
+            fill: none;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+
+        /* Node edge handle - invisible hotspot for starting transition drag */
+        .workflow-node-edge-handle {
+            fill: transparent;
+            cursor: crosshair;
+        }
+
+        .workflow-node-edge-handle:hover {
+            fill: rgba(88, 166, 255, 0.2);
+        }
+
+        /* Visual indicator when dragging over a valid drop target */
+        .workflow-node.drop-target rect {
+            stroke: var(--accent-blue) !important;
+            stroke-width: 4px;
+            filter: drop-shadow(0 0 6px var(--accent-blue));
+        }
+
         /* Phase type colors */
         .workflow-node.type-execute rect {
             fill: rgba(210, 153, 34, 0.2);
@@ -1954,8 +1981,10 @@
                 this.options = {
                     nodeWidth: 140,
                     nodeHeight: 40,
+                    edgeHandleWidth: 20,  // Width of edge handle area
                     onNodeSelect: options.onNodeSelect || null,
                     onEdgeSelect: options.onEdgeSelect || null,
+                    onEdgeCreated: options.onEdgeCreated || null,  // Called when new edge is created via drag
                     onModified: options.onModified || null,
                     ...options
                 };
@@ -1968,6 +1997,12 @@
                 this.selectedEdge = null;
                 this.simulation = null;
                 this.isModified = false;
+
+                // Transition drawing state
+                this.isDrawingTransition = false;
+                this.drawingSourceNode = null;
+                this.drawingLine = null;
+                this.dropTargetNode = null;
 
                 // Phase type colors
                 this.typeColors = {
@@ -2018,11 +2053,13 @@
                 this.zoomGroup = this.svg.append('g')
                     .attr('class', 'zoom-container');
 
-                // Create groups for edges and nodes (edges below nodes)
+                // Create groups for edges and nodes (edges below nodes, drawing line on top)
                 this.edgeGroup = this.zoomGroup.append('g')
                     .attr('class', 'edges');
                 this.nodeGroup = this.zoomGroup.append('g')
                     .attr('class', 'nodes');
+                this.drawingGroup = this.zoomGroup.append('g')
+                    .attr('class', 'drawing');
 
                 // Setup zoom behavior
                 this.zoom = d3.zoom()
@@ -2185,7 +2222,7 @@
                 this.nodeGroup.selectAll('.workflow-node').remove();
 
                 const self = this;
-                const { nodeWidth, nodeHeight } = this.options;
+                const { nodeWidth, nodeHeight, edgeHandleWidth } = this.options;
 
                 // Create node groups
                 const nodeSelection = this.nodeGroup.selectAll('.workflow-node')
@@ -2196,18 +2233,32 @@
                     .on('click', (event, d) => {
                         event.stopPropagation();
                         this._selectNode(d);
-                    })
+                    });
+
+                // Add rectangle for each node (main body - draggable)
+                nodeSelection.append('rect')
+                    .attr('class', 'node-body')
+                    .attr('width', nodeWidth)
+                    .attr('height', nodeHeight)
+                    .attr('x', -nodeWidth / 2)
+                    .attr('y', -nodeHeight / 2)
                     .call(d3.drag()
                         .on('start', (event, d) => this._dragStarted(event, d))
                         .on('drag', (event, d) => this._dragged(event, d))
                         .on('end', (event, d) => this._dragEnded(event, d)));
 
-                // Add rectangle for each node
+                // Add edge handle on the right side (for starting transition drawing)
                 nodeSelection.append('rect')
-                    .attr('width', nodeWidth)
+                    .attr('class', 'workflow-node-edge-handle')
+                    .attr('width', edgeHandleWidth)
                     .attr('height', nodeHeight)
-                    .attr('x', -nodeWidth / 2)
-                    .attr('y', -nodeHeight / 2);
+                    .attr('x', nodeWidth / 2 - edgeHandleWidth)
+                    .attr('y', -nodeHeight / 2)
+                    .attr('rx', 4)
+                    .call(d3.drag()
+                        .on('start', (event, d) => this._transitionDragStart(event, d))
+                        .on('drag', (event, d) => this._transitionDrag(event, d))
+                        .on('end', (event, d) => this._transitionDragEnd(event, d)));
 
                 // Add text label
                 nodeSelection.append('text')
@@ -2296,6 +2347,100 @@
                 // Keep the node fixed at its dragged position
                 // d.fx = null;
                 // d.fy = null;
+            }
+
+            /**
+             * Transition drawing drag handlers
+             * These handle dragging from a node's edge handle to create a new transition
+             */
+            _transitionDragStart(event, d) {
+                event.sourceEvent.stopPropagation();
+
+                this.isDrawingTransition = true;
+                this.drawingSourceNode = d;
+
+                // Create the temporary drawing line
+                this.drawingLine = this.drawingGroup.append('line')
+                    .attr('class', 'workflow-drawing-line')
+                    .attr('x1', d.x)
+                    .attr('y1', d.y)
+                    .attr('x2', d.x)
+                    .attr('y2', d.y);
+            }
+
+            _transitionDrag(event, d) {
+                if (!this.isDrawingTransition || !this.drawingLine) return;
+
+                // Get mouse position in graph coordinates
+                const [mouseX, mouseY] = d3.pointer(event, this.zoomGroup.node());
+
+                // Update the line endpoint to follow the mouse
+                this.drawingLine
+                    .attr('x2', mouseX)
+                    .attr('y2', mouseY);
+
+                // Check for drop targets (nodes under the mouse)
+                const { nodeWidth, nodeHeight } = this.options;
+                const previousTarget = this.dropTargetNode;
+                this.dropTargetNode = null;
+
+                this.nodes.forEach(node => {
+                    // Don't allow connecting to self
+                    if (node.id === this.drawingSourceNode.id) return;
+
+                    // Check if mouse is within node bounds
+                    const inX = mouseX >= node.x - nodeWidth / 2 && mouseX <= node.x + nodeWidth / 2;
+                    const inY = mouseY >= node.y - nodeHeight / 2 && mouseY <= node.y + nodeHeight / 2;
+
+                    if (inX && inY) {
+                        this.dropTargetNode = node;
+                    }
+                });
+
+                // Update drop target visual state
+                if (this.nodeElements) {
+                    this.nodeElements.classed('drop-target', n =>
+                        this.dropTargetNode && n.id === this.dropTargetNode.id
+                    );
+                }
+            }
+
+            _transitionDragEnd(event, d) {
+                if (!this.isDrawingTransition) return;
+
+                // Remove the temporary drawing line
+                if (this.drawingLine) {
+                    this.drawingLine.remove();
+                    this.drawingLine = null;
+                }
+
+                // Clear drop target styling
+                if (this.nodeElements) {
+                    this.nodeElements.classed('drop-target', false);
+                }
+
+                // If we have a valid drop target, create the edge
+                if (this.dropTargetNode && this.drawingSourceNode) {
+                    const newEdge = this.addEdge(
+                        this.drawingSourceNode.id,
+                        this.dropTargetNode.id
+                    );
+
+                    // Select the new edge and trigger callback
+                    if (newEdge) {
+                        this._selectEdge(newEdge);
+
+                        // Trigger onEdgeCreated callback so the editor can open
+                        if (this.options.onEdgeCreated) {
+                            this.options.onEdgeCreated(newEdge);
+                        }
+                    }
+                }
+
+                // Reset drawing state
+                this.isDrawingTransition = false;
+                this.drawingSourceNode = null;
+                this.dropTargetNode = null;
             }
 
             /**
@@ -2429,6 +2574,65 @@
                     this._renderEdges();
                     this._markModified();
                 }
+            }
+
+            /**
+             * Add a new edge (transition) between two nodes
+             * @param {string} sourceId - ID of the source node
+             * @param {string} targetId - ID of the target node
+             * @param {Object} edgeData - Optional additional edge data (guard, auto, priority)
+             * @returns {Object} The created edge, or null if invalid
+             */
+            addEdge(sourceId, targetId, edgeData = {}) {
+                // Validate source and target exist
+                const sourceNode = this.nodes.find(n => n.id === sourceId);
+                const targetNode = this.nodes.find(n => n.id === targetId);
+
+                if (!sourceNode || !targetNode) {
+                    console.warn('WorkflowGraph.addEdge: Source or target node not found');
+                    return null;
+                }
+
+                // Don't allow self-loops
+                if (sourceId === targetId) {
+                    console.warn('WorkflowGraph.addEdge: Cannot create self-loop');
+                    return null;
+                }
+
+                // Generate unique edge ID
+                // Check for existing edges between these nodes to determine index
+                const existingEdges = this.links.filter(l => {
+                    const src = typeof l.source === 'object' ? l.source.id : l.source;
+                    const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+                    return src === sourceId && tgt === targetId;
+                });
+                const edgeIndex = existingEdges.length;
+                const edgeId = `${sourceId}-${targetId}-${edgeIndex}`;
+
+                // Create the new edge
+                const newEdge = {
+                    id: edgeId,
+                    source: sourceNode,
+                    target: targetNode,
+                    guard: edgeData.guard || '',
+                    auto: edgeData.auto || false,
+                    priority: edgeData.priority || 0,
+                    transition: edgeData.transition || {}
+                };
+
+                this.links.push(newEdge);
+
+                // Update the simulation with new links
+                if (this.simulation) {
+                    this.simulation.force('link').links(this.links);
+                    this.simulation.alpha(0.3).restart();
+                }
+
+                // Re-render edges
+                this._renderEdges();
+                this._markModified();
+
+                return newEdge;
             }
 
             /**
@@ -5111,6 +5315,16 @@
                 },
                 onEdgeSelect: (edge) => {
                     // When an edge is clicked, open the transition editor panel
+                    // Close phase editor if open
+                    if (phaseEditor && phaseEditor.isOpen) {
+                        phaseEditor.hide();
+                    }
+                    if (transitionEditor) {
+                        transitionEditor.show(edge);
+                    }
+                },
+                onEdgeCreated: (edge) => {
+                    // When a new edge is created via drag-to-draw, open the transition editor
                     // Close phase editor if open
                     if (phaseEditor && phaseEditor.isOpen) {
                         phaseEditor.hide();

@@ -171,8 +171,23 @@ class SkillManager:
         Returns:
             Set of skill names to provision
         """
-        # Implementation will be added in T3
-        raise NotImplementedError("SkillManager.resolve_skills will be implemented in T3")
+        skills: Set[str] = set()
+
+        # 1. Common skills (always included)
+        skills.update(self.registry.common)
+
+        # 2. Phase-specific skills (exact phase name match)
+        if phase in self.registry.phases:
+            phase_skills = self.registry.phases[phase]
+            if phase_skills:  # Handle None or empty list from YAML
+                skills.update(phase_skills)
+        else:
+            # 3. Phase-type defaults (fallback for unmapped phases)
+            type_defaults = self.registry.phase_type_defaults.get(phase_type)
+            if type_defaults:  # Handle None or empty list from YAML
+                skills.update(type_defaults)
+
+        return skills
 
     def find_skill_path(self, skill_name: str) -> Optional[Path]:
         """

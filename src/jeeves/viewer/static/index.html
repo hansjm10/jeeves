@@ -1184,6 +1184,72 @@
             fill: rgba(63, 185, 80, 0.2);
             stroke: #3fb950;
         }
+
+        /* Workflow Graph Zoom Controls */
+        .workflow-zoom-controls {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 100;
+        }
+
+        .workflow-zoom-controls button {
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .workflow-zoom-controls button:hover {
+            background: var(--bg-hover);
+            border-color: var(--text-secondary);
+        }
+
+        .workflow-zoom-controls button:active {
+            background: var(--bg-active);
+        }
+
+        .workflow-zoom-controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .workflow-zoom-controls .zoom-level {
+            font-size: 11px;
+            text-align: center;
+            color: var(--text-muted);
+            padding: 4px 0;
+            min-width: 36px;
+        }
+
+        .workflow-zoom-controls .zoom-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 4px 0;
+        }
+
+        /* Fit to view icon using CSS */
+        .workflow-zoom-controls .btn-fit::before {
+            content: '⊡';
+            font-size: 16px;
+        }
+
+        .workflow-zoom-controls .btn-reset::before {
+            content: '⌖';
+            font-size: 16px;
+        }
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -1852,6 +1918,141 @@
                     this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
                     this.simulation.alpha(0.3).restart();
                 }
+            }
+
+            /**
+             * Zoom in by a fixed step
+             * @param {number} step - Zoom increment (default 0.3)
+             */
+            zoomIn(step = 0.3) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleBy, 1 + step);
+            }
+
+            /**
+             * Zoom out by a fixed step
+             * @param {number} step - Zoom decrement (default 0.3)
+             */
+            zoomOut(step = 0.3) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleBy, 1 - step);
+            }
+
+            /**
+             * Fit the graph to the viewport, centering and scaling appropriately
+             */
+            fitToView() {
+                if (!this.nodes || this.nodes.length === 0) {
+                    return;
+                }
+
+                // Calculate bounding box of all nodes
+                const padding = 50;
+                const { nodeWidth, nodeHeight } = this.options;
+
+                let minX = Infinity, minY = Infinity;
+                let maxX = -Infinity, maxY = -Infinity;
+
+                this.nodes.forEach(node => {
+                    const x = node.x || 0;
+                    const y = node.y || 0;
+                    minX = Math.min(minX, x - nodeWidth / 2);
+                    maxX = Math.max(maxX, x + nodeWidth / 2);
+                    minY = Math.min(minY, y - nodeHeight / 2);
+                    maxY = Math.max(maxY, y + nodeHeight / 2);
+                });
+
+                const graphWidth = maxX - minX + padding * 2;
+                const graphHeight = maxY - minY + padding * 2;
+
+                // Get viewport dimensions
+                const rect = this.container.getBoundingClientRect();
+                const viewportWidth = rect.width || 800;
+                const viewportHeight = rect.height || 600;
+
+                // Calculate scale to fit
+                const scaleX = viewportWidth / graphWidth;
+                const scaleY = viewportHeight / graphHeight;
+                const scale = Math.min(scaleX, scaleY, 2); // Cap at 2x zoom
+
+                // Calculate center offset
+                const graphCenterX = (minX + maxX) / 2;
+                const graphCenterY = (minY + maxY) / 2;
+
+                const translateX = viewportWidth / 2 - graphCenterX * scale;
+                const translateY = viewportHeight / 2 - graphCenterY * scale;
+
+                // Apply transform with animation
+                const transform = d3.zoomIdentity
+                    .translate(translateX, translateY)
+                    .scale(scale);
+
+                this.svg.transition()
+                    .duration(500)
+                    .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Reset zoom to default (1:1 scale, centered)
+             */
+            resetZoom() {
+                const rect = this.container.getBoundingClientRect();
+                const transform = d3.zoomIdentity
+                    .translate(0, 0)
+                    .scale(1);
+
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.transform, transform);
+            }
+
+            /**
+             * Get the current zoom level
+             * @returns {number} Current zoom scale
+             */
+            getZoomLevel() {
+                const transform = d3.zoomTransform(this.svg.node());
+                return transform.k;
+            }
+
+            /**
+             * Set zoom level to a specific value
+             * @param {number} level - Target zoom level
+             */
+            setZoomLevel(level) {
+                this.svg.transition()
+                    .duration(300)
+                    .call(this.zoom.scaleTo, level);
+            }
+
+            /**
+             * Center on a specific node
+             * @param {string} nodeId - ID of the node to center on
+             */
+            centerOnNode(nodeId) {
+                const node = this.nodes.find(n => n.id === nodeId);
+                if (!node) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const viewportWidth = rect.width || 800;
+                const viewportHeight = rect.height || 600;
+
+                // Get current zoom level to preserve it
+                const currentTransform = d3.zoomTransform(this.svg.node());
+                const scale = currentTransform.k;
+
+                const translateX = viewportWidth / 2 - node.x * scale;
+                const translateY = viewportHeight / 2 - node.y * scale;
+
+                const transform = d3.zoomIdentity
+                    .translate(translateX, translateY)
+                    .scale(scale);
+
+                this.svg.transition()
+                    .duration(500)
+                    .call(this.zoom.transform, transform);
             }
 
             /**

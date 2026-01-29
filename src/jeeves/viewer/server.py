@@ -59,8 +59,9 @@ from jeeves.core.issue import (
 from jeeves.core.repo import ensure_repo, RepoError
 from jeeves.core.worktree import create_worktree, WorktreeError, _create_state_symlink
 from jeeves.core.workflow import PhaseType
-from jeeves.core.workflow_loader import load_workflow_by_name
+from jeeves.core.workflow_loader import load_workflow_by_name, WorkflowValidationError, load_workflow
 from jeeves.core.engine import WorkflowEngine
+import yaml
 from jeeves.core.script_runner import run_script_phase
 
 
@@ -106,6 +107,251 @@ def resolve_prompt_path(phase: str, prompts_dir: Path, engine: WorkflowEngine) -
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt not found: {prompt_path}")
     return prompt_path
+
+
+class JeevesWorkflowManager:
+    """Read/write Jeeves workflow definitions from workflows/ directory."""
+
+    # Known status fields for autocomplete in guard expressions
+    KNOWN_STATUS_FIELDS = [
+        "designApproved",
+        "designNeedsChanges",
+        "designDraftComplete",
+        "taskDecompositionComplete",
+        "currentTaskId",
+        "taskPassed",
+        "taskFailed",
+        "hasMoreTasks",
+        "allTasksComplete",
+        "commitFailed",
+        "pushFailed",
+        "missingWork",
+        "implementationComplete",
+        "prCreated",
+        "reviewNeedsChanges",
+        "reviewClean",
+    ]
+
+    def __init__(self, workflows_dir: Path):
+        self.workflows_dir = workflows_dir.resolve()
+        self._lock = Lock()
+
+    def _resolve_workflow_name(self, name: str) -> Path:
+        """Resolve workflow name to file path with path traversal prevention."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("workflow name is required")
+        if "/" in name or "\\" in name or ".." in name:
+            raise ValueError("invalid workflow name")
+        if not name.endswith(".yaml"):
+            name = f"{name}.yaml"
+
+        path = (self.workflows_dir / name).resolve()
+        try:
+            path.relative_to(self.workflows_dir)
+        except ValueError as e:
+            raise ValueError("invalid workflow name") from e
+
+        return path
+
+    def list_workflows(self) -> List[Dict]:
+        """List all workflow files in the workflows directory."""
+        workflows: List[Dict] = []
+        try:
+            for path in sorted(self.workflows_dir.glob("*.yaml")):
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                workflows.append({
+                    "name": path.stem,
+                    "path": str(path),
+                    "mtime": stat.st_mtime,
+                    "size": stat.st_size,
+                })
+        except Exception:
+            return []
+        return workflows
+
+    def get_workflow_full(self, name: str) -> Dict:
+        """Get complete workflow definition as JSON."""
+        path = self._resolve_workflow_name(name)
+        if not path.exists():
+            raise FileNotFoundError(f"Workflow not found: {name}")
+
+        try:
+            workflow = load_workflow(path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load workflow: {e}") from e
+
+        # Convert to JSON-serializable format
+        phases = {}
+        for phase_name, phase in workflow.phases.items():
+            phase_data = {
+                "name": phase_name,
+                "type": phase.type.value,
+                "description": phase.description or "",
+                "transitions": [
+                    {
+                        "to": t.to,
+                        "when": t.when,
+                        "auto": t.auto,
+                        "priority": t.priority,
+                    }
+                    for t in phase.transitions
+                ],
+            }
+            if phase.prompt:
+                phase_data["prompt"] = phase.prompt
+            if phase.command:
+                phase_data["command"] = phase.command
+            if phase.allowed_writes and phase.allowed_writes != [".jeeves/*"]:
+                phase_data["allowed_writes"] = phase.allowed_writes
+            phases[phase_name] = phase_data
+
+        return {
+            "workflow": {
+                "name": workflow.name,
+                "version": workflow.version,
+                "start": workflow.start,
+            },
+            "phases": phases,
+        }
+
+    def save_workflow(self, name: str, data: Dict) -> None:
+        """Save workflow definition to YAML file."""
+        path = self._resolve_workflow_name(name)
+
+        # Validate the workflow data first
+        errors = self.validate_workflow(data)
+        if errors:
+            raise ValueError(f"Workflow validation failed: {'; '.join(errors)}")
+
+        # Convert JSON format to YAML format
+        yaml_data = {
+            "workflow": data.get("workflow", {"name": name, "version": 1, "start": "design_draft"}),
+            "phases": {},
+        }
+
+        phases = data.get("phases", {})
+        for phase_name, phase in phases.items():
+            phase_yaml = {"type": phase.get("type", "execute")}
+
+            if phase.get("description"):
+                phase_yaml["description"] = phase["description"]
+            if phase.get("prompt"):
+                phase_yaml["prompt"] = phase["prompt"]
+            if phase.get("command"):
+                phase_yaml["command"] = phase["command"]
+            if phase.get("allowed_writes"):
+                phase_yaml["allowed_writes"] = phase["allowed_writes"]
+
+            transitions = phase.get("transitions", [])
+            if transitions:
+                phase_yaml["transitions"] = []
+                for t in transitions:
+                    t_yaml = {"to": t["to"]}
+                    if t.get("when"):
+                        t_yaml["when"] = t["when"]
+                    if t.get("auto"):
+                        t_yaml["auto"] = t["auto"]
+                    if t.get("priority", 0) != 0:
+                        t_yaml["priority"] = t["priority"]
+                    phase_yaml["transitions"].append(t_yaml)
+
+            yaml_data["phases"][phase_name] = phase_yaml
+
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+
+        with self._lock:
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+                tmp_path.replace(path)
+            finally:
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+
+    def validate_workflow(self, data: Dict) -> List[str]:
+        """Validate workflow structure without saving. Returns list of error messages."""
+        errors: List[str] = []
+
+        workflow = data.get("workflow", {})
+        phases = data.get("phases", {})
+
+        if not phases:
+            errors.append("Workflow has no phases")
+            return errors
+
+        start = workflow.get("start", "")
+        if not start:
+            errors.append("Workflow has no start phase defined")
+        elif start not in phases:
+            errors.append(f"Start phase '{start}' not found in workflow phases")
+
+        # Check all transition targets exist
+        for phase_name, phase in phases.items():
+            for transition in phase.get("transitions", []):
+                if transition.get("to") not in phases:
+                    errors.append(f"Phase '{phase_name}' has transition to unknown phase '{transition.get('to')}'")
+
+        # Check execute/evaluate phases have prompts
+        for phase_name, phase in phases.items():
+            phase_type = phase.get("type", "execute")
+            if phase_type in ("execute", "evaluate"):
+                if not phase.get("prompt"):
+                    errors.append(f"Phase '{phase_name}' of type '{phase_type}' requires a prompt")
+
+        # Check script phases have commands
+        for phase_name, phase in phases.items():
+            if phase.get("type") == "script":
+                if not phase.get("command"):
+                    errors.append(f"Script phase '{phase_name}' requires a command")
+
+        # Check at least one terminal phase exists
+        terminal_phases = [name for name, p in phases.items() if p.get("type") == "terminal"]
+        if not terminal_phases:
+            errors.append("Workflow has no terminal phase")
+
+        return errors
+
+    def duplicate_workflow(self, source_name: str, target_name: str) -> str:
+        """Duplicate a workflow with a new name."""
+        if not target_name or "/" in target_name or "\\" in target_name or ".." in target_name:
+            raise ValueError("Invalid target workflow name")
+
+        source_path = self._resolve_workflow_name(source_name)
+        target_path = self._resolve_workflow_name(target_name)
+
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source workflow not found: {source_name}")
+        if target_path.exists():
+            raise ValueError(f"Target workflow already exists: {target_name}")
+
+        # Load source and update name
+        data = self.get_workflow_full(source_name)
+        data["workflow"]["name"] = target_name
+
+        self.save_workflow(target_name, data)
+        return target_name
+
+    def delete_workflow(self, name: str) -> None:
+        """Delete a workflow file."""
+        path = self._resolve_workflow_name(name)
+
+        if not path.exists():
+            raise FileNotFoundError(f"Workflow not found: {name}")
+
+        # Safety check: don't allow deleting default workflow
+        if name == "default" or path.stem == "default":
+            raise ValueError("Cannot delete the default workflow")
+
+        with self._lock:
+            path.unlink()
+
+    def get_status_fields(self) -> List[str]:
+        """Return list of known status field names for autocomplete."""
+        return list(self.KNOWN_STATUS_FIELDS)
 
 
 class JeevesPromptManager:
@@ -1075,12 +1321,14 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         state: JeevesState,
         run_manager: JeevesRunManager,
         prompt_manager: JeevesPromptManager,
+        workflow_manager: JeevesWorkflowManager,
         allow_remote_run: bool = False,
         **kwargs,
     ):
         self.state = state
         self.run_manager = run_manager
         self.prompt_manager = prompt_manager
+        self.workflow_manager = workflow_manager
         self.allow_remote_run = allow_remote_run
         super().__init__(*args, **kwargs)
 
@@ -1131,6 +1379,18 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._handle_data_dir_info()
         elif path == "/api/workflow":
             self._handle_workflow()
+        elif path == "/api/workflows":
+            self._handle_workflows_list()
+        elif path.startswith("/api/workflow/") and path.endswith("/full"):
+            # Extract workflow name: /api/workflow/{name}/full
+            parts = path.split("/")
+            if len(parts) >= 4:
+                workflow_name = parts[3]
+                self._handle_workflow_get_full(workflow_name)
+            else:
+                self.send_error(404, "Not Found")
+        elif path == "/api/status-fields":
+            self._handle_status_fields()
         else:
             super().do_GET()
 
@@ -1156,16 +1416,48 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
         if path == "/api/issues/select":
             self._handle_select_issue()
             return
+        # Workflow API routes: /api/workflow/{name}, /api/workflow/{name}/validate, /api/workflow/{name}/duplicate
+        if path.startswith("/api/workflow/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                workflow_name = parts[3]
+                if len(parts) == 4:
+                    # POST /api/workflow/{name} - save workflow
+                    self._handle_workflow_save(workflow_name)
+                    return
+                elif len(parts) == 5 and parts[4] == "validate":
+                    # POST /api/workflow/{name}/validate
+                    self._handle_workflow_validate(workflow_name)
+                    return
+                elif len(parts) == 5 and parts[4] == "duplicate":
+                    # POST /api/workflow/{name}/duplicate
+                    self._handle_workflow_duplicate(workflow_name)
+                    return
 
         self.send_error(404, "Not Found")
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
+
+    def do_DELETE(self):
+        """Handle DELETE requests"""
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        # DELETE /api/workflow/{name}
+        if path.startswith("/api/workflow/"):
+            parts = path.split("/")
+            if len(parts) == 4:
+                workflow_name = parts[3]
+                self._handle_workflow_delete(workflow_name)
+                return
+
+        self.send_error(404, "Not Found")
 
     def _is_local_request(self) -> bool:
         ip = (self.client_address[0] or "").strip()
@@ -1709,6 +2001,116 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             "phase_order": phase_order,
         })
 
+    def _handle_workflows_list(self):
+        """Handle GET /api/workflows - List all workflow files."""
+        workflows = self.workflow_manager.list_workflows()
+        self._send_json({"ok": True, "workflows": workflows})
+
+    def _handle_workflow_get_full(self, name: str):
+        """Handle GET /api/workflow/{name}/full - Get complete workflow JSON."""
+        try:
+            data = self.workflow_manager.get_workflow_full(name)
+            self._send_json({"ok": True, **data})
+        except FileNotFoundError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=404)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"Failed to load workflow: {e}"}, status=500)
+
+    def _handle_workflow_save(self, name: str):
+        """Handle POST /api/workflow/{name} - Save workflow to YAML file."""
+        if not self.allow_remote_run and not self._is_local_request():
+            self._send_json({
+                "ok": False,
+                "error": "Workflow editing is only allowed from localhost.",
+            }, status=403)
+            return
+
+        body = self._read_json_body()
+        workflow_data = body.get("workflow", body)  # Accept both {workflow: {...}} and direct data
+
+        # Ensure we have the workflow wrapper
+        if "workflow" not in workflow_data and "phases" in workflow_data:
+            # Direct data format - wrap it
+            pass
+        elif "workflow" in workflow_data:
+            # Already wrapped
+            workflow_data = workflow_data
+
+        try:
+            self.workflow_manager.save_workflow(name, workflow_data)
+            self._send_json({"ok": True, "name": name})
+        except FileNotFoundError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=404)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"Failed to save workflow: {e}"}, status=500)
+
+    def _handle_workflow_validate(self, name: str):
+        """Handle POST /api/workflow/{name}/validate - Validate workflow without saving."""
+        body = self._read_json_body()
+        workflow_data = body.get("workflow", body)
+
+        errors = self.workflow_manager.validate_workflow(workflow_data)
+
+        self._send_json({
+            "ok": True,
+            "valid": len(errors) == 0,
+            "errors": errors,
+        })
+
+    def _handle_workflow_duplicate(self, source_name: str):
+        """Handle POST /api/workflow/{name}/duplicate - Create copy of workflow."""
+        if not self.allow_remote_run and not self._is_local_request():
+            self._send_json({
+                "ok": False,
+                "error": "Workflow editing is only allowed from localhost.",
+            }, status=403)
+            return
+
+        body = self._read_json_body()
+        target_name = body.get("target_name", "").strip()
+
+        if not target_name:
+            self._send_json({"ok": False, "error": "target_name is required"}, status=400)
+            return
+
+        try:
+            new_name = self.workflow_manager.duplicate_workflow(source_name, target_name)
+            self._send_json({"ok": True, "name": new_name})
+        except FileNotFoundError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=404)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"Failed to duplicate workflow: {e}"}, status=500)
+
+    def _handle_workflow_delete(self, name: str):
+        """Handle DELETE /api/workflow/{name} - Delete workflow file."""
+        if not self.allow_remote_run and not self._is_local_request():
+            self._send_json({
+                "ok": False,
+                "error": "Workflow deletion is only allowed from localhost.",
+            }, status=403)
+            return
+
+        try:
+            self.workflow_manager.delete_workflow(name)
+            self._send_json({"ok": True})
+        except FileNotFoundError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=404)
+        except ValueError as e:
+            self._send_json({"ok": False, "error": str(e)}, status=400)
+        except Exception as e:
+            self._send_json({"ok": False, "error": f"Failed to delete workflow: {e}"}, status=500)
+
+    def _handle_status_fields(self):
+        """Handle GET /api/status-fields - Return known status field names."""
+        fields = self.workflow_manager.get_status_fields()
+        self._send_json({"ok": True, "fields": fields})
+
     def _handle_data_dir_info(self):
         """Handle GET /api/data-dir - Get info about the central data directory."""
         data_dir = get_data_dir()
@@ -2064,12 +2466,14 @@ def main():
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    # prompts/ directory is at repo root: src/jeeves/viewer/server.py -> src/jeeves/ -> src/ -> repo root
+    # prompts/ and workflows/ directories are at repo root: src/jeeves/viewer/server.py -> src/jeeves/ -> src/ -> repo root
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     prompts_dir = repo_root / "prompts"
+    workflows_dir = repo_root / "workflows"
     state = JeevesState(str(state_dir))
     run_manager = JeevesRunManager(issue_ref=issue_ref, prompts_dir=prompts_dir)
     prompt_manager = JeevesPromptManager(prompts_dir)
+    workflow_manager = JeevesWorkflowManager(workflows_dir)
 
     def handler(*args_handler, **kwargs_handler):
         return JeevesViewerHandler(
@@ -2077,6 +2481,7 @@ def main():
             state=state,
             run_manager=run_manager,
             prompt_manager=prompt_manager,
+            workflow_manager=workflow_manager,
             allow_remote_run=args.allow_remote_run,
             **kwargs_handler,
         )

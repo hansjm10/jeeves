@@ -50,9 +50,14 @@ class TestWorkflowIntegration:
         next_phase = engine.evaluate_transitions("task_spec_check", context)
         assert next_phase == "completeness_verification"
 
-        # completeness_verification with implementationComplete -> code_review
+        # completeness_verification with implementationComplete -> prepare_pr
         context = {"status": {"implementationComplete": True}}
         next_phase = engine.evaluate_transitions("completeness_verification", context)
+        assert next_phase == "prepare_pr"
+
+        # prepare_pr with prCreated -> code_review
+        context = {"status": {"prCreated": True}}
+        next_phase = engine.evaluate_transitions("prepare_pr", context)
         assert next_phase == "code_review"
 
         # code_review with reviewClean -> complete
@@ -128,7 +133,7 @@ class TestWorkflowIntegration:
 
         # Execute phases (can modify code)
         execute_phases = ["design_draft", "design_edit", "task_decomposition",
-                         "implement_task", "code_fix"]
+                         "implement_task", "fix_ci", "prepare_pr", "code_fix"]
         for name in execute_phases:
             phase = workflow.get_phase(name)
             assert phase is not None, f"Phase {name} should exist"
@@ -217,7 +222,7 @@ class TestWorkflowLoaderIntegration:
         """Test that the default workflow loads successfully."""
         workflow = load_workflow(Path("workflows/default.yaml"))
         assert workflow is not None
-        assert len(workflow.phases) == 10  # All phases including task phases and complete
+        assert len(workflow.phases) == 12  # All phases including task phases, fix_ci, prepare_pr, and complete
 
     def test_workflow_phases_are_connected(self):
         """Verify all phases are reachable from start."""

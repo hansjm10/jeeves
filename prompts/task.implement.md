@@ -49,9 +49,19 @@ You are a senior software engineer implementing a single, focused task. You have
 7. Commit your changes:
    - Use a Conventional Commit message with the task ID
    - Example: `feat(tasks): create Task dataclass (T1)`
-   - Use `git commit --no-verify -m "..."`
+   - If commit fails (lint/pre-commit hooks):
+     - Set `status.commitFailed = true` in `.jeeves/issue.json`
+     - Write error details to `.jeeves/ci-error.txt`
+     - End the phase (fix_ci will handle it)
 
-8. Append progress to `.jeeves/progress.txt`.
+8. Push the changes:
+   - Run `git push -u origin HEAD`
+   - If push fails (pre-push hooks, remote rejection):
+     - Set `status.pushFailed = true` in `.jeeves/issue.json`
+     - Write error details to `.jeeves/ci-error.txt`
+     - End the phase (fix_ci will handle it)
+
+9. Append progress to `.jeeves/progress.txt`.
 </instructions>
 
 <file_permissions>

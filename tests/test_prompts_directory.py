@@ -71,5 +71,5 @@ class TestPromptsDirectory:
         prompt_files = list(prompts_dir.glob("*.md"))
         # 11 original + 6 workflow prompts (design.draft, design.review, design.edit,
         # implement, review.evaluate, review.fix) + 4 task prompts (task.decompose,
-        # task.implement, task.spec_check, verify.completeness)
-        assert len(prompt_files) == 21, f"Expected 21 prompt files, found {len(prompt_files)}: {prompt_files}"
+        # task.implement, task.spec_check, verify.completeness) + 2 new prompts (ci.fix, pr.prepare)
+        assert len(prompt_files) == 23, f"Expected 23 prompt files, found {len(prompt_files)}: {prompt_files}"

@@ -63,14 +63,24 @@ class TestTaskWorkflowTransitions:
         next_phase = engine.evaluate_transitions("task_spec_check", context)
         assert next_phase == "completeness_verification"
 
-    def test_completeness_to_code_review(self):
-        """Test completeness_verification to code_review when complete."""
+    def test_completeness_to_prepare_pr(self):
+        """Test completeness_verification to prepare_pr when complete."""
         workflow = load_workflow(Path("workflows/default.yaml"))
         engine = WorkflowEngine(workflow)
 
-        # implementation complete -> code_review
+        # implementation complete -> prepare_pr
         context = {"status": {"implementationComplete": True}}
         next_phase = engine.evaluate_transitions("completeness_verification", context)
+        assert next_phase == "prepare_pr"
+
+    def test_prepare_pr_to_code_review(self):
+        """Test prepare_pr to code_review when PR is created."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # PR created -> code_review
+        context = {"status": {"prCreated": True}}
+        next_phase = engine.evaluate_transitions("prepare_pr", context)
         assert next_phase == "code_review"
 
     def test_completeness_with_missing_work(self):
@@ -122,9 +132,14 @@ class TestTaskLoopCycle:
         phase = engine.evaluate_transitions("task_spec_check", context)
         assert phase == "completeness_verification"
 
-        # Completeness check passes
+        # Completeness check passes -> prepare_pr
         context = {"status": {"implementationComplete": True}}
         phase = engine.evaluate_transitions("completeness_verification", context)
+        assert phase == "prepare_pr"
+
+        # PR created -> code_review
+        context = {"status": {"prCreated": True}}
+        phase = engine.evaluate_transitions("prepare_pr", context)
         assert phase == "code_review"
 
     def test_task_loop_with_new_tasks_from_completeness(self):
@@ -201,6 +216,86 @@ class TestRetryOnSpecCheckFailure:
         context = {"status": {"taskPassed": True, "hasMoreTasks": False, "allTasksComplete": True}}
         phase = engine.evaluate_transitions("task_spec_check", context)
         assert phase == "completeness_verification"
+
+
+class TestCIFailureRecovery:
+    """Tests for CI failure handling transitions."""
+
+    def test_spec_check_routes_to_fix_ci_on_commit_failure(self):
+        """Test that commit failures route to fix_ci phase."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # Commit failed -> fix_ci
+        context = {"status": {"commitFailed": True}}
+        next_phase = engine.evaluate_transitions("task_spec_check", context)
+        assert next_phase == "fix_ci"
+
+    def test_spec_check_routes_to_fix_ci_on_push_failure(self):
+        """Test that push failures route to fix_ci phase."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # Push failed -> fix_ci
+        context = {"status": {"pushFailed": True}}
+        next_phase = engine.evaluate_transitions("task_spec_check", context)
+        assert next_phase == "fix_ci"
+
+    def test_commit_failure_priority_over_push_failure(self):
+        """Test that commitFailed has higher priority than pushFailed."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # Both failures - commitFailed has priority 1, pushFailed has priority 2
+        context = {"status": {"commitFailed": True, "pushFailed": True}}
+        next_phase = engine.evaluate_transitions("task_spec_check", context)
+        assert next_phase == "fix_ci"
+
+    def test_ci_failure_priority_over_task_failure(self):
+        """Test that CI failures have priority over task failures."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # CI failure with task failure - CI failure has higher priority
+        context = {"status": {"commitFailed": True, "taskFailed": True}}
+        next_phase = engine.evaluate_transitions("task_spec_check", context)
+        assert next_phase == "fix_ci"
+
+    def test_fix_ci_returns_to_spec_check(self):
+        """Test that fix_ci has auto transition back to task_spec_check."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        engine = WorkflowEngine(workflow)
+
+        # fix_ci has auto transition to task_spec_check
+        context = {"status": {}}
+        next_phase = engine.evaluate_transitions("fix_ci", context)
+        assert next_phase == "task_spec_check"
+
+    def test_fix_ci_phase_is_execute(self):
+        """Test that fix_ci is an execute phase."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        phase = workflow.get_phase("fix_ci")
+        assert phase is not None
+        assert phase.type == PhaseType.EXECUTE
+
+
+class TestPRPreparation:
+    """Tests for PR preparation phase."""
+
+    def test_prepare_pr_phase_is_execute(self):
+        """Test that prepare_pr is an execute phase."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        phase = workflow.get_phase("prepare_pr")
+        assert phase is not None
+        assert phase.type == PhaseType.EXECUTE
+
+    def test_prepare_pr_prompt_exists(self):
+        """Test that prepare_pr has correct prompt that exists."""
+        workflow = load_workflow(Path("workflows/default.yaml"))
+        phase = workflow.get_phase("prepare_pr")
+        assert phase.prompt == "pr.prepare.md"
+        prompt_path = Path("prompts") / phase.prompt
+        assert prompt_path.exists()
 
 
 class TestTaskPhaseTypes:
@@ -386,7 +481,9 @@ class TestWorkflowVersion:
             "task_decomposition",
             "implement_task",
             "task_spec_check",
+            "fix_ci",
             "completeness_verification",
+            "prepare_pr",
             "code_review",
             "code_fix",
             "complete",

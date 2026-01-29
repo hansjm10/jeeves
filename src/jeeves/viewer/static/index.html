@@ -448,6 +448,19 @@
             color: white;
         }
 
+        .tab-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: var(--bg-tertiary);
+            border-color: var(--border-color);
+            color: var(--text-muted);
+        }
+
+        .tab-btn:disabled:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-color);
+        }
+
         .log-title {
             font-size: 13px;
             font-weight: 600;
@@ -1076,6 +1089,84 @@
             border-radius: 4px;
             border: 1px solid var(--border-color);
             font-family: inherit;
+        }
+
+        /* Workflow Tab Panel */
+        .workflow-panel {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            background: var(--bg-primary);
+        }
+
+        .workflow-panel-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            position: relative;
+        }
+
+        .workflow-panel-graph {
+            flex: 1;
+            min-height: 300px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .workflow-panel-disabled {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(13, 17, 23, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            gap: 12px;
+        }
+
+        .workflow-panel-disabled-icon {
+            font-size: 48px;
+            opacity: 0.6;
+        }
+
+        .workflow-panel-disabled-text {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        /* Responsive adjustments for workflow tab */
+        @media (max-width: 1200px) {
+            .workflow-toolbar {
+                flex-wrap: wrap;
+            }
+            .workflow-toolbar-group {
+                flex-wrap: wrap;
+            }
+        }
+
+        @media (max-width: 800px) {
+            .workflow-panel-graph {
+                min-height: 250px;
+            }
+            .workflow-toolbar {
+                font-size: 11px;
+            }
+            .workflow-toolbar button {
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            .workflow-selector select {
+                max-width: 120px;
+            }
         }
 
         /* Workflow Graph Styles */
@@ -2361,6 +2452,7 @@
                         <button class="tab-btn active" id="tabLogs">Logs</button>
                         <button class="tab-btn" id="tabSdk">SDK</button>
                         <button class="tab-btn" id="tabPrompts">Prompts</button>
+                        <button class="tab-btn" id="tabWorkflow" title="Workflow Editor (disabled during runs)">Workflow</button>
                     </div>
                     <span class="log-count" id="logCount">0 lines</span>
                 </div>
@@ -2423,6 +2515,25 @@
                         </div>
                     </div>
                     <div class="sdk-timeline" id="sdkTimeline" style="display: none;"></div>
+                </div>
+            </div>
+            <div class="workflow-panel" id="workflowBody" style="display: none;">
+                <div class="workflow-panel-container">
+                    <div class="workflow-panel-graph" id="workflowGraphContainer">
+                        <!-- Workflow graph and toolbar will be rendered here by initWorkflowEditor -->
+                        <div class="log-empty">
+                            <div class="log-empty-icon">🔗</div>
+                            <div>Workflow Editor</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">Loading workflow editor...</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="workflow-panel-disabled" id="workflowDisabledOverlay" style="display: none;">
+                    <div class="workflow-panel-disabled-icon">🔒</div>
+                    <div class="workflow-panel-disabled-text">
+                        Workflow editing is disabled while a run is in progress.<br>
+                        Stop the run or wait for it to complete.
+                    </div>
                 </div>
             </div>
         </section>
@@ -5593,9 +5704,13 @@
         const logsBody = document.getElementById('logsBody');
         const promptsBody = document.getElementById('promptsBody');
         const sdkBody = document.getElementById('sdkBody');
+        const workflowBody = document.getElementById('workflowBody');
+        const workflowGraphContainer = document.getElementById('workflowGraphContainer');
+        const workflowDisabledOverlay = document.getElementById('workflowDisabledOverlay');
         const tabLogs = document.getElementById('tabLogs');
         const tabSdk = document.getElementById('tabSdk');
         const tabPrompts = document.getElementById('tabPrompts');
+        const tabWorkflow = document.getElementById('tabWorkflow');
         const btnSdkRefresh = document.getElementById('btnSdkRefresh');
         const btnSdkTimeline = document.getElementById('btnSdkTimeline');
         const btnSdkAutoScroll = document.getElementById('btnSdkAutoScroll');
@@ -5735,14 +5850,24 @@
             setSidebarTab('setup');
         }
 
+        // Track whether workflow editor has been initialized
+        let workflowEditorInitialized = false;
+
         function setMainTab(tab) {
+            // Don't allow switching to workflow tab while running
+            if (tab === 'workflow' && runIsRunning) {
+                return;
+            }
+
             if (tab === 'prompts') mainTab = 'prompts';
             else if (tab === 'sdk') mainTab = 'sdk';
+            else if (tab === 'workflow') mainTab = 'workflow';
             else mainTab = 'logs';
 
             if (tabLogs) tabLogs.classList.toggle('active', mainTab === 'logs');
             if (tabSdk) tabSdk.classList.toggle('active', mainTab === 'sdk');
             if (tabPrompts) tabPrompts.classList.toggle('active', mainTab === 'prompts');
+            if (tabWorkflow) tabWorkflow.classList.toggle('active', mainTab === 'workflow');
 
             if (logsSearchContainer) logsSearchContainer.style.display = mainTab === 'logs' ? 'block' : 'none';
             if (logsBody) logsBody.style.display = mainTab === 'logs' ? 'flex' : 'none';
@@ -5755,6 +5880,11 @@
             if (sdkBody) sdkBody.style.display = mainTab === 'sdk' ? 'flex' : 'none';
             if (mainTab === 'sdk') loadSdkOutput();
 
+            if (workflowBody) workflowBody.style.display = mainTab === 'workflow' ? 'flex' : 'none';
+            if (mainTab === 'workflow') {
+                initializeWorkflowEditor();
+            }
+
             try {
                 localStorage.setItem('jeeves_viewer_main_tab', mainTab);
             } catch (e) {
@@ -5762,9 +5892,50 @@
             }
         }
 
+        /**
+         * Initialize the workflow editor (only once, on first tab switch)
+         */
+        function initializeWorkflowEditor() {
+            if (workflowEditorInitialized) return;
+            if (!workflowGraphContainer) return;
+
+            // Clear the loading message
+            workflowGraphContainer.innerHTML = '';
+
+            // Initialize the editor with the graph container
+            const editor = initWorkflowEditor(workflowGraphContainer);
+            if (editor) {
+                workflowEditorInitialized = true;
+                // Load the default workflow
+                editor.loadWorkflowList().then(() => {
+                    editor.loadWorkflow('default', true);
+                });
+            }
+        }
+
+        /**
+         * Update the workflow tab disabled state based on run status
+         */
+        function updateWorkflowTabState(running) {
+            if (tabWorkflow) {
+                tabWorkflow.disabled = running;
+                tabWorkflow.title = running
+                    ? 'Workflow Editor (disabled - run in progress)'
+                    : 'Workflow Editor';
+            }
+            if (workflowDisabledOverlay) {
+                workflowDisabledOverlay.style.display = running ? 'flex' : 'none';
+            }
+            // If currently on workflow tab and run starts, switch to logs
+            if (running && mainTab === 'workflow') {
+                setMainTab('logs');
+            }
+        }
+
         if (tabLogs) tabLogs.addEventListener('click', () => setMainTab('logs'));
         if (tabSdk) tabSdk.addEventListener('click', () => setMainTab('sdk'));
         if (tabPrompts) tabPrompts.addEventListener('click', () => setMainTab('prompts'));
+        if (tabWorkflow) tabWorkflow.addEventListener('click', () => setMainTab('workflow'));
 
         if (btnSdkRefresh) btnSdkRefresh.addEventListener('click', () => loadSdkOutput());
         if (btnSdkTimeline) btnSdkTimeline.addEventListener('click', () => {
@@ -6073,6 +6244,9 @@
 
             if (btnRun) btnRun.disabled = running;
             if (btnStop) btnStop.disabled = !running;
+
+            // Update workflow tab state when run status changes
+            updateWorkflowTabState(running);
 
             if (running) {
                 runStatusText.textContent = `Running (pid ${run.pid || '?'})\nStarted: ${run.started_at || ''}`;
@@ -6874,6 +7048,12 @@
                         <span>⬆️</span> Import
                     </button>
                 </div>
+                <div class="workflow-toolbar-separator"></div>
+                <div class="workflow-toolbar-group">
+                    <button id="workflowZoomInBtn" title="Zoom in">+</button>
+                    <button id="workflowZoomOutBtn" title="Zoom out">−</button>
+                    <button id="workflowFitBtn" title="Fit to view">Fit</button>
+                </div>
                 <input type="file" id="workflowImportInput" class="workflow-import-input" accept=".yaml,.yml" />
             `;
             container.appendChild(toolbar);
@@ -7527,6 +7707,27 @@
                     if (workflowGraph) {
                         workflowGraph.addNode();
                     }
+                });
+            }
+
+            // Wire up zoom controls
+            const zoomInBtn = document.getElementById('workflowZoomInBtn');
+            const zoomOutBtn = document.getElementById('workflowZoomOutBtn');
+            const fitBtn = document.getElementById('workflowFitBtn');
+
+            if (zoomInBtn) {
+                zoomInBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.zoomIn();
+                });
+            }
+            if (zoomOutBtn) {
+                zoomOutBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.zoomOut();
+                });
+            }
+            if (fitBtn) {
+                fitBtn.addEventListener('click', () => {
+                    if (workflowGraph) workflowGraph.fitToView();
                 });
             }
 

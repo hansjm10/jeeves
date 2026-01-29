@@ -34,6 +34,7 @@ except ImportError:
     print("Install with: pip install claude-agent-sdk", file=sys.stderr)
     sys.exit(1)
 
+from ..context import ContextService
 from .config import RunnerConfig
 from .output import Message, SDKOutput, ToolCall, create_output
 
@@ -92,16 +93,15 @@ class SDKRunner:
                 f"[USAGE] Cache: {self.output.cache_creation_tokens:,} created / "
                 f"{self.output.cache_read_tokens:,} read"
             )
-        # Calculate context percentage
-        total_input = (
-            self.output.input_tokens
-            + self.output.cache_creation_tokens
-            + self.output.cache_read_tokens
+        # Use ContextService for consistent, bounded calculation
+        context_svc = ContextService()
+        context_svc.update(
+            input_tokens=self.output.input_tokens,
+            output_tokens=self.output.output_tokens,
+            cache_creation_tokens=self.output.cache_creation_tokens,
+            cache_read_tokens=self.output.cache_read_tokens,
         )
-        if self.output.context_window_size > 0:
-            context_pct = (total_input / self.output.context_window_size) * 100
-            window_k = self.output.context_window_size // 1000
-            self._log(f"[USAGE] Context: {context_pct:.1f}% of {window_k}K")
+        self._log(f"[USAGE] {context_svc.format_summary()}")
         if self.output.total_cost_usd is not None:
             self._log(f"[USAGE] Cost: ${self.output.total_cost_usd:.4f}")
 

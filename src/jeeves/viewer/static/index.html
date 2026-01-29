@@ -1743,6 +1743,260 @@
         .transition-route-info .route-arrow {
             color: var(--text-muted);
         }
+
+        /* Guard Expression Builder Styles */
+        .guard-builder {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--bg-primary);
+        }
+
+        .guard-builder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .guard-builder-title {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .guard-builder-mode-toggle {
+            display: flex;
+            gap: 4px;
+        }
+
+        .guard-builder-mode-btn {
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-builder-mode-btn:first-child {
+            border-radius: 4px 0 0 4px;
+        }
+
+        .guard-builder-mode-btn:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+
+        .guard-builder-mode-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .guard-builder-mode-btn:hover:not(.active) {
+            background: var(--bg-tertiary);
+        }
+
+        .guard-builder-content {
+            padding: 12px;
+        }
+
+        /* Visual Mode Styles */
+        .guard-visual-mode {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .guard-condition-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        .guard-combinator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 0;
+        }
+
+        .guard-combinator-btn {
+            padding: 3px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-combinator-btn:first-child {
+            border-radius: 4px 0 0 4px;
+            border-right: none;
+        }
+
+        .guard-combinator-btn:last-child {
+            border-radius: 0 4px 4px 0;
+        }
+
+        .guard-combinator-btn.active {
+            background: var(--accent-purple);
+            border-color: var(--accent-purple);
+            color: white;
+        }
+
+        .guard-combinator-btn:hover:not(.active) {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .guard-field-select,
+        .guard-operator-select,
+        .guard-value-input {
+            padding: 6px 8px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        .guard-field-select {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .guard-field-select:focus,
+        .guard-operator-select:focus,
+        .guard-value-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .guard-operator-select {
+            width: 60px;
+        }
+
+        .guard-value-input {
+            width: 80px;
+        }
+
+        .guard-remove-btn {
+            padding: 4px 8px;
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .guard-remove-btn:hover {
+            background: rgba(248, 81, 73, 0.1);
+            color: var(--accent-red);
+        }
+
+        .guard-add-condition {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px;
+            margin-top: 4px;
+            border: 1px dashed var(--border-color);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .guard-add-condition:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+            background: rgba(88, 166, 255, 0.05);
+        }
+
+        /* Raw Mode Styles */
+        .guard-raw-mode {
+            display: none;
+        }
+
+        .guard-raw-mode.active {
+            display: block;
+        }
+
+        .guard-visual-mode.hidden {
+            display: none;
+        }
+
+        .guard-raw-textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            border: none;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            resize: vertical;
+        }
+
+        .guard-raw-textarea:focus {
+            outline: none;
+            box-shadow: inset 0 0 0 1px var(--accent-blue);
+        }
+
+        /* Validation Error Styles */
+        .guard-validation {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .guard-validation.visible {
+            display: block;
+        }
+
+        .guard-validation.error {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.3);
+            color: var(--accent-red);
+        }
+
+        .guard-validation.valid {
+            background: rgba(63, 185, 80, 0.1);
+            border: 1px solid rgba(63, 185, 80, 0.3);
+            color: var(--accent-green);
+        }
+
+        /* Autocomplete/datalist styling for field dropdown */
+        .guard-field-select option {
+            padding: 4px 8px;
+        }
+
+        .guard-empty-state {
+            padding: 16px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
@@ -3389,8 +3643,7 @@
                             <input type="number" class="transition-editor-input" id="transitionEditorPriority" placeholder="0" min="0" step="1">
                         </div>
                         <div class="transition-editor-field">
-                            <label class="transition-editor-label" for="transitionEditorGuard">Guard Expression</label>
-                            <textarea class="transition-editor-textarea" id="transitionEditorGuard" placeholder="e.g., status.taskPassed == true"></textarea>
+                            <div id="transitionEditorGuardContainer"></div>
                         </div>
                     </div>
                     <div class="transition-editor-footer">
@@ -3410,10 +3663,20 @@
                 this.targetSelect = document.getElementById('transitionEditorTarget');
                 this.autoToggle = document.getElementById('transitionEditorAuto');
                 this.priorityInput = document.getElementById('transitionEditorPriority');
-                this.guardInput = document.getElementById('transitionEditorGuard');
+                this.guardContainer = document.getElementById('transitionEditorGuardContainer');
                 this.deleteBtn = document.getElementById('transitionEditorDelete');
                 this.sourcePhaseEl = document.getElementById('transitionSourcePhase');
                 this.targetDisplayEl = document.getElementById('transitionTargetDisplay');
+
+                // Initialize GuardBuilder in the container
+                if (this.guardContainer) {
+                    this.guardBuilder = new GuardBuilder(this.guardContainer, {
+                        onChange: () => this._emitChange(),
+                        statusFields: ['designApproved', 'designNeedsChanges', 'taskPassed', 'taskFailed',
+                                       'commitFailed', 'pushFailed', 'hasMoreTasks', 'allTasksComplete',
+                                       'designDraftComplete', 'taskDecompositionComplete', 'currentTaskId']
+                    });
+                }
 
                 // Close button
                 if (this.closeBtn) {
@@ -3439,15 +3702,10 @@
                     });
                 }
 
-                // Priority and guard change handlers
+                // Priority change handler
                 if (this.priorityInput) {
                     this.priorityInput.addEventListener('input', () => this._emitChange());
                     this.priorityInput.addEventListener('change', () => this._emitChange());
-                }
-
-                if (this.guardInput) {
-                    this.guardInput.addEventListener('input', () => this._emitChange());
-                    this.guardInput.addEventListener('change', () => this._emitChange());
                 }
 
                 // Delete button
@@ -3520,7 +3778,7 @@
                     this.autoToggle.classList.toggle('active', !!edge.auto);
                 }
                 if (this.priorityInput) this.priorityInput.value = edge.priority || 0;
-                if (this.guardInput) this.guardInput.value = edge.guard || '';
+                if (this.guardBuilder) this.guardBuilder.setExpression(edge.guard || '');
 
                 // Show panel
                 this.panel.classList.add('open');
@@ -3545,7 +3803,7 @@
                     target: this.targetSelect ? this.targetSelect.value : '',
                     auto: this.autoToggle ? this.autoToggle.classList.contains('active') : false,
                     priority: this.priorityInput ? parseInt(this.priorityInput.value, 10) || 0 : 0,
-                    guard: this.guardInput ? this.guardInput.value.trim() : ''
+                    guard: this.guardBuilder ? this.guardBuilder.getExpression() : ''
                 };
             }
 
@@ -3561,6 +3819,14 @@
                     errors.push('Target phase is required');
                 }
 
+                // Validate guard expression if present
+                if (this.guardBuilder && data.guard) {
+                    const guardValidation = this.guardBuilder.validate();
+                    if (!guardValidation.isValid) {
+                        errors.push(...guardValidation.errors);
+                    }
+                }
+
                 return {
                     isValid: errors.length === 0,
                     errors: errors
@@ -3571,10 +3837,587 @@
              * Destroy the panel and clean up
              */
             destroy() {
+                if (this.guardBuilder) {
+                    this.guardBuilder.destroy();
+                    this.guardBuilder = null;
+                }
                 if (this.panel && this.panel.parentNode) {
                     this.panel.parentNode.removeChild(this.panel);
                 }
                 this.edge = null;
+            }
+        }
+
+        /**
+         * GuardBuilder - Visual and raw editor for guard expressions
+         * Supports building expressions like "status.fieldName == value and status.otherField != value"
+         */
+        class GuardBuilder {
+            constructor(container, options = {}) {
+                this.container = typeof container === 'string' ? document.querySelector(container) : container;
+                this.options = {
+                    onChange: options.onChange || null,     // Called when expression changes
+                    statusFields: options.statusFields || ['designApproved', 'designNeedsChanges', 'taskPassed', 'taskFailed', 'commitFailed', 'pushFailed', 'hasMoreTasks', 'allTasksComplete'],
+                    ...options
+                };
+
+                this.mode = 'visual'; // 'visual' or 'raw'
+                this.conditions = [];  // Array of {field, operator, value}
+                this.combinators = []; // Array of 'and' or 'or' between conditions
+                this.expression = '';  // Raw expression string
+
+                this._createUI();
+            }
+
+            /**
+             * Create the builder UI
+             */
+            _createUI() {
+                if (!this.container) return;
+
+                this.container.innerHTML = `
+                    <div class="guard-builder">
+                        <div class="guard-builder-header">
+                            <span class="guard-builder-title">Guard Expression</span>
+                            <div class="guard-builder-mode-toggle">
+                                <button class="guard-builder-mode-btn active" data-mode="visual">Visual</button>
+                                <button class="guard-builder-mode-btn" data-mode="raw">Raw</button>
+                            </div>
+                        </div>
+                        <div class="guard-builder-content">
+                            <div class="guard-visual-mode">
+                                <div class="guard-conditions-container"></div>
+                                <button class="guard-add-condition">+ Add Condition</button>
+                            </div>
+                            <div class="guard-raw-mode">
+                                <textarea class="guard-raw-textarea" placeholder="e.g., status.taskPassed == true and status.commitFailed != true"></textarea>
+                            </div>
+                            <div class="guard-validation"></div>
+                        </div>
+                    </div>
+                `;
+
+                this._bindElements();
+                this._renderConditions();
+            }
+
+            /**
+             * Bind DOM elements and event listeners
+             */
+            _bindElements() {
+                // Mode toggle buttons
+                this.visualModeBtn = this.container.querySelector('[data-mode="visual"]');
+                this.rawModeBtn = this.container.querySelector('[data-mode="raw"]');
+                this.visualModeContainer = this.container.querySelector('.guard-visual-mode');
+                this.rawModeContainer = this.container.querySelector('.guard-raw-mode');
+                this.conditionsContainer = this.container.querySelector('.guard-conditions-container');
+                this.addConditionBtn = this.container.querySelector('.guard-add-condition');
+                this.rawTextarea = this.container.querySelector('.guard-raw-textarea');
+                this.validationEl = this.container.querySelector('.guard-validation');
+
+                // Mode toggle
+                if (this.visualModeBtn) {
+                    this.visualModeBtn.addEventListener('click', () => this._setMode('visual'));
+                }
+                if (this.rawModeBtn) {
+                    this.rawModeBtn.addEventListener('click', () => this._setMode('raw'));
+                }
+
+                // Add condition button
+                if (this.addConditionBtn) {
+                    this.addConditionBtn.addEventListener('click', () => this._addCondition());
+                }
+
+                // Raw textarea changes
+                if (this.rawTextarea) {
+                    this.rawTextarea.addEventListener('input', () => {
+                        this.expression = this.rawTextarea.value;
+                        this._validateExpression();
+                        this._emitChange();
+                    });
+                }
+            }
+
+            /**
+             * Set the editing mode
+             * @param {string} mode - 'visual' or 'raw'
+             */
+            _setMode(mode) {
+                this.mode = mode;
+
+                // Update button states
+                if (this.visualModeBtn && this.rawModeBtn) {
+                    this.visualModeBtn.classList.toggle('active', mode === 'visual');
+                    this.rawModeBtn.classList.toggle('active', mode === 'raw');
+                }
+
+                // Update container visibility
+                if (this.visualModeContainer && this.rawModeContainer) {
+                    this.visualModeContainer.classList.toggle('hidden', mode !== 'visual');
+                    this.rawModeContainer.classList.toggle('active', mode === 'raw');
+                }
+
+                // Sync data between modes
+                if (mode === 'raw') {
+                    // Switching to raw mode - generate expression from conditions
+                    this.expression = this._conditionsToExpression();
+                    if (this.rawTextarea) {
+                        this.rawTextarea.value = this.expression;
+                    }
+                } else {
+                    // Switching to visual mode - parse expression into conditions
+                    this._parseExpressionToConditions(this.expression);
+                    this._renderConditions();
+                }
+
+                this._validateExpression();
+            }
+
+            /**
+             * Add a new condition row
+             */
+            _addCondition() {
+                // Add a combinator if this isn't the first condition
+                if (this.conditions.length > 0) {
+                    this.combinators.push('and');
+                }
+
+                this.conditions.push({
+                    field: 'status.',
+                    operator: '==',
+                    value: 'true'
+                });
+
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Remove a condition at the given index
+             * @param {number} index - Index of condition to remove
+             */
+            _removeCondition(index) {
+                if (index < 0 || index >= this.conditions.length) return;
+
+                this.conditions.splice(index, 1);
+
+                // Also remove the combinator
+                if (index > 0) {
+                    this.combinators.splice(index - 1, 1);
+                } else if (this.combinators.length > 0) {
+                    this.combinators.splice(0, 1);
+                }
+
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Toggle combinator between AND and OR
+             * @param {number} index - Index of combinator
+             */
+            _toggleCombinator(index) {
+                if (index < 0 || index >= this.combinators.length) return;
+                this.combinators[index] = this.combinators[index] === 'and' ? 'or' : 'and';
+                this._renderConditions();
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Update a condition field
+             * @param {number} index - Condition index
+             * @param {string} field - Field name (field, operator, or value)
+             * @param {string} value - New value
+             */
+            _updateCondition(index, field, value) {
+                if (index < 0 || index >= this.conditions.length) return;
+                this.conditions[index][field] = value;
+                this._updateExpressionFromConditions();
+            }
+
+            /**
+             * Render the conditions in visual mode
+             */
+            _renderConditions() {
+                if (!this.conditionsContainer) return;
+
+                if (this.conditions.length === 0) {
+                    this.conditionsContainer.innerHTML = `
+                        <div class="guard-empty-state">
+                            No conditions defined. Click "Add Condition" to create one.
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = '';
+
+                for (let i = 0; i < this.conditions.length; i++) {
+                    const condition = this.conditions[i];
+
+                    // Add combinator before condition (except for first)
+                    if (i > 0 && this.combinators[i - 1]) {
+                        const combinator = this.combinators[i - 1];
+                        html += `
+                            <div class="guard-combinator" data-index="${i - 1}">
+                                <button class="guard-combinator-btn ${combinator === 'and' ? 'active' : ''}" data-combinator="and">AND</button>
+                                <button class="guard-combinator-btn ${combinator === 'or' ? 'active' : ''}" data-combinator="or">OR</button>
+                            </div>
+                        `;
+                    }
+
+                    html += `
+                        <div class="guard-condition-row" data-index="${i}">
+                            <select class="guard-field-select" data-field="field">
+                                <option value="">Select field...</option>
+                                ${this._getFieldOptions(condition.field)}
+                            </select>
+                            <select class="guard-operator-select" data-field="operator">
+                                <option value="==" ${condition.operator === '==' ? 'selected' : ''}>=</option>
+                                <option value="!=" ${condition.operator === '!=' ? 'selected' : ''}>≠</option>
+                            </select>
+                            <input type="text" class="guard-value-input" data-field="value"
+                                   value="${this._escapeHtml(condition.value)}"
+                                   placeholder="value"
+                                   list="guard-value-suggestions-${i}">
+                            <datalist id="guard-value-suggestions-${i}">
+                                <option value="true">
+                                <option value="false">
+                                <option value="null">
+                            </datalist>
+                            <button class="guard-remove-btn" title="Remove condition">&times;</button>
+                        </div>
+                    `;
+                }
+
+                this.conditionsContainer.innerHTML = html;
+                this._bindConditionEvents();
+            }
+
+            /**
+             * Get field dropdown options HTML
+             * @param {string} selectedValue - Currently selected value
+             * @returns {string} HTML options
+             */
+            _getFieldOptions(selectedValue) {
+                const fields = this.options.statusFields;
+                let html = '';
+
+                for (const field of fields) {
+                    const fullField = `status.${field}`;
+                    const selected = selectedValue === fullField ? 'selected' : '';
+                    html += `<option value="${fullField}" ${selected}>${fullField}</option>`;
+                }
+
+                // If current value isn't in the list, add it as custom
+                if (selectedValue && selectedValue.startsWith('status.') && !fields.includes(selectedValue.replace('status.', ''))) {
+                    html += `<option value="${selectedValue}" selected>${selectedValue}</option>`;
+                }
+
+                return html;
+            }
+
+            /**
+             * Bind events to condition row elements
+             */
+            _bindConditionEvents() {
+                if (!this.conditionsContainer) return;
+
+                // Combinator buttons
+                this.conditionsContainer.querySelectorAll('.guard-combinator-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const combinator = e.target.closest('.guard-combinator');
+                        const index = parseInt(combinator.dataset.index, 10);
+                        const newValue = e.target.dataset.combinator;
+                        this.combinators[index] = newValue;
+                        this._renderConditions();
+                        this._updateExpressionFromConditions();
+                    });
+                });
+
+                // Condition row inputs
+                this.conditionsContainer.querySelectorAll('.guard-condition-row').forEach(row => {
+                    const index = parseInt(row.dataset.index, 10);
+
+                    // Field select
+                    const fieldSelect = row.querySelector('[data-field="field"]');
+                    if (fieldSelect) {
+                        fieldSelect.addEventListener('change', (e) => {
+                            this._updateCondition(index, 'field', e.target.value);
+                        });
+                    }
+
+                    // Operator select
+                    const operatorSelect = row.querySelector('[data-field="operator"]');
+                    if (operatorSelect) {
+                        operatorSelect.addEventListener('change', (e) => {
+                            this._updateCondition(index, 'operator', e.target.value);
+                        });
+                    }
+
+                    // Value input
+                    const valueInput = row.querySelector('[data-field="value"]');
+                    if (valueInput) {
+                        valueInput.addEventListener('input', (e) => {
+                            this._updateCondition(index, 'value', e.target.value);
+                        });
+                    }
+
+                    // Remove button
+                    const removeBtn = row.querySelector('.guard-remove-btn');
+                    if (removeBtn) {
+                        removeBtn.addEventListener('click', () => {
+                            this._removeCondition(index);
+                        });
+                    }
+                });
+            }
+
+            /**
+             * Convert conditions array to expression string
+             * @returns {string} Expression string
+             */
+            _conditionsToExpression() {
+                if (this.conditions.length === 0) return '';
+
+                let expr = '';
+                for (let i = 0; i < this.conditions.length; i++) {
+                    const c = this.conditions[i];
+                    if (i > 0 && this.combinators[i - 1]) {
+                        expr += ` ${this.combinators[i - 1]} `;
+                    }
+                    expr += `${c.field} ${c.operator} ${c.value}`;
+                }
+                return expr;
+            }
+
+            /**
+             * Parse expression string into conditions array
+             * @param {string} expr - Expression to parse
+             */
+            _parseExpressionToConditions(expr) {
+                if (!expr || expr.trim() === '') {
+                    this.conditions = [];
+                    this.combinators = [];
+                    return;
+                }
+
+                // Simple parser for expressions like:
+                // status.field == value and status.other != value2
+                const conditions = [];
+                const combinators = [];
+
+                // Split by 'and' and 'or' (case insensitive)
+                const parts = expr.split(/\s+(and|or)\s+/i);
+
+                for (let i = 0; i < parts.length; i++) {
+                    const part = parts[i].trim();
+
+                    // Check if this part is a combinator
+                    if (part.toLowerCase() === 'and' || part.toLowerCase() === 'or') {
+                        combinators.push(part.toLowerCase());
+                        continue;
+                    }
+
+                    // Try to parse as condition: field operator value
+                    const match = part.match(/^(.+?)\s*(==|!=)\s*(.+)$/);
+                    if (match) {
+                        conditions.push({
+                            field: match[1].trim(),
+                            operator: match[2],
+                            value: match[3].trim()
+                        });
+                    } else if (part) {
+                        // Couldn't parse - add as raw field with defaults
+                        conditions.push({
+                            field: part,
+                            operator: '==',
+                            value: 'true'
+                        });
+                    }
+                }
+
+                this.conditions = conditions;
+                this.combinators = combinators;
+            }
+
+            /**
+             * Update expression from current conditions
+             */
+            _updateExpressionFromConditions() {
+                this.expression = this._conditionsToExpression();
+                if (this.rawTextarea) {
+                    this.rawTextarea.value = this.expression;
+                }
+                this._validateExpression();
+                this._emitChange();
+            }
+
+            /**
+             * Validate the current expression
+             * @returns {Object} Validation result {isValid, errors}
+             */
+            _validateExpression() {
+                const result = this.validate();
+
+                if (this.validationEl) {
+                    if (!this.expression || this.expression.trim() === '') {
+                        // No expression - no validation message
+                        this.validationEl.className = 'guard-validation';
+                        this.validationEl.textContent = '';
+                    } else if (result.isValid) {
+                        this.validationEl.className = 'guard-validation visible valid';
+                        this.validationEl.textContent = '✓ Valid expression';
+                    } else {
+                        this.validationEl.className = 'guard-validation visible error';
+                        this.validationEl.textContent = '✗ ' + result.errors.join('; ');
+                    }
+                }
+
+                return result;
+            }
+
+            /**
+             * Emit change event
+             */
+            _emitChange() {
+                if (this.options.onChange) {
+                    this.options.onChange(this.expression);
+                }
+            }
+
+            /**
+             * Escape HTML special characters
+             * @param {string} str - String to escape
+             * @returns {string} Escaped string
+             */
+            _escapeHtml(str) {
+                if (!str) return '';
+                return str.replace(/&/g, '&amp;')
+                         .replace(/</g, '&lt;')
+                         .replace(/>/g, '&gt;')
+                         .replace(/"/g, '&quot;')
+                         .replace(/'/g, '&#39;');
+            }
+
+            // --- Public API ---
+
+            /**
+             * Set the expression to edit
+             * @param {string} expr - Guard expression string
+             */
+            setExpression(expr) {
+                this.expression = expr || '';
+
+                if (this.mode === 'visual') {
+                    this._parseExpressionToConditions(this.expression);
+                    this._renderConditions();
+                } else {
+                    if (this.rawTextarea) {
+                        this.rawTextarea.value = this.expression;
+                    }
+                }
+
+                this._validateExpression();
+            }
+
+            /**
+             * Get the current expression
+             * @returns {string} Guard expression string
+             */
+            getExpression() {
+                if (this.mode === 'visual') {
+                    return this._conditionsToExpression();
+                }
+                return this.expression;
+            }
+
+            /**
+             * Set the available status fields for autocomplete
+             * @param {Array<string>} fields - Array of field names (without 'status.' prefix)
+             */
+            setStatusFields(fields) {
+                this.options.statusFields = fields;
+                if (this.mode === 'visual') {
+                    this._renderConditions();
+                }
+            }
+
+            /**
+             * Validate the current expression
+             * @returns {Object} {isValid: boolean, errors: string[]}
+             */
+            validate() {
+                const expr = this.getExpression().trim();
+                const errors = [];
+
+                if (!expr) {
+                    // Empty expression is valid (no guard)
+                    return { isValid: true, errors: [] };
+                }
+
+                // Basic syntax validation
+                // Check for balanced parentheses (if any)
+                let parenCount = 0;
+                for (const char of expr) {
+                    if (char === '(') parenCount++;
+                    if (char === ')') parenCount--;
+                    if (parenCount < 0) {
+                        errors.push('Unbalanced parentheses');
+                        break;
+                    }
+                }
+                if (parenCount !== 0 && !errors.includes('Unbalanced parentheses')) {
+                    errors.push('Unbalanced parentheses');
+                }
+
+                // Check for valid operators
+                const validOperatorPattern = /==|!=/;
+                const conditionParts = expr.split(/\s+(and|or)\s+/i).filter(p =>
+                    p.toLowerCase() !== 'and' && p.toLowerCase() !== 'or'
+                );
+
+                for (const part of conditionParts) {
+                    const trimmed = part.trim();
+                    if (trimmed && !validOperatorPattern.test(trimmed)) {
+                        errors.push(`Invalid condition: "${trimmed.substring(0, 30)}${trimmed.length > 30 ? '...' : ''}" - missing == or !=`);
+                    }
+                }
+
+                // Check that conditions have a field and value
+                for (const part of conditionParts) {
+                    const trimmed = part.trim();
+                    if (trimmed) {
+                        const match = trimmed.match(/^(.+?)\s*(==|!=)\s*(.*)$/);
+                        if (match) {
+                            if (!match[1].trim()) {
+                                errors.push('Missing field name');
+                            }
+                            if (!match[3].trim()) {
+                                errors.push('Missing value');
+                            }
+                        }
+                    }
+                }
+
+                // Check for common mistakes
+                if (/=(?!=)/.test(expr.replace(/==/g, '').replace(/!=/g, ''))) {
+                    errors.push('Use == for equality (not single =)');
+                }
+
+                return {
+                    isValid: errors.length === 0,
+                    errors: errors
+                };
+            }
+
+            /**
+             * Destroy the builder and clean up
+             */
+            destroy() {
+                if (this.container) {
+                    this.container.innerHTML = '';
+                }
             }
         }
 

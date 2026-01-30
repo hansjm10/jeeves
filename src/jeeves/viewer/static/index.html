@@ -3701,6 +3701,9 @@
                     if (node.allowed_writes) {
                         phaseData.allowed_writes = node.allowed_writes;
                     }
+                    if (node.model) {
+                        phaseData.model = node.model;
+                    }
 
                     // Find transitions from this node
                     const nodeTransitions = this.links

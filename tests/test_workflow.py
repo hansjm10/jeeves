@@ -66,3 +66,90 @@ class TestWorkflowDataclasses:
         assert w.name == "default"
         assert w.start == "design"
         assert "design" in w.phases
+
+
+class TestPhaseModel:
+    """Tests for Phase model field."""
+
+    def test_phase_model_default_none(self):
+        """Phase model defaults to None when not specified."""
+        phase = Phase(name="test", type=PhaseType.EXECUTE, prompt="test.md")
+        assert phase.model is None
+
+    def test_phase_model_can_be_set(self):
+        """Phase model can be set to a valid value."""
+        phase = Phase(name="test", type=PhaseType.EXECUTE, prompt="test.md", model="opus")
+        assert phase.model == "opus"
+
+    def test_phase_model_all_valid_values(self):
+        """Phase model accepts all valid model values."""
+        for model in ["sonnet", "opus", "haiku"]:
+            phase = Phase(name="test", type=PhaseType.EXECUTE, prompt="test.md", model=model)
+            assert phase.model == model
+
+
+class TestWorkflowDefaultModel:
+    """Tests for Workflow default_model field."""
+
+    def test_workflow_default_model_none(self):
+        """Workflow default_model defaults to None when not specified."""
+        workflow = Workflow(
+            name="test",
+            version=1,
+            start="start",
+            phases={"start": Phase(name="start", type=PhaseType.TERMINAL)}
+        )
+        assert workflow.default_model is None
+
+    def test_workflow_default_model_can_be_set(self):
+        """Workflow default_model can be set to a valid value."""
+        workflow = Workflow(
+            name="test",
+            version=1,
+            start="start",
+            phases={"start": Phase(name="start", type=PhaseType.TERMINAL)},
+            default_model="sonnet"
+        )
+        assert workflow.default_model == "sonnet"
+
+
+class TestGetEffectiveModel:
+    """Tests for Workflow.get_effective_model method."""
+
+    def test_get_effective_model_phase_override(self):
+        """Phase model overrides workflow default."""
+        phases = {
+            "design": Phase(name="design", type=PhaseType.EXECUTE, prompt="d.md", model="opus")
+        }
+        workflow = Workflow(
+            name="test", version=1, start="design",
+            phases=phases, default_model="sonnet"
+        )
+        assert workflow.get_effective_model("design") == "opus"
+
+    def test_get_effective_model_workflow_default(self):
+        """Workflow default used when phase has no model."""
+        phases = {
+            "design": Phase(name="design", type=PhaseType.EXECUTE, prompt="d.md")
+        }
+        workflow = Workflow(
+            name="test", version=1, start="design",
+            phases=phases, default_model="haiku"
+        )
+        assert workflow.get_effective_model("design") == "haiku"
+
+    def test_get_effective_model_none(self):
+        """Returns None when no model configured anywhere."""
+        phases = {
+            "design": Phase(name="design", type=PhaseType.EXECUTE, prompt="d.md")
+        }
+        workflow = Workflow(name="test", version=1, start="design", phases=phases)
+        assert workflow.get_effective_model("design") is None
+
+    def test_get_effective_model_nonexistent_phase(self):
+        """Returns None for non-existent phase."""
+        phases = {
+            "design": Phase(name="design", type=PhaseType.EXECUTE, prompt="d.md")
+        }
+        workflow = Workflow(name="test", version=1, start="design", phases=phases)
+        assert workflow.get_effective_model("nonexistent") is None

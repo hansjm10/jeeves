@@ -5,12 +5,13 @@ import { parseIssueRef, getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
 import { ClaudeAgentProvider } from './providers/claudeAgentSdk.js';
 import { FakeProvider } from './providers/fake.js';
-import { runWorkflowOnce } from './runner.js';
+import { runSinglePhaseOnce, runWorkflowOnce } from './runner.js';
 
 function usage(): string {
   return [
     'Usage:',
     '  jeeves-runner run-workflow --workflow <name> [--provider claude|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
+    '  jeeves-runner run-phase --workflow <name> --phase <phaseName> [--provider claude|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
     '  jeeves-runner run-fixture [--state-dir <dir>]',
     '',
     'Notes:',
@@ -33,6 +34,7 @@ export async function main(argv: string[]): Promise<void> {
     args: rest,
     options: {
       workflow: { type: 'string' },
+      phase: { type: 'string' },
       provider: { type: 'string' },
       'workflows-dir': { type: 'string' },
       'prompts-dir': { type: 'string' },
@@ -67,7 +69,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  if (cmd !== 'run-workflow') {
+  if (cmd !== 'run-workflow' && cmd !== 'run-phase') {
     throw new Error(`Unknown command: ${cmd}\n\n${usage()}`);
   }
 
@@ -85,14 +87,23 @@ export async function main(argv: string[]): Promise<void> {
   const { provider } = resolveProvider(String(values.provider ?? 'claude'));
   const workflowName = String(values.workflow ?? 'default');
 
-  await runWorkflowOnce({
-    provider,
-    workflowName,
-    workflowsDir,
-    promptsDir,
-    stateDir,
-    cwd,
-  });
+  if (cmd === 'run-phase') {
+    const phaseName = String(values.phase ?? '').trim();
+    if (!phaseName) throw new Error(`--phase is required for run-phase\n\n${usage()}`);
+
+    await runSinglePhaseOnce({
+      provider,
+      workflowName,
+      phaseName,
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+    return;
+  }
+
+  await runWorkflowOnce({ provider, workflowName, workflowsDir, promptsDir, stateDir, cwd });
 }
 
 // Intentionally no side-effectful entrypoint here; see `src/bin.ts`.

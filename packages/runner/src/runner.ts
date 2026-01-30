@@ -77,6 +77,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
 export type RunWorkflowParams = Readonly<{
   provider: AgentProvider;
   workflowName: string;
+  phaseName?: string;
   workflowsDir: string;
   promptsDir: string;
   stateDir: string;
@@ -116,4 +117,53 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
   }
 
   return { finalPhase: current, success: true };
+}
+
+export type RunSinglePhaseParams = Readonly<{
+  provider: AgentProvider;
+  workflowName: string;
+  phaseName: string;
+  workflowsDir: string;
+  promptsDir: string;
+  stateDir: string;
+  cwd: string;
+}>;
+
+export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<{ phase: string; success: boolean }> {
+  const workflow = await loadWorkflowByName(params.workflowName, { workflowsDir: params.workflowsDir });
+  const engine = new WorkflowEngine(workflow);
+
+  const phase = params.phaseName;
+  const phaseType = engine.getPhaseType(phase);
+  if (!phaseType) throw new Error(`Unknown phase: ${phase}`);
+
+  const outputPath = path.join(params.stateDir, 'sdk-output.json');
+  const logPath = path.join(params.stateDir, 'last-run.log');
+  const progressPath = path.join(params.stateDir, 'progress.txt');
+
+  if (engine.isTerminal(phase)) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await ensureProgressFile(progressPath);
+    await markStarted(progressPath);
+    await markPhase(progressPath, phase);
+    await fs.writeFile(logPath, '', 'utf-8');
+    const writer = new SdkOutputWriterV1({ outputPath });
+    writer.finalize(true);
+    await writer.writeIncremental({ force: true });
+    await markEnded(progressPath, true);
+    return { phase, success: true };
+  }
+
+  const promptPath = await resolvePromptPath(phase, params.promptsDir, engine);
+  const result = await runPhaseOnce({
+    provider: params.provider,
+    promptPath,
+    outputPath,
+    logPath,
+    progressPath,
+    cwd: params.cwd,
+    phaseName: phase,
+  });
+  return { phase, success: result.success };
 }

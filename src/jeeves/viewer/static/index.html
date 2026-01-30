@@ -4437,6 +4437,11 @@
                 if (this.allowedWritesField) {
                     this.allowedWritesField.classList.toggle('hidden', type !== 'evaluate');
                 }
+
+                // Model field: visible for execute and evaluate (hidden for script and terminal)
+                if (this.modelField) {
+                    this.modelField.classList.toggle('hidden', type === 'script' || type === 'terminal');
+                }
             }
 
             /**

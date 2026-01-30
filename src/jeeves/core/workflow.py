@@ -71,11 +71,14 @@ class Workflow:
         version: Schema version
         start: Name of the starting phase
         phases: Map of phase name to Phase object
+        default_model: Optional default model for phases in this workflow.
+                       Valid values: sonnet, opus, haiku. If not set, uses system default.
     """
     name: str
     version: int
     start: str
     phases: Dict[str, Phase]
+    default_model: Optional[str] = None
 
     def get_phase(self, name: str) -> Optional[Phase]:
         """Get a phase by name."""

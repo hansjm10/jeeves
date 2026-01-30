@@ -206,14 +206,20 @@ class JeevesWorkflowManager:
                 phase_data["command"] = phase.command
             if phase.allowed_writes and phase.allowed_writes != [".jeeves/*"]:
                 phase_data["allowed_writes"] = phase.allowed_writes
+            if phase.model:
+                phase_data["model"] = phase.model
             phases[phase_name] = phase_data
 
+        workflow_data = {
+            "name": workflow.name,
+            "version": workflow.version,
+            "start": workflow.start,
+        }
+        if workflow.default_model:
+            workflow_data["default_model"] = workflow.default_model
+
         return {
-            "workflow": {
-                "name": workflow.name,
-                "version": workflow.version,
-                "start": workflow.start,
-            },
+            "workflow": workflow_data,
             "phases": phases,
         }
 

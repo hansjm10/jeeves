@@ -41,6 +41,7 @@ from typing import Dict, Optional, List, Tuple
 from urllib.parse import parse_qs, urlparse
 import select
 import subprocess
+from queue import Queue, Empty
 
 # Import jeeves.core modules for the new src/ layout
 from jeeves.core.paths import (
@@ -825,6 +826,9 @@ class JeevesRunManager:
             "returncode": None,
             "command": None,
             "max_iterations": None,
+            "inactivity_timeout_sec": None,
+            "iteration_timeout_sec": None,
+            "sdk_max_buffer_size": None,
             "current_iteration": 0,
             "completed_via_promise": False,
             "completed_via_state": False,
@@ -895,11 +899,18 @@ class JeevesRunManager:
         self,
         *,
         max_iterations: int = 10,
+        inactivity_timeout_sec: float = 600.0,
+        iteration_timeout_sec: float = 3600.0,
+        sdk_max_buffer_size: Optional[int] = None,
     ) -> Dict:
         """Start the iteration loop - spawns fresh SDK runner each iteration.
 
         Args:
             max_iterations: Maximum number of fresh-context iterations
+            inactivity_timeout_sec: Maximum idle time (seconds) without progress
+                in state files (last-run.log / sdk-output.json) before aborting.
+            iteration_timeout_sec: Maximum wall-clock time (seconds) for a single
+                iteration before aborting.
 
         The iteration loop runs in a background thread. Each iteration:
         1. Spawns a fresh SDK runner subprocess (new context window)
@@ -941,6 +952,9 @@ class JeevesRunManager:
                 "returncode": None,
                 "command": None,
                 "max_iterations": max_iterations,
+                "inactivity_timeout_sec": inactivity_timeout_sec,
+                "iteration_timeout_sec": iteration_timeout_sec,
+                "sdk_max_buffer_size": sdk_max_buffer_size,
                 "current_iteration": 0,
                 "completed_via_promise": False,
                 "completed_via_state": False,
@@ -953,7 +967,13 @@ class JeevesRunManager:
             # Start iteration loop in background thread
             self._iteration_thread = Thread(
                 target=self._run_iteration_loop,
-                args=(max_iterations, viewer_log_path),
+                args=(
+                    max_iterations,
+                    viewer_log_path,
+                    inactivity_timeout_sec,
+                    iteration_timeout_sec,
+                    sdk_max_buffer_size,
+                ),
                 daemon=True,
             )
             self._iteration_thread.start()
@@ -964,6 +984,9 @@ class JeevesRunManager:
         self,
         max_iterations: int,
         viewer_log_path: Path,
+        inactivity_timeout_sec: float,
+        iteration_timeout_sec: float,
+        sdk_max_buffer_size: Optional[int],
     ) -> None:
         """Run the iteration loop (called in background thread).
 
@@ -985,7 +1008,12 @@ class JeevesRunManager:
                 self._log_to_file(viewer_log_path, f"{'='*60}")
 
                 # Run a single iteration
-                result = self._run_single_iteration(viewer_log_path)
+                result = self._run_single_iteration(
+                    viewer_log_path,
+                    iteration_timeout=iteration_timeout_sec,
+                    inactivity_timeout=inactivity_timeout_sec,
+                    sdk_max_buffer_size=sdk_max_buffer_size,
+                )
 
                 # Check for completion via workflow engine transitions
                 issue_json = self._read_issue_json()
@@ -1120,8 +1148,21 @@ class JeevesRunManager:
     def _run_single_iteration(
         self,
         viewer_log_path: Path,
+        *,
+        iteration_timeout: float = 3600.0,
+        inactivity_timeout: float = 600.0,
+        sdk_max_buffer_size: Optional[int] = None,
     ) -> int:
         """Run a single SDK iteration (fresh subprocess, fresh context).
+
+        Uses streaming I/O to prevent deadlocks when subprocess produces
+        large output without newlines (e.g., large file reads).
+
+        Args:
+            viewer_log_path: Path to the log file for this iteration.
+            iteration_timeout: Maximum time in seconds for this iteration.
+            inactivity_timeout: Maximum time in seconds without updates to
+                last-run.log or sdk-output.json before aborting the iteration.
 
         Returns the subprocess exit code.
         """
@@ -1182,34 +1223,172 @@ class JeevesRunManager:
             "--state-dir",
             str(self.state_dir),
         ]
+        if sdk_max_buffer_size is not None:
+            cmd += ["--max-buffer-size", str(int(sdk_max_buffer_size))]
 
         with self._lock:
             self._run_info["command"] = cmd
 
-        # Open log file in append mode for this iteration
-        with open(viewer_log_path, "a", buffering=1) as log_file:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.work_dir),
-                env=env,
-                stdout=log_file,
-                stderr=log_file,
-                start_new_session=True,
-                text=True,
+        # Use subprocess.PIPE with a reader thread to prevent I/O deadlocks
+        # This avoids buffering issues when subprocess produces large output
+        # without newlines (e.g., reading large files)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(self.work_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Combine streams to avoid separate deadlocks
+            start_new_session=True,
+            text=True,
+        )
+
+        with self._lock:
+            self._proc = proc
+            self._run_info["pid"] = proc.pid
+
+        # Stream output to file via reader thread
+        output_queue: Queue = Queue()
+
+        def reader_thread():
+            """Read from subprocess stdout and put lines in queue."""
+            try:
+                assert proc.stdout is not None
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    output_queue.put(line)
+            except Exception as e:
+                output_queue.put(f"[READER ERROR] {e}\n")
+            finally:
+                output_queue.put(None)  # Sentinel to signal completion
+
+        reader = Thread(target=reader_thread, daemon=True)
+        reader.start()
+
+        deadline = time.time() + float(iteration_timeout)
+        returncode: Optional[int] = None
+
+        try:
+            last_run_log_path = self.state_dir / "last-run.log"
+            sdk_output_path = self.state_dir / "sdk-output.json"
+
+            def _safe_mtime(path: Path) -> Optional[float]:
+                try:
+                    return path.stat().st_mtime
+                except Exception:
+                    return None
+
+            last_activity_at = time.time()
+            last_last_run_mtime = _safe_mtime(last_run_log_path)
+            last_sdk_output_mtime = _safe_mtime(sdk_output_path)
+
+            with open(viewer_log_path, "a", encoding="utf-8") as log_file:
+                while True:
+                    remaining_time = deadline - time.time()
+                    if remaining_time <= 0:
+                        raise subprocess.TimeoutExpired(cmd, iteration_timeout)
+
+                    # Detect progress via state file updates.
+                    now = time.time()
+                    updated = False
+                    current_last_run_mtime = _safe_mtime(last_run_log_path)
+                    if current_last_run_mtime is not None and (
+                        last_last_run_mtime is None
+                        or current_last_run_mtime > last_last_run_mtime
+                    ):
+                        last_last_run_mtime = current_last_run_mtime
+                        updated = True
+
+                    current_sdk_output_mtime = _safe_mtime(sdk_output_path)
+                    if current_sdk_output_mtime is not None and (
+                        last_sdk_output_mtime is None
+                        or current_sdk_output_mtime > last_sdk_output_mtime
+                    ):
+                        last_sdk_output_mtime = current_sdk_output_mtime
+                        updated = True
+
+                    if updated:
+                        last_activity_at = now
+
+                    if inactivity_timeout > 0 and (now - last_activity_at) > inactivity_timeout:
+                        self._log_to_file(
+                            viewer_log_path,
+                            f"[ERROR] Iteration inactive for {now - last_activity_at:.1f}s "
+                            f"(no last-run.log/sdk-output.json updates); terminating process group",
+                        )
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except Exception:
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                        try:
+                            returncode = proc.wait(timeout=10.0)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            except Exception:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                            returncode = proc.wait()
+                        break
+
+                    try:
+                        poll_interval = max(0.1, min(1.0, float(inactivity_timeout) / 4.0))
+                        # Wait for output with timeout, checking frequently
+                        item = output_queue.get(timeout=min(poll_interval, remaining_time))
+                        if item is None:
+                            # Reader thread finished
+                            break
+                        log_file.write(item)
+                        log_file.flush()
+                    except Empty:
+                        # No output yet, check if process has exited
+                        if proc.poll() is not None:
+                            # Process exited, drain remaining output
+                            while True:
+                                try:
+                                    item = output_queue.get_nowait()
+                                    if item is None:
+                                        break
+                                    log_file.write(item)
+                                except Empty:
+                                    break
+                            log_file.flush()
+                            break
+
+            # Process should have exited by now
+            if returncode is None:
+                returncode = proc.wait(timeout=5.0)
+
+        except subprocess.TimeoutExpired:
+            self._log_to_file(
+                viewer_log_path,
+                f"[ERROR] Iteration timed out after {iteration_timeout}s"
             )
-
-            with self._lock:
-                self._proc = proc
-                self._run_info["pid"] = proc.pid
-
-            # Wait for this iteration to complete
-            returncode = proc.wait()
-
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+            try:
+                returncode = proc.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                returncode = proc.wait()
+        finally:
+            reader.join(timeout=2.0)
             with self._lock:
                 self._run_info["returncode"] = returncode
                 self._run_info["pid"] = None
 
-        return returncode
+        return returncode if returncode is not None else -1
 
     def _read_issue_json(self) -> Optional[Dict]:
         """Read the raw issue.json for completion checks."""
@@ -1527,8 +1706,53 @@ class JeevesViewerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "max_iterations must be >= 1"}, status=400)
             return
 
+        inactivity_timeout_sec = body.get("inactivity_timeout_sec", 600.0)
         try:
-            run_info = self.run_manager.start(max_iterations=max_iterations)
+            inactivity_timeout_sec = float(inactivity_timeout_sec)
+        except Exception as e:
+            self._send_json(
+                {"ok": False, "error": f"inactivity_timeout_sec must be a number: {e}"},
+                status=400,
+            )
+            return
+        if inactivity_timeout_sec <= 0:
+            self._send_json({"ok": False, "error": "inactivity_timeout_sec must be > 0"}, status=400)
+            return
+
+        iteration_timeout_sec = body.get("iteration_timeout_sec", 3600.0)
+        try:
+            iteration_timeout_sec = float(iteration_timeout_sec)
+        except Exception as e:
+            self._send_json(
+                {"ok": False, "error": f"iteration_timeout_sec must be a number: {e}"},
+                status=400,
+            )
+            return
+        if iteration_timeout_sec <= 0:
+            self._send_json({"ok": False, "error": "iteration_timeout_sec must be > 0"}, status=400)
+            return
+
+        sdk_max_buffer_size = body.get("max_buffer_size", None)
+        if sdk_max_buffer_size is not None:
+            try:
+                sdk_max_buffer_size = int(sdk_max_buffer_size)
+            except Exception as e:
+                self._send_json(
+                    {"ok": False, "error": f"max_buffer_size must be an integer: {e}"},
+                    status=400,
+                )
+                return
+            if sdk_max_buffer_size <= 0:
+                self._send_json({"ok": False, "error": "max_buffer_size must be > 0"}, status=400)
+                return
+
+        try:
+            run_info = self.run_manager.start(
+                max_iterations=max_iterations,
+                inactivity_timeout_sec=inactivity_timeout_sec,
+                iteration_timeout_sec=iteration_timeout_sec,
+                sdk_max_buffer_size=sdk_max_buffer_size,
+            )
         except RuntimeError as e:
             self._send_json({"ok": False, "error": str(e), "run": self.run_manager.get_status()}, status=409)
             return

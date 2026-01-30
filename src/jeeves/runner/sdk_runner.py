@@ -68,8 +68,9 @@ class SDKRunner:
             try:
                 self.output.save(self.config.output_file)
                 self._last_save_time = now
-            except Exception:
-                pass  # Don't fail on save errors
+            except Exception as e:
+                # Log but don't fail on save errors
+                self._log(f"[WARNING] Failed to save output: {e}")
 
     def _open_log_file(self) -> None:
         """Open the text log file for streaming output."""
@@ -157,6 +158,7 @@ class SDKRunner:
             permission_mode=self.config.permission_mode,
             cwd=str(self.config.work_dir),
             include_partial_messages=True,  # Enable streaming
+            max_buffer_size=self.config.max_buffer_size,
             # Enable project skills discovery when skills are provisioned
             setting_sources=["project"] if provisioned_skills else None,
         )
@@ -173,8 +175,24 @@ class SDKRunner:
         )
 
         try:
-            # Run the agent
+            import time
+            # Inactivity detection threshold (10 minutes)
+            INACTIVITY_TIMEOUT = 600
+
+            # Run the agent with inactivity detection
+            last_message_time = time.time()
+
             async for message in query(prompt=prompt, options=options):
+                current_time = time.time()
+
+                # Log if there's excessive delay between messages
+                delay = current_time - last_message_time
+                if delay > INACTIVITY_TIMEOUT:
+                    self._log(
+                        f"[WARNING] Long delay detected: {delay:.1f}s since last message"
+                    )
+
+                last_message_time = current_time
                 self._process_message(message)
                 # Periodically save output for real-time viewer updates
                 self._save_output_incremental()
@@ -205,6 +223,21 @@ class SDKRunner:
 
     def _process_message(self, message: Any) -> None:
         """Process a message from the SDK generator."""
+        try:
+            self._process_message_internal(message)
+        except Exception as e:
+            self._log(f"[ERROR] Failed to process message: {e}")
+            self.output.add_message(
+                Message(
+                    type="system",
+                    subtype="error",
+                    content=f"Message processing error: {e}",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+
+    def _process_message_internal(self, message: Any) -> None:
+        """Internal message processing implementation."""
         import time
 
         now = datetime.now(timezone.utc).isoformat()
@@ -509,6 +542,11 @@ def main() -> int:
         "--allowed-tools",
         help="Comma-separated list of allowed tools",
     )
+    parser.add_argument(
+        "--max-buffer-size",
+        type=int,
+        help="Maximum size (bytes) for a single streamed JSON message from the CLI",
+    )
 
     args = parser.parse_args()
 
@@ -524,6 +562,7 @@ def main() -> int:
         work_dir=args.work_dir,
         state_dir=args.state_dir,
         allowed_tools=allowed_tools,
+        max_buffer_size=args.max_buffer_size,
     )
 
     # Run the agent

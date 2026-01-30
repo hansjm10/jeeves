@@ -18,6 +18,11 @@ class RunnerConfig:
     work_dir: Path = field(default_factory=Path.cwd)
     state_dir: Optional[Path] = None
 
+    # SDK transport settings
+    # claude-agent-sdk buffers and parses JSON messages from the CLI; large tool
+    # results can exceed the default (1MB) and stall runs.
+    max_buffer_size: int = 10 * 1024 * 1024  # 10MB
+
     # Agent settings
     allowed_tools: List[str] = field(
         default_factory=lambda: [
@@ -57,6 +62,7 @@ class RunnerConfig:
         phase: Optional[str] = None,
         phase_type: Optional[str] = None,
         skills_source: Optional[str] = None,
+        max_buffer_size: Optional[int] = None,
     ) -> "RunnerConfig":
         """Create config from command line arguments."""
         return cls(
@@ -71,6 +77,7 @@ class RunnerConfig:
             phase=phase,
             phase_type=phase_type,
             skills_source=Path(skills_source) if skills_source else None,
+            max_buffer_size=max_buffer_size if max_buffer_size is not None else cls.max_buffer_size,
         )
 
     @classmethod

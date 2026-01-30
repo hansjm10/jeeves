@@ -244,6 +244,104 @@ sleep 1
         finally:
             conn.close()
 
+    def test_run_aborts_when_iteration_goes_inactive(self):
+        """Run manager aborts when last-run.log/sdK-output.json stop updating."""
+        dummy_hang = Path(self._tmp.name) / "dummy_sdk_hang.sh"
+        _write_executable(
+            dummy_hang,
+            """#!/usr/bin/env bash
+set -euo pipefail
+
+text_out=""
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--text-output" ]; then
+    j=$((i+1))
+    text_out="${!j}"
+  fi
+done
+
+echo "dummy sdk: starting hang"
+if [ -n "$text_out" ]; then
+  mkdir -p "$(dirname "$text_out")"
+  echo "dummy log line 1" >> "$text_out"
+fi
+
+# Keep the process alive without writing to last-run.log again.
+sleep 5
+""",
+        )
+
+        self.run_manager.runner_cmd_override = [str(dummy_hang)]
+
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, data = _request_json(
+                conn,
+                "POST",
+                "/api/run",
+                {"max_iterations": 1, "inactivity_timeout_sec": 1.0, "iteration_timeout_sec": 30.0},
+            )
+            self.assertEqual(status, 200, data)
+            self.assertTrue(data["ok"])
+
+            deadline = time.time() + 10.0
+            run = None
+            while time.time() < deadline:
+                status, data = _request_json(conn, "GET", "/api/run")
+                self.assertEqual(status, 200)
+                run = data.get("run", {})
+                if not run.get("running"):
+                    break
+                time.sleep(0.05)
+
+            self.assertIsNotNone(run)
+            self.assertFalse(run.get("running"), run)
+            self.assertIsNotNone(run.get("returncode"), run)
+
+            status, data = _request_json(conn, "GET", "/api/run/logs")
+            self.assertEqual(status, 200)
+            logs = data.get("logs", []) if isinstance(data, dict) else []
+            self.assertTrue(
+                any("Iteration inactive" in line for line in logs),
+                f"Expected inactivity log line, got tail: {logs[-10:]}",
+            )
+        finally:
+            conn.close()
+
+    def test_run_accepts_max_buffer_size_override(self):
+        """Run endpoint accepts max_buffer_size and passes it to the runner cmd."""
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            status, data = _request_json(
+                conn,
+                "POST",
+                "/api/run",
+                {"max_iterations": 1, "max_buffer_size": 1234567},
+            )
+            self.assertEqual(status, 200, data)
+            self.assertTrue(data["ok"])
+
+            deadline = time.time() + 2.0
+            run = None
+            while time.time() < deadline:
+                status, data = _request_json(conn, "GET", "/api/run")
+                self.assertEqual(status, 200)
+                run = data.get("run", {})
+                cmd = run.get("command") or []
+                if cmd:
+                    break
+                time.sleep(0.05)
+
+            self.assertIsNotNone(run)
+            cmd = run.get("command") or []
+            self.assertIn("--max-buffer-size", cmd)
+            idx = cmd.index("--max-buffer-size")
+            self.assertEqual(cmd[idx + 1], "1234567")
+
+            _request_json(conn, "POST", "/api/run/stop", {})
+        finally:
+            conn.close()
+
     def test_run_stops_when_issue_json_indicates_complete(self):
         """Test that run stops when workflow reaches terminal phase via transitions."""
         issue_json = self.state_dir / "issue.json"

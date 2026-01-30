@@ -148,6 +148,15 @@ class TestRunnerConfigFromArgs:
         assert config.permission_mode == "default"
         assert config.enable_tool_logging is False
 
+    def test_from_args_accepts_max_buffer_size(self):
+        """from_args accepts max_buffer_size parameter."""
+        config = RunnerConfig.from_args(
+            prompt="prompt.md",
+            output="output.json",
+            max_buffer_size=2 * 1024 * 1024,
+        )
+        assert config.max_buffer_size == 2 * 1024 * 1024
+
 
 class TestRunnerConfigBackwardCompatibility:
     """Tests ensuring backward compatibility."""
@@ -169,6 +178,7 @@ class TestRunnerConfigBackwardCompatibility:
         assert config.phase is None
         assert config.phase_type is None
         assert config.skills_source is None
+        assert config.max_buffer_size == 10 * 1024 * 1024
 
     def test_from_args_minimal_call_still_works(self):
         """from_args with only required args still works."""

@@ -90,3 +90,25 @@ class Workflow:
         if not phase:
             raise ValueError(f"Start phase '{self.start}' not found in workflow")
         return phase
+
+    def get_effective_model(self, phase_name: str) -> Optional[str]:
+        """Get the effective model for a phase.
+
+        Returns the model to use for the specified phase, following the
+        inheritance hierarchy:
+        1. Phase-specific model (if set)
+        2. Workflow default_model (if set)
+        3. None (use system default)
+
+        Args:
+            phase_name: Name of the phase to get the model for
+
+        Returns:
+            The model identifier (sonnet, opus, haiku) or None if not set
+        """
+        phase = self.phases.get(phase_name)
+        if not phase:
+            return None
+        if phase.model:
+            return phase.model
+        return self.default_model

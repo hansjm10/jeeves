@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { noop } from './index';
+import { noop } from './index.js';
 
 describe('noop', () => {
   it('does not throw', () => {

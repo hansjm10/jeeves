@@ -9,7 +9,7 @@ export {
   resolveDataDir,
   type IssueRef,
   type RepoSpec,
-} from './paths';
+} from './paths.js';
 
 export {
   createIssueState,
@@ -18,7 +18,7 @@ export {
   loadIssueStateFromPath,
   type IssueState,
   type IssueStateSummary,
-} from './issueState';
+} from './issueState.js';
 
 export {
   getEffectiveModel,
@@ -30,15 +30,15 @@ export {
   type PhaseType,
   type Transition,
   type Workflow,
-} from './workflow';
+} from './workflow.js';
 
 export {
   loadWorkflowByName,
   loadWorkflowFromFile,
   parseWorkflowYaml,
   toRawWorkflowJson,
-} from './workflowLoader';
+} from './workflowLoader.js';
 
-export { evaluateGuard } from './guards';
-export { WorkflowEngine } from './workflowEngine';
-export { resolvePromptPath } from './promptResolution';
+export { evaluateGuard } from './guards.js';
+export { WorkflowEngine } from './workflowEngine.js';
+export { resolvePromptPath } from './promptResolution.js';

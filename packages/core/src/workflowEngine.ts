@@ -1,5 +1,5 @@
-import { evaluateGuard } from './guards';
-import type { Phase, PhaseType, Workflow } from './workflow';
+import { evaluateGuard } from './guards.js';
+import type { Phase, PhaseType, Workflow } from './workflow.js';
 
 export class WorkflowEngine {
   readonly workflow: Workflow;
@@ -45,4 +45,3 @@ export class WorkflowEngine {
     return null;
   }
 }
-

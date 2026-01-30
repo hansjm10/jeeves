@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Workflow } from './workflow';
-import { WorkflowEngine } from './workflowEngine';
+import type { Workflow } from './workflow.js';
+import { WorkflowEngine } from './workflowEngine.js';
 
 describe('WorkflowEngine', () => {
   it('selects the first matching transition in order', () => {
@@ -44,4 +44,3 @@ describe('WorkflowEngine', () => {
     expect(engine.evaluateTransitions('done', {})).toBe(null);
   });
 });
-

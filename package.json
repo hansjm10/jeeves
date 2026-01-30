@@ -7,10 +7,12 @@
     "typecheck": "tsc -b --pretty false --noEmit",
     "build": "tsc -b --pretty false",
     "test": "vitest run",
+    "run:fixture": "pnpm exec jeeves-runner run-fixture",
     "prepare": "lefthook install"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@jeeves/runner": "workspace:*",
     "@types/node": "^25.1.0",
     "eslint": "^9.39.2",
     "lefthook": "^2.0.16",

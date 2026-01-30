@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getIssueStateDir, getWorktreePath, parseIssueRef, parseRepoSpec, resolveDataDir } from './paths';
+import { getIssueStateDir, getWorktreePath, parseIssueRef, parseRepoSpec, resolveDataDir } from './paths.js';
 
 describe('resolveDataDir', () => {
   it('uses JEEVES_DATA_DIR when set (with ~ expansion)', () => {

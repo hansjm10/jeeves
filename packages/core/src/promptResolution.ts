@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { WorkflowEngine } from './workflowEngine';
+import type { WorkflowEngine } from './workflowEngine.js';
 
 export async function resolvePromptPath(
   phase: string,
@@ -34,4 +34,3 @@ export async function resolvePromptPath(
 
   return promptPath;
 }
-

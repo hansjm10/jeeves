@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateGuard } from './guards';
+import { evaluateGuard } from './guards.js';
 
 describe('evaluateGuard', () => {
   it('supports == and != against nested paths', () => {
@@ -24,4 +24,3 @@ describe('evaluateGuard', () => {
     expect(evaluateGuard('status.missing', ctx)).toBe(false);
   });
 });
-

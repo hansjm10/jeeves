@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { createIssueState, listIssueStates, loadIssueStateFromPath } from './issueState';
+import { createIssueState, listIssueStates, loadIssueStateFromPath } from './issueState.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jeeves-core-test-'));

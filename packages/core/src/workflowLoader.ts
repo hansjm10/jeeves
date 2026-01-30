@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
 
-import { phaseTypes, validModels, type Phase, type PhaseType, type Transition, type Workflow, WorkflowValidationError } from './workflow';
+import { phaseTypes, validModels, type Phase, type PhaseType, type Transition, type Workflow, WorkflowValidationError } from './workflow.js';
 
 type UnknownRecord = Record<string, unknown>;
 

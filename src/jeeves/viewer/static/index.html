@@ -4545,6 +4545,11 @@
                     data.allowed_writes = writesValue ? writesValue.split(',').map(s => s.trim()).filter(s => s) : [];
                 }
 
+                // Include model only when a non-empty value is selected
+                if (this.modelSelect && this.modelSelect.value) {
+                    data.model = this.modelSelect.value;
+                }
+
                 return data;
             }
 

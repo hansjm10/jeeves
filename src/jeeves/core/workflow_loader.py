@@ -124,6 +124,7 @@ def load_workflow(path: Path) -> Workflow:
         version=workflow_data.get("version", 1),
         start=workflow_data.get("start", "design"),
         phases=phases,
+        default_model=workflow_data.get("default_model"),
     )
 
     _validate_workflow(workflow)

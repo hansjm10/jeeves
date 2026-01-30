@@ -1340,6 +1340,25 @@
             font-weight: bold;
         }
 
+        /* Model badge on workflow nodes */
+        .node-model-badge {
+            font-size: 9px;
+            font-weight: 500;
+            text-anchor: middle;
+        }
+
+        .model-opus {
+            fill: #9c27b0;
+        }
+
+        .model-sonnet {
+            fill: #2196f3;
+        }
+
+        .model-haiku {
+            fill: #4caf50;
+        }
+
         /* Workflow Graph Zoom Controls */
         .workflow-zoom-controls {
             position: absolute;
@@ -2913,6 +2932,13 @@
                 nodeSelection.append('text')
                     .text(d => d.name)
                     .attr('dy', '0.35em');
+
+                // Add model badge for nodes that have a model set
+                nodeSelection.filter(d => d.model)
+                    .append('text')
+                    .attr('class', d => `node-model-badge model-${d.model}`)
+                    .attr('dy', '1.8em')
+                    .text(d => d.model);
 
                 this.nodeElements = this.nodeGroup.selectAll('.workflow-node');
 

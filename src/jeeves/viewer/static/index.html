@@ -4496,6 +4496,11 @@
                     this.allowedWritesInput.value = Array.isArray(writes) ? writes.join(', ') : writes;
                 }
 
+                // Set model dropdown value (empty string selects "(inherit default)")
+                if (this.modelSelect) {
+                    this.modelSelect.value = phase.model || '';
+                }
+
                 this._updateFieldVisibility();
                 this._updateTypeIndicator();
 

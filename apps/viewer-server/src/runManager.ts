@@ -193,10 +193,11 @@ export class RunManager {
 
     await this.appendViewerLog(viewerLogPath, `[RUNNER] ${this.status.command}`);
 
+    const env = { ...process.env, JEEVES_DATA_DIR: this.dataDir };
     const proc = this.spawnImpl(cmd, fullArgs, {
       cwd: this.repoRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env,
     });
     proc.stdin.end();
     this.proc = proc;
@@ -274,6 +275,19 @@ export class RunManager {
         const workflowName = params.workflowOverride ?? (isNonEmptyString(issueJson.workflow) ? issueJson.workflow : 'default');
         const currentPhase = isNonEmptyString(issueJson.phase) ? issueJson.phase : 'design_draft';
 
+        const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
+        const engine = new WorkflowEngine(workflow);
+        if (engine.isTerminal(currentPhase)) {
+          await this.appendViewerLog(viewerLogPath, `[COMPLETE] Already in terminal phase: ${currentPhase}`);
+          this.status = {
+            ...this.status,
+            completed_via_state: true,
+            completion_reason: `already in terminal phase: ${currentPhase}`,
+          };
+          this.broadcast('run', { run: this.status });
+          break;
+        }
+
         const lastRunLog = path.join(this.stateDir!, 'last-run.log');
         let lastSize = 0;
         let lastChangeAtMs = Date.now();
@@ -339,8 +353,6 @@ export class RunManager {
         // Advance phase via workflow transitions (viewer-server owns orchestration)
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
-          const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
-          const engine = new WorkflowEngine(workflow);
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {
             updatedIssue.phase = nextPhase;

@@ -47,6 +47,8 @@ class Phase:
         allowed_writes: Glob patterns for allowed file modifications (evaluate phases)
         status_mapping: Map command output to status fields (script phases)
         output_file: File for script progress output
+        model: Optional model identifier for this phase. Valid values: sonnet, opus, haiku.
+               If not set, inherits from workflow default_model or system default.
     """
     name: str
     type: PhaseType
@@ -57,6 +59,7 @@ class Phase:
     allowed_writes: List[str] = field(default_factory=lambda: [".jeeves/*"])
     status_mapping: Optional[Dict[str, Dict[str, Any]]] = None
     output_file: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass

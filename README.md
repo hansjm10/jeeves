@@ -125,3 +125,5 @@ jeeves/
 ```bash
 pytest tests/
 ```
+
+TypeScript viewer-server API docs: `docs/viewer-server-api.md`

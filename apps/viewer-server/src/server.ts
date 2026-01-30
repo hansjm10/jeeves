@@ -24,6 +24,17 @@ function isLocalAddress(addr: string | undefined | null): boolean {
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 }
 
+function parseAllowedOriginsFromEnv(): Set<string> {
+  const raw = (process.env.JEEVES_VIEWER_ALLOWED_ORIGINS ?? '').trim();
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+}
+
 function getRemoteAddress(req: import('fastify').FastifyRequest): string | null {
   return req.socket.remoteAddress ?? null;
 }
@@ -31,6 +42,35 @@ function getRemoteAddress(req: import('fastify').FastifyRequest): string | null 
 function parseEnvBool(value: string | undefined): boolean {
   const v = (value ?? '').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function isSameOrigin(req: import('fastify').FastifyRequest, origin: string): boolean {
+  const hostHeader = req.headers.host;
+  if (typeof hostHeader !== 'string' || !hostHeader.trim()) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  const reqHost = hostHeader.trim().toLowerCase();
+  const originHost = parsed.host.trim().toLowerCase();
+  if (originHost !== reqHost) return false;
+
+  const proto = parsed.protocol.toLowerCase();
+  return proto === 'http:' || proto === 'https:';
+}
+
+function isAllowedOrigin(
+  req: import('fastify').FastifyRequest,
+  origin: string,
+  allowlist: ReadonlySet<string>,
+): boolean {
+  const o = origin.trim();
+  if (!o) return false;
+  if (o === 'null') return false;
+  if (allowlist.has(o)) return true;
+  return isSameOrigin(req, o);
 }
 
 async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
@@ -111,10 +151,19 @@ export async function buildServer(config: ViewerServerConfig) {
   const workflowsDir = config.workflowsDir ?? path.join(repoRoot, 'workflows');
 
   const allowRemoteRun = config.allowRemoteRun || parseEnvBool(process.env.JEEVES_VIEWER_ALLOW_REMOTE_RUN);
+  const allowedOrigins = parseAllowedOriginsFromEnv();
 
   const hub = new EventHub();
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: true });
+  // CORS is opt-in. Same-origin requests do not require CORS headers.
+  if (allowedOrigins.size) {
+    await app.register(cors, {
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, false);
+        return cb(null, allowedOrigins.has(origin));
+      },
+    });
+  }
   await app.register(websocket);
 
   const runManager = new RunManager({
@@ -164,12 +213,26 @@ export async function buildServer(config: ViewerServerConfig) {
     };
   }
 
+  async function requireAllowedBrowserOrigin(
+    req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply,
+  ): Promise<void | import('fastify').FastifyReply> {
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+    if (!origin) return;
+    if (isAllowedOrigin(req, origin, allowedOrigins)) return;
+    return reply.code(403).send({ ok: false, error: 'Origin not allowed' });
+  }
+
   async function requireMutatingAllowed(req: import('fastify').FastifyRequest): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
     if (allowRemoteRun) return { ok: true };
     const ip = getRemoteAddress(req);
     if (isLocalAddress(ip)) return { ok: true };
     return { ok: false, status: 403, error: 'This endpoint is only allowed from localhost. Restart with --allow-remote-run to enable it.' };
   }
+
+  app.addHook('onRequest', async (req, reply) => {
+    return requireAllowedBrowserOrigin(req, reply);
+  });
 
   // Initialize active issue selection
   const explicitIssue = config.initialIssue?.trim() || process.env.JEEVES_VIEWER_ISSUE?.trim();
@@ -213,29 +276,45 @@ export async function buildServer(config: ViewerServerConfig) {
   await refreshFileTargets();
 
   // Poll for log/sdk updates and file target changes
-  const poller = setInterval(async () => {
-    await refreshFileTargets();
-    if (!currentStateDir) return;
+  async function pollTick(): Promise<void> {
+    try {
+      await refreshFileTargets();
+      if (!currentStateDir) return;
 
-    const logs = await logTailer.getNewLines();
-    if (logs.changed && logs.lines.length) hub.broadcast('logs', { lines: logs.lines });
+      const logs = await logTailer.getNewLines();
+      if (logs.changed && logs.lines.length) hub.broadcast('logs', { lines: logs.lines });
 
-    const viewerLogs = await viewerLogTailer.getNewLines();
-    if (viewerLogs.changed && viewerLogs.lines.length) hub.broadcast('viewer-logs', { lines: viewerLogs.lines });
+      const viewerLogs = await viewerLogTailer.getNewLines();
+      if (viewerLogs.changed && viewerLogs.lines.length) hub.broadcast('viewer-logs', { lines: viewerLogs.lines });
 
-    const sdk = await sdkTailer.readSnapshot();
-    if (sdk) {
-      const diff = sdkTailer.consumeAndDiff(sdk);
-      if (diff.sessionChanged && diff.sessionId) {
-        hub.broadcast('sdk-init', { session_id: diff.sessionId, started_at: diff.startedAt, status: 'running' });
+      const sdk = await sdkTailer.readSnapshot();
+      if (sdk) {
+        const diff = sdkTailer.consumeAndDiff(sdk);
+        if (diff.sessionChanged && diff.sessionId) {
+          hub.broadcast('sdk-init', { session_id: diff.sessionId, started_at: diff.startedAt, status: 'running' });
+        }
+        for (const m of diff.newMessages) hub.broadcast('sdk-message', m);
+        for (const tc of diff.toolStarts) hub.broadcast('sdk-tool-start', tc);
+        for (const tc of diff.toolCompletes) hub.broadcast('sdk-tool-complete', tc);
+        if (diff.justEnded) {
+          hub.broadcast('sdk-complete', { status: diff.success === false ? 'error' : 'success', summary: diff.stats ?? {} });
+        }
       }
-      for (const m of diff.newMessages) hub.broadcast('sdk-message', m);
-      for (const tc of diff.toolStarts) hub.broadcast('sdk-tool-start', tc);
-      for (const tc of diff.toolCompletes) hub.broadcast('sdk-tool-complete', tc);
-      if (diff.justEnded) {
-        hub.broadcast('sdk-complete', { status: diff.success === false ? 'error' : 'success', summary: diff.stats ?? {} });
-      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error('viewer-server poller error:', stack ?? message);
+      hub.broadcast('viewer-error', { source: 'poller', message, stack });
     }
+  }
+
+  let pollInFlight = false;
+  const poller = setInterval(() => {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    void pollTick().finally(() => {
+      pollInFlight = false;
+    });
   }, 150);
 
   app.addHook('onClose', async () => {
@@ -416,12 +495,15 @@ export async function buildServer(config: ViewerServerConfig) {
   });
 
   app.get('/api/stream', async (req, reply) => {
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': '*',
+      ...(origin && allowedOrigins.has(origin)
+        ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+        : {}),
     });
     reply.hijack();
 
@@ -448,7 +530,16 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
-  app.get('/api/ws', { websocket: true }, async (connection) => {
+  app.get('/api/ws', { websocket: true }, async (connection, req) => {
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+    if (origin && !isAllowedOrigin(req, origin, allowedOrigins)) {
+      try {
+        connection.socket.close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
     const id = hub.addWsClient(connection.socket);
     connection.socket.on('close', () => hub.removeClient(id));
     hub.sendTo(id, 'state', await getStateSnapshot());

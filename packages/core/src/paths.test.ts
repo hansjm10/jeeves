@@ -71,4 +71,15 @@ describe('parseRepoSpec / parseIssueRef', () => {
     expect(parseIssueRef('#123', { owner: 'owner', repo: 'repo' })).toEqual({ owner: 'owner', repo: 'repo', issueNumber: 123 });
     expect(parseIssueRef('https://github.com/owner/repo/issues/123')).toEqual({ owner: 'owner', repo: 'repo', issueNumber: 123 });
   });
+
+  it('throws on invalid repo specs and issue refs', () => {
+    expect(() => parseRepoSpec('')).toThrow(/repo spec is required/);
+    expect(() => parseRepoSpec('https://example.com/owner/repo')).toThrow(/invalid repo spec/);
+    expect(() => parseRepoSpec('https://github.com/owner')).toThrow(/invalid repo spec/);
+
+    expect(() => parseIssueRef('')).toThrow(/issue ref is required/);
+    expect(() => parseIssueRef('123')).toThrow(/requires a repo/);
+    expect(() => parseIssueRef('#0', { owner: 'o', repo: 'r' })).toThrow(/invalid issue number/);
+    expect(() => parseIssueRef('owner/repo#x')).toThrow(/invalid issue number/);
+  });
 });

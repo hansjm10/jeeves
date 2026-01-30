@@ -98,4 +98,16 @@ describe('issue state read/write', () => {
       expect(list.map((x) => x.issueNumber)).toEqual([1, 2]);
     });
   });
+
+  it('throws if issue state exists, unless forced (and overwrites issue.json)', async () => {
+    await withTempDir(async (dataDir) => {
+      await createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir, notes: 'first' });
+
+      await expect(createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir })).rejects.toThrow(/already exists/);
+
+      await createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir, force: true, notes: 'second' });
+      const loaded = await loadIssueStateFromPath(path.join(dataDir, 'issues', 'o', 'r', '38'));
+      expect(loaded.notes).toBe('second');
+    });
+  });
 });

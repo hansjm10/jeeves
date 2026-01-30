@@ -16,7 +16,7 @@ export class LogTailer {
   private offset = 0;
   private leftover = '';
 
-  reset(filePath: string): void {
+  reset(filePath: string | null): void {
     this.filePath = filePath;
     this.offset = 0;
     this.leftover = '';
@@ -39,6 +39,7 @@ export class LogTailer {
     const fh = await fs.open(this.filePath, 'r');
     try {
       while (pos > 0 && outRev.length < maxLines) {
+        const isEndChunk = pos === stat.size;
         const start = Math.max(0, pos - chunkSize);
         const toRead = pos - start;
         const buf = Buffer.alloc(toRead);
@@ -47,11 +48,12 @@ export class LogTailer {
 
         const text = chunkText + carry;
         const parts = text.split(/\r?\n/);
+        if (isEndChunk && /\r?\n$/.test(text) && parts.length && parts[parts.length - 1] === '') parts.pop();
         carry = start > 0 ? (parts.shift() ?? '') : '';
 
         for (let i = parts.length - 1; i >= 0 && outRev.length < maxLines; i -= 1) {
           const line = parts[i];
-          if (line) outRev.push(line);
+          outRev.push(line);
         }
 
         pos = start;
@@ -92,7 +94,7 @@ export class LogTailer {
         // drop final empty segment
         if (parts.length && parts[parts.length - 1] === '') parts.pop();
       }
-      const lines = parts.filter(Boolean);
+      const lines = parts;
       return { lines, changed: lines.length > 0 };
     } finally {
       await fh.close();
@@ -108,7 +110,7 @@ export class SdkOutputTailer {
   private toolCompleted = new Set<string>();
   private ended = false;
 
-  reset(filePath: string): void {
+  reset(filePath: string | null): void {
     this.filePath = filePath;
     this.lastSessionId = null;
     this.lastMessageCount = 0;

@@ -26,6 +26,7 @@ Environment variables:
 ## Security model (local-only by default)
 
 - **Mutating endpoints** (POST routes) are blocked from non-local IPs unless `--allow-remote-run` / `JEEVES_VIEWER_ALLOW_REMOTE_RUN=1` is set.
+- **Host binding note**: allowing remote clients typically requires binding to a non-loopback host (for example `--host 0.0.0.0`) in addition to enabling `--allow-remote-run`.
 - **Reverse proxy note**: mutating-endpoint gating uses the TCP peer address (`req.socket.remoteAddress`) and does **not** consult `X-Forwarded-For`. If you put this behind a proxy, your effective trust boundary may change; prefer binding to `127.0.0.1` unless you add an explicit auth boundary in front.
 - **Browser-origin policy**: if an `Origin` header is present, requests are allowed only when the Origin is:
   - same-host+port as the request `Host` header (http/https schemes), or

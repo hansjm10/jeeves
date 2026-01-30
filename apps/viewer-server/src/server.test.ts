@@ -144,6 +144,27 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('allows mutating endpoints from localhost by default', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-local-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: {},
+    });
+    expect(res.statusCode).not.toBe(403);
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('SSE stream responds with event-stream and includes initial state event', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-sse-');
     const { app } = await buildServer({

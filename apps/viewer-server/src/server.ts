@@ -290,13 +290,14 @@ export async function buildServer(config: ViewerServerConfig) {
     const stateDir = runManager.getIssue().stateDir;
     if (stateDir !== currentStateDir) {
       currentStateDir = stateDir;
-      if (stateDir) {
-        logTailer.reset(path.join(stateDir, 'last-run.log'));
-        viewerLogTailer.reset(path.join(stateDir, 'viewer-run.log'));
-        sdkTailer.reset(path.join(stateDir, 'sdk-output.json'));
-      }
+      logTailer.reset(stateDir ? path.join(stateDir, 'last-run.log') : null);
+      viewerLogTailer.reset(stateDir ? path.join(stateDir, 'viewer-run.log') : null);
+      sdkTailer.reset(stateDir ? path.join(stateDir, 'sdk-output.json') : null);
+
       const lines = await logTailer.getAllLines(logSnapshotLines);
-      if (lines.length) hub.broadcast('logs', { lines, reset: true });
+      hub.broadcast('logs', { lines, reset: true });
+      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
+      hub.broadcast('viewer-logs', { lines: viewerLines, reset: true });
       const sdk = await readSdkOutput(stateDir);
       if (sdk) emitSdkSnapshot((event, data) => hub.broadcast(event, data), sdk);
     }
@@ -425,6 +426,7 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.addHook('onClose', async () => {
     clearInterval(poller);
+    await runManager.stop({ force: false }).catch(() => void 0);
   });
 
   app.get('/api/state', async () => ({ ...(await getStateSnapshot()) }));
@@ -640,14 +642,12 @@ export async function buildServer(config: ViewerServerConfig) {
     hub.sendTo(id, 'state', snapshot);
 
     await refreshFileTargets();
-    if (currentStateDir) {
-      const logLines = await logTailer.getAllLines(logSnapshotLines);
-      if (logLines.length) hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
-      if (viewerLines.length) hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
-      const sdk = await readSdkOutput(currentStateDir);
-      if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
-    }
+    const logLines = await logTailer.getAllLines(logSnapshotLines);
+    hub.sendTo(id, 'logs', { lines: logLines, reset: true });
+    const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
+    hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
+    const sdk = await readSdkOutput(currentStateDir);
+    if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
   });
 
   app.get('/api/ws', { websocket: true }, async (socket, req) => {
@@ -665,14 +665,12 @@ export async function buildServer(config: ViewerServerConfig) {
     socket.on('close', () => hub.removeClient(id));
     hub.sendTo(id, 'state', await getStateSnapshot());
     await refreshFileTargets();
-    if (currentStateDir) {
-      const logLines = await logTailer.getAllLines(logSnapshotLines);
-      if (logLines.length) hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
-      if (viewerLines.length) hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
-      const sdk = await readSdkOutput(currentStateDir);
-      if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
-    }
+    const logLines = await logTailer.getAllLines(logSnapshotLines);
+    hub.sendTo(id, 'logs', { lines: logLines, reset: true });
+    const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
+    hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
+    const sdk = await readSdkOutput(currentStateDir);
+    if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
   });
 
   return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun };

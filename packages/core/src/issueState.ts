@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { getIssueStateDir, getIssuesDir, parseRepoSpec, type RepoSpec } from './paths';
+import { getIssueStateDir, getIssuesDir, parseRepoSpec, type RepoSpec } from './paths.js';
 
 export type IssueState = Readonly<{
   schemaVersion: 1;

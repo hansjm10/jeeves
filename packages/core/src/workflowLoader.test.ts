@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadWorkflowFromFile } from './workflowLoader';
+import { loadWorkflowFromFile } from './workflowLoader.js';
 
 describe('workflowLoader', () => {
   it('loads and validates the repo default workflow YAML', async () => {
@@ -17,4 +17,3 @@ describe('workflowLoader', () => {
     expect(workflow.phases.task_spec_check.transitions.length).toBeGreaterThan(1);
   });
 });
-

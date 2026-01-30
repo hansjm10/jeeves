@@ -2,9 +2,9 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import type { Workflow } from './workflow';
-import { resolvePromptPath } from './promptResolution';
-import { WorkflowEngine } from './workflowEngine';
+import type { Workflow } from './workflow.js';
+import { resolvePromptPath } from './promptResolution.js';
+import { WorkflowEngine } from './workflowEngine.js';
 
 describe('resolvePromptPath', () => {
   it('resolves prompt paths within promptsDir', async () => {
@@ -55,4 +55,3 @@ describe('resolvePromptPath', () => {
     await expect(resolvePromptPath('p', promptsDir, new WorkflowEngine(missing))).rejects.toThrow(/Prompt not found/);
   });
 });
-

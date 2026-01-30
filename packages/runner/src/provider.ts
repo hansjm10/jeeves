@@ -27,6 +27,7 @@ export type ProviderEvent =
       toolUseId: string;
       content: string;
       isError?: boolean;
+      durationMs?: number | null;
       timestamp?: string;
     }>;
 
@@ -34,4 +35,3 @@ export interface AgentProvider {
   readonly name: string;
   run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent>;
 }
-

@@ -27,6 +27,7 @@ export class SdkOutputWriterV1 {
   private readonly startedAt: string;
   private readonly messages: SdkOutputV1Message[] = [];
   private readonly toolCalls: SdkOutputV1ToolCall[] = [];
+  private readonly toolCallIndexById = new Map<string, number>();
   private endedAt = '';
   private success = false;
   private error: { message: string; type: string } | null = null;
@@ -46,12 +47,14 @@ export class SdkOutputWriterV1 {
     const timestamp = event.timestamp ?? nowIso();
 
     if (event.type === 'tool_use') {
+      const idx = this.toolCalls.length;
       this.toolCalls.push({
         name: event.name,
         input: event.input,
         tool_use_id: event.id,
         timestamp,
       });
+      this.toolCallIndexById.set(event.id, idx);
       return;
     }
 
@@ -63,6 +66,16 @@ export class SdkOutputWriterV1 {
         content: event.content,
         ...(event.isError ? { is_error: true } : {}),
       });
+
+      const idx = this.toolCallIndexById.get(event.toolUseId);
+      if (idx !== undefined) {
+        const prev = this.toolCalls[idx];
+        this.toolCalls[idx] = {
+          ...prev,
+          ...(event.durationMs !== undefined ? { duration_ms: event.durationMs } : {}),
+          ...(event.isError ? { is_error: true } : {}),
+        };
+      }
       return;
     }
 

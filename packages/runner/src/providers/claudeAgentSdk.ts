@@ -1,10 +1,44 @@
 import type { AgentProvider, ProviderEvent, ProviderRunOptions } from '../provider.js';
 
 // NOTE: Keep all SDK imports in this file so the rest of the runner is provider-agnostic.
-import { query, type Options, type SDKAssistantMessage, type SDKMessage, type SDKResultMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type HookCallbackMatcher,
+  type HookInput,
+  type Options,
+  type SDKAssistantMessage,
+  type SDKMessage,
+  type SDKResultMessage,
+  type SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (isPlainObject(value)) return value;
+  return { value };
+}
+
+function safeCompactString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncate(input: string, max = 2000): string {
+  if (input.length <= max) return input;
+  return input.slice(0, max);
 }
 
 function extractTextFromMessageParam(message: SDKUserMessage['message']): string {
@@ -51,10 +85,78 @@ export class ClaudeAgentProvider implements AgentProvider {
   readonly name = 'claude-agent-sdk';
 
   async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+    const pendingEvents: ProviderEvent[] = [];
+    const toolStartMsById = new Map<string, number>();
+
+    const hooks: Partial<Record<string, HookCallbackMatcher[]>> = {
+      PreToolUse: [
+        {
+          hooks: [
+            async (input: HookInput) => {
+              if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+              toolStartMsById.set(input.tool_use_id, Date.now());
+              pendingEvents.push({
+                type: 'tool_use',
+                name: input.tool_name,
+                input: toRecord(input.tool_input),
+                id: input.tool_use_id,
+                timestamp: nowIso(),
+              });
+              return { continue: true };
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          hooks: [
+            async (input: HookInput) => {
+              if (input.hook_event_name !== 'PostToolUse') return { continue: true };
+              const startedMs = toolStartMsById.get(input.tool_use_id);
+              const durationMs = startedMs ? Date.now() - startedMs : null;
+              pendingEvents.push({
+                type: 'tool_result',
+                toolUseId: input.tool_use_id,
+                content: truncate(safeCompactString(input.tool_response)),
+                durationMs,
+                isError: false,
+                timestamp: nowIso(),
+              });
+              return { continue: true };
+            },
+          ],
+        },
+      ],
+      PostToolUseFailure: [
+        {
+          hooks: [
+            async (input: HookInput) => {
+              if (input.hook_event_name !== 'PostToolUseFailure') return { continue: true };
+              const startedMs = toolStartMsById.get(input.tool_use_id);
+              const durationMs = startedMs ? Date.now() - startedMs : null;
+              pendingEvents.push({
+                type: 'tool_result',
+                toolUseId: input.tool_use_id,
+                content: truncate(input.error),
+                durationMs,
+                isError: true,
+                timestamp: nowIso(),
+              });
+              return { continue: true };
+            },
+          ],
+        },
+      ],
+    };
+
     const sdkOptions: Options = {
       cwd: options.cwd,
       includePartialMessages: false,
+      // Intentional default for now: trusted local automation should run without prompts.
+      // (Not configurable yet; if/when we expose config, we can offer stricter modes.)
       permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      hooks: hooks as Options['hooks'],
     };
     yield {
       type: 'system',
@@ -66,6 +168,7 @@ export class ClaudeAgentProvider implements AgentProvider {
     const q = query({ prompt, options: sdkOptions });
 
     for await (const msg of q as AsyncIterable<SDKMessage>) {
+      while (pendingEvents.length) yield pendingEvents.shift()!;
       const ts = nowIso();
       if (msg.type === 'assistant') {
         yield { type: 'assistant', content: extractTextFromAssistantMessage(msg.message), timestamp: ts };
@@ -73,6 +176,12 @@ export class ClaudeAgentProvider implements AgentProvider {
       }
 
       if (msg.type === 'user') {
+        // The SDK may emit synthetic `user` messages for tool results. Since we
+        // separately capture tool outcomes via hooks, suppress these to avoid
+        // duplicating tool results in the output stream.
+        if (msg.parent_tool_use_id !== null && (msg as SDKUserMessage).tool_use_result !== undefined) {
+          continue;
+        }
         yield { type: 'user', content: extractTextFromMessageParam(msg.message), timestamp: ts };
         continue;
       }
@@ -111,6 +220,9 @@ export class ClaudeAgentProvider implements AgentProvider {
       }
 
       yield { type: 'system', content: `[sdk] ${JSON.stringify(msg)}`, timestamp: ts, sessionId: (msg as { session_id?: string }).session_id ?? null };
+      while (pendingEvents.length) yield pendingEvents.shift()!;
     }
+
+    while (pendingEvents.length) yield pendingEvents.shift()!;
   }
 }

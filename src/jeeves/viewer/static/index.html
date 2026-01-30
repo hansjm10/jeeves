@@ -4284,6 +4284,16 @@
                                 <option value="">-- Select prompt --</option>
                             </select>
                         </div>
+                        <div class="phase-editor-field" id="phaseEditorModelField">
+                            <label class="phase-editor-label" for="phaseEditorModel">Model</label>
+                            <select class="phase-editor-select" id="phaseEditorModel">
+                                <option value="">(inherit default)</option>
+                                <option value="sonnet">sonnet</option>
+                                <option value="opus">opus</option>
+                                <option value="haiku">haiku</option>
+                            </select>
+                            <span class="phase-editor-help">Override model for this phase</span>
+                        </div>
                         <div class="phase-editor-field hidden" id="phaseEditorCommandField">
                             <label class="phase-editor-label" for="phaseEditorCommand">Command</label>
                             <input type="text" class="phase-editor-input" id="phaseEditorCommand" placeholder="Shell command to execute">

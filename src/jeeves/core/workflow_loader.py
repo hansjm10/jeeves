@@ -58,6 +58,7 @@ def _parse_phase(name: str, data: Dict[str, Any]) -> Phase:
         allowed_writes=data.get("allowed_writes", [".jeeves/*"]),
         status_mapping=data.get("status_mapping"),
         output_file=data.get("output_file"),
+        model=data.get("model"),
     )
 
 

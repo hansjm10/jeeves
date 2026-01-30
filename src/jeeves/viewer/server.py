@@ -206,14 +206,20 @@ class JeevesWorkflowManager:
                 phase_data["command"] = phase.command
             if phase.allowed_writes and phase.allowed_writes != [".jeeves/*"]:
                 phase_data["allowed_writes"] = phase.allowed_writes
+            if phase.model:
+                phase_data["model"] = phase.model
             phases[phase_name] = phase_data
 
+        workflow_data = {
+            "name": workflow.name,
+            "version": workflow.version,
+            "start": workflow.start,
+        }
+        if workflow.default_model:
+            workflow_data["default_model"] = workflow.default_model
+
         return {
-            "workflow": {
-                "name": workflow.name,
-                "version": workflow.version,
-                "start": workflow.start,
-            },
+            "workflow": workflow_data,
             "phases": phases,
         }
 
@@ -227,8 +233,12 @@ class JeevesWorkflowManager:
             raise ValueError(f"Workflow validation failed: {'; '.join(errors)}")
 
         # Convert JSON format to YAML format
+        workflow_section = data.get("workflow", {"name": name, "version": 1, "start": "design_draft"})
+        # Add default_model to workflow section if present
+        if data.get("workflow", {}).get("default_model"):
+            workflow_section["default_model"] = data["workflow"]["default_model"]
         yaml_data = {
-            "workflow": data.get("workflow", {"name": name, "version": 1, "start": "design_draft"}),
+            "workflow": workflow_section,
             "phases": {},
         }
 
@@ -244,6 +254,8 @@ class JeevesWorkflowManager:
                 phase_yaml["command"] = phase["command"]
             if phase.get("allowed_writes"):
                 phase_yaml["allowed_writes"] = phase["allowed_writes"]
+            if phase.get("model"):
+                phase_yaml["model"] = phase["model"]
 
             transitions = phase.get("transitions", [])
             if transitions:

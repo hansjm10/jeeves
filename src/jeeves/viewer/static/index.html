@@ -1340,6 +1340,25 @@
             font-weight: bold;
         }
 
+        /* Model badge on workflow nodes */
+        .node-model-badge {
+            font-size: 9px;
+            font-weight: 500;
+            text-anchor: middle;
+        }
+
+        .model-opus {
+            fill: #9c27b0;
+        }
+
+        .model-sonnet {
+            fill: #2196f3;
+        }
+
+        .model-haiku {
+            fill: #4caf50;
+        }
+
         /* Workflow Graph Zoom Controls */
         .workflow-zoom-controls {
             position: absolute;
@@ -2757,6 +2776,7 @@
                         description: phase.description || '',
                         prompt: phase.prompt,
                         command: phase.command,
+                        model: phase.model,
                         phase: phase  // Keep reference to original phase data
                     });
                 });
@@ -2912,6 +2932,13 @@
                 nodeSelection.append('text')
                     .text(d => d.name)
                     .attr('dy', '0.35em');
+
+                // Add model badge for nodes that have a model set
+                nodeSelection.filter(d => d.model)
+                    .append('text')
+                    .attr('class', d => `node-model-badge model-${d.model}`)
+                    .attr('dy', '1.8em')
+                    .text(d => d.model);
 
                 this.nodeElements = this.nodeGroup.selectAll('.workflow-node');
 
@@ -3701,6 +3728,9 @@
                     if (node.allowed_writes) {
                         phaseData.allowed_writes = node.allowed_writes;
                     }
+                    if (node.model) {
+                        phaseData.model = node.model;
+                    }
 
                     // Find transitions from this node
                     const nodeTransitions = this.links
@@ -3730,8 +3760,18 @@
                     phases[node.id] = phaseData;
                 });
 
+                // Build workflow object, including default_model from the dropdown
+                const workflowObj = this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 };
+                const defaultModelSelect = document.getElementById('workflowDefaultModel');
+                if (defaultModelSelect && defaultModelSelect.value) {
+                    workflowObj.default_model = defaultModelSelect.value;
+                } else if (workflowObj.default_model) {
+                    // Remove default_model if dropdown is set to empty (system default)
+                    delete workflowObj.default_model;
+                }
+
                 return {
-                    workflow: this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 },
+                    workflow: workflowObj,
                     phases: phases
                 };
             }
@@ -4284,6 +4324,16 @@
                                 <option value="">-- Select prompt --</option>
                             </select>
                         </div>
+                        <div class="phase-editor-field" id="phaseEditorModelField">
+                            <label class="phase-editor-label" for="phaseEditorModel">Model</label>
+                            <select class="phase-editor-select" id="phaseEditorModel">
+                                <option value="">(inherit default)</option>
+                                <option value="sonnet">sonnet</option>
+                                <option value="opus">opus</option>
+                                <option value="haiku">haiku</option>
+                            </select>
+                            <span class="phase-editor-help">Override model for this phase</span>
+                        </div>
                         <div class="phase-editor-field hidden" id="phaseEditorCommandField">
                             <label class="phase-editor-label" for="phaseEditorCommand">Command</label>
                             <input type="text" class="phase-editor-input" id="phaseEditorCommand" placeholder="Shell command to execute">
@@ -4314,9 +4364,11 @@
                 this.promptSelect = document.getElementById('phaseEditorPrompt');
                 this.commandInput = document.getElementById('phaseEditorCommand');
                 this.allowedWritesInput = document.getElementById('phaseEditorAllowedWrites');
+                this.modelSelect = document.getElementById('phaseEditorModel');
                 this.promptField = document.getElementById('phaseEditorPromptField');
                 this.commandField = document.getElementById('phaseEditorCommandField');
                 this.allowedWritesField = document.getElementById('phaseEditorAllowedWritesField');
+                this.modelField = document.getElementById('phaseEditorModelField');
                 this.typeIndicator = document.getElementById('phaseEditorTypeIndicator');
                 this.deleteBtn = document.getElementById('phaseEditorDelete');
                 this.duplicateBtn = document.getElementById('phaseEditorDuplicate');
@@ -4336,7 +4388,7 @@
                 }
 
                 // Input change handlers
-                const inputs = [this.nameInput, this.descriptionInput, this.promptSelect, this.commandInput, this.allowedWritesInput];
+                const inputs = [this.nameInput, this.descriptionInput, this.promptSelect, this.commandInput, this.allowedWritesInput, this.modelSelect];
                 inputs.forEach(input => {
                     if (input) {
                         input.addEventListener('input', () => this._emitChange());
@@ -4425,6 +4477,11 @@
                 if (this.allowedWritesField) {
                     this.allowedWritesField.classList.toggle('hidden', type !== 'evaluate');
                 }
+
+                // Model field: visible for execute and evaluate (hidden for script and terminal)
+                if (this.modelField) {
+                    this.modelField.classList.toggle('hidden', type === 'script' || type === 'terminal');
+                }
             }
 
             /**
@@ -4484,6 +4541,11 @@
                     this.allowedWritesInput.value = Array.isArray(writes) ? writes.join(', ') : writes;
                 }
 
+                // Set model dropdown value (empty string selects "(inherit default)")
+                if (this.modelSelect) {
+                    this.modelSelect.value = phase.model || '';
+                }
+
                 this._updateFieldVisibility();
                 this._updateTypeIndicator();
 
@@ -4526,6 +4588,11 @@
                 if (type === 'evaluate') {
                     const writesValue = this.allowedWritesInput ? this.allowedWritesInput.value.trim() : '';
                     data.allowed_writes = writesValue ? writesValue.split(',').map(s => s.trim()).filter(s => s) : [];
+                }
+
+                // Include model only when a non-empty value is selected
+                if (this.modelSelect && this.modelSelect.value) {
+                    data.model = this.modelSelect.value;
                 }
 
                 return data;
@@ -7172,6 +7239,15 @@
                         <option value="default">Loading...</option>
                     </select>
                 </div>
+                <div class="workflow-selector" id="workflowDefaultModelField">
+                    <label for="workflowDefaultModel">Default Model:</label>
+                    <select id="workflowDefaultModel" title="Default model for all phases in this workflow">
+                        <option value="">(System default)</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="haiku">Haiku</option>
+                    </select>
+                </div>
                 <div class="workflow-toolbar-group">
                     <button id="workflowSaveBtn" class="primary" title="Save workflow (Ctrl+S)">
                         <span>💾</span> Save
@@ -7286,6 +7362,11 @@
                         // Update selector
                         const select = document.getElementById('workflowSelect');
                         if (select) select.value = name;
+                        // Update default model dropdown
+                        const defaultModelSelect = document.getElementById('workflowDefaultModel');
+                        if (defaultModelSelect) {
+                            defaultModelSelect.value = data.workflow?.default_model || '';
+                        }
                     } else {
                         alert(`Failed to load workflow: ${data.error || 'Unknown error'}`);
                     }
@@ -7460,6 +7541,9 @@
                     yaml += `  version: ${data.workflow.version || 1}\n`;
                     if (data.workflow.start) {
                         yaml += `  start: ${data.workflow.start}\n`;
+                    }
+                    if (data.workflow.default_model) {
+                        yaml += `  default_model: ${data.workflow.default_model}\n`;
                     }
                     yaml += '\n';
                 }
@@ -7675,6 +7759,16 @@
             if (workflowSelect) {
                 workflowSelect.addEventListener('change', (e) => {
                     loadWorkflow(e.target.value);
+                });
+            }
+
+            // Default model selector change - mark as modified
+            const defaultModelSelect = document.getElementById('workflowDefaultModel');
+            if (defaultModelSelect) {
+                defaultModelSelect.addEventListener('change', () => {
+                    if (workflowGraph) {
+                        workflowGraph._markModified();
+                    }
                 });
             }
 

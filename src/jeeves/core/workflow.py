@@ -47,6 +47,8 @@ class Phase:
         allowed_writes: Glob patterns for allowed file modifications (evaluate phases)
         status_mapping: Map command output to status fields (script phases)
         output_file: File for script progress output
+        model: Optional model identifier for this phase. Valid values: sonnet, opus, haiku.
+               If not set, inherits from workflow default_model or system default.
     """
     name: str
     type: PhaseType
@@ -57,6 +59,7 @@ class Phase:
     allowed_writes: List[str] = field(default_factory=lambda: [".jeeves/*"])
     status_mapping: Optional[Dict[str, Dict[str, Any]]] = None
     output_file: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass
@@ -68,11 +71,14 @@ class Workflow:
         version: Schema version
         start: Name of the starting phase
         phases: Map of phase name to Phase object
+        default_model: Optional default model for phases in this workflow.
+                       Valid values: sonnet, opus, haiku. If not set, uses system default.
     """
     name: str
     version: int
     start: str
     phases: Dict[str, Phase]
+    default_model: Optional[str] = None
 
     def get_phase(self, name: str) -> Optional[Phase]:
         """Get a phase by name."""
@@ -84,3 +90,25 @@ class Workflow:
         if not phase:
             raise ValueError(f"Start phase '{self.start}' not found in workflow")
         return phase
+
+    def get_effective_model(self, phase_name: str) -> Optional[str]:
+        """Get the effective model for a phase.
+
+        Returns the model to use for the specified phase, following the
+        inheritance hierarchy:
+        1. Phase-specific model (if set)
+        2. Workflow default_model (if set)
+        3. None (use system default)
+
+        Args:
+            phase_name: Name of the phase to get the model for
+
+        Returns:
+            The model identifier (sonnet, opus, haiku) or None if not set
+        """
+        phase = self.phases.get(phase_name)
+        if not phase:
+            return None
+        if phase.model:
+            return phase.model
+        return self.default_model

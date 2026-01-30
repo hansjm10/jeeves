@@ -48,6 +48,10 @@ class RunnerConfig:
     # Skill provisioning
     skills_source: Optional[Path] = None
 
+    # Model configuration
+    # Override the model for this run. Valid values: sonnet, opus, haiku.
+    model: Optional[str] = None
+
     @classmethod
     def from_args(
         cls,
@@ -63,6 +67,7 @@ class RunnerConfig:
         phase_type: Optional[str] = None,
         skills_source: Optional[str] = None,
         max_buffer_size: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> "RunnerConfig":
         """Create config from command line arguments."""
         return cls(
@@ -78,6 +83,7 @@ class RunnerConfig:
             phase_type=phase_type,
             skills_source=Path(skills_source) if skills_source else None,
             max_buffer_size=max_buffer_size if max_buffer_size is not None else cls.max_buffer_size,
+            model=model,
         )
 
     @classmethod

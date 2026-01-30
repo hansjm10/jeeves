@@ -220,3 +220,283 @@ phases:
 
         with pytest.raises(FileNotFoundError, match="not found"):
             load_workflow_by_name("nonexistent", workflows_dir=tmp_path)
+
+
+class TestModelParsing:
+    """Tests for parsing model from YAML."""
+
+    def test_parse_phase_with_model(self, tmp_path):
+        """Phase model is parsed from YAML."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    model: opus
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.phases["design"].model == "opus"
+
+    def test_parse_phase_without_model(self, tmp_path):
+        """Phase without model field has model=None."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.phases["design"].model is None
+
+    def test_parse_workflow_default_model(self, tmp_path):
+        """Workflow default_model is parsed from YAML."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+  default_model: sonnet
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.default_model == "sonnet"
+
+    def test_parse_workflow_without_default_model(self, tmp_path):
+        """Workflow without default_model field has default_model=None."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.default_model is None
+
+
+class TestModelValidation:
+    """Tests for model validation in workflow loader."""
+
+    def test_valid_model_sonnet(self, tmp_path):
+        """Valid model 'sonnet' passes validation."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    model: sonnet
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.phases["design"].model == "sonnet"
+
+    def test_valid_model_opus(self, tmp_path):
+        """Valid model 'opus' passes validation."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    model: opus
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.phases["design"].model == "opus"
+
+    def test_valid_model_haiku(self, tmp_path):
+        """Valid model 'haiku' passes validation."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    model: haiku
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.phases["design"].model == "haiku"
+
+    def test_invalid_phase_model_raises(self, tmp_path):
+        """Invalid phase model raises WorkflowValidationError."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    model: invalid_model
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        with pytest.raises(WorkflowValidationError, match="Invalid model"):
+            load_workflow(workflow_file)
+
+    def test_invalid_workflow_default_model_raises(self, tmp_path):
+        """Invalid workflow default_model raises WorkflowValidationError."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+  default_model: gpt4
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        with pytest.raises(WorkflowValidationError, match="Invalid model"):
+            load_workflow(workflow_file)
+
+    def test_none_model_passes_validation(self, tmp_path):
+        """None model value (not specified) passes validation."""
+        yaml_content = """
+workflow:
+  name: test
+  version: 1
+  start: design
+
+phases:
+  design:
+    prompt: design.md
+    type: execute
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+"""
+        workflow_file = tmp_path / "test.yaml"
+        workflow_file.write_text(yaml_content)
+
+        # Should not raise - both phase.model and workflow.default_model are None
+        workflow = load_workflow(workflow_file)
+
+        assert workflow.default_model is None
+        assert workflow.phases["design"].model is None
+
+    def test_validate_model_function_directly(self):
+        """Test _validate_model function directly for edge cases."""
+        from jeeves.core.workflow_loader import _validate_model, VALID_MODELS
+
+        # Valid models should not raise
+        for model in VALID_MODELS:
+            _validate_model(model, "test context")  # Should not raise
+
+        # None should not raise
+        _validate_model(None, "test context")  # Should not raise
+
+        # Invalid model should raise
+        with pytest.raises(WorkflowValidationError, match="Invalid model"):
+            _validate_model("invalid", "test context")

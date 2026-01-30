@@ -161,7 +161,12 @@ class SDKRunner:
             max_buffer_size=self.config.max_buffer_size,
             # Enable project skills discovery when skills are provisioned
             setting_sources=["project"] if provisioned_skills else None,
+            model=self.config.model,
         )
+
+        # Log model if set
+        if self.config.model:
+            self._log(f"[SDK] Using model: {self.config.model}")
 
         # Track session initialization
         self._log(f"[SDK] Starting with prompt from {self.config.prompt_file}")

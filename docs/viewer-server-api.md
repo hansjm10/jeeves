@@ -19,10 +19,14 @@ CLI flags:
 Environment variables:
 - `JEEVES_VIEWER_ALLOW_REMOTE_RUN=1`: same effect as `--allow-remote-run`
 - `JEEVES_VIEWER_ALLOWED_ORIGINS`: comma-separated browser Origin allowlist (exact origins), e.g. `http://127.0.0.1:5173`
+- `JEEVES_VIEWER_POLL_MS`: polling interval for tailing logs/SDK output (default: `150`)
+- `JEEVES_VIEWER_LOG_TAIL_LINES`: initial snapshot lines for `last-run.log` (default: `500`)
+- `JEEVES_VIEWER_VIEWER_LOG_TAIL_LINES`: initial snapshot lines for `viewer-run.log` (default: `500`)
 
 ## Security model (local-only by default)
 
 - **Mutating endpoints** (POST routes) are blocked from non-local IPs unless `--allow-remote-run` / `JEEVES_VIEWER_ALLOW_REMOTE_RUN=1` is set.
+- **Reverse proxy note**: mutating-endpoint gating uses the TCP peer address (`req.socket.remoteAddress`) and does **not** consult `X-Forwarded-For`. If you put this behind a proxy, your effective trust boundary may change; prefer binding to `127.0.0.1` unless you add an explicit auth boundary in front.
 - **Browser-origin policy**: if an `Origin` header is present, requests are allowed only when the Origin is:
   - same-host+port as the request `Host` header (http/https schemes), or
   - explicitly listed in `JEEVES_VIEWER_ALLOWED_ORIGINS`.
@@ -73,4 +77,3 @@ SDK stream (from `sdk-output.json` snapshots):
 
 Diagnostics:
 - `viewer-error`: `{ source: "poller", message: string, stack?: string }`
-

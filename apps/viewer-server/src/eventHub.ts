@@ -10,8 +10,12 @@ export class EventHub {
   addSseClient(res: ServerResponse): number {
     const id = this.nextId++;
     this.clients.set(id, (event, data) => {
-      const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-      res.write(payload);
+      try {
+        const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        res.write(payload);
+      } catch {
+        // ignore; connection cleanup happens on close handlers
+      }
     });
     return id;
   }
@@ -19,7 +23,11 @@ export class EventHub {
   addWsClient(socket: WsLike): number {
     const id = this.nextId++;
     this.clients.set(id, (event, data) => {
-      socket.send(JSON.stringify({ event, data }));
+      try {
+        socket.send(JSON.stringify({ event, data }));
+      } catch {
+        // ignore; connection cleanup happens on close handlers
+      }
     });
     return id;
   }

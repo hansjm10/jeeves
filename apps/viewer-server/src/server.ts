@@ -44,6 +44,44 @@ function parseEnvBool(value: string | undefined): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+function parseEnvInt(
+  value: string | undefined,
+  fallback: number,
+  opts?: { min?: number; max?: number },
+): number {
+  const raw = (value ?? '').trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return fallback;
+  let out = Math.trunc(n);
+  if (opts?.min !== undefined) out = Math.max(opts.min, out);
+  if (opts?.max !== undefined) out = Math.min(opts.max, out);
+  return out;
+}
+
+function splitHostHeader(hostHeader: string): { hostname: string; port: number | null } {
+  const host = hostHeader.trim();
+  if (!host) return { hostname: '', port: null };
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+    if (end === -1) return { hostname: host.toLowerCase(), port: null };
+    const hostname = host.slice(1, end).toLowerCase();
+    const rest = host.slice(end + 1);
+    if (!rest.startsWith(':')) return { hostname, port: null };
+    const portRaw = rest.slice(1).trim();
+    const port = Number(portRaw);
+    if (!Number.isInteger(port) || port <= 0) return { hostname, port: null };
+    return { hostname, port };
+  }
+  const lastColon = host.lastIndexOf(':');
+  if (lastColon === -1) return { hostname: host.toLowerCase(), port: null };
+  const hostname = host.slice(0, lastColon).toLowerCase();
+  const portRaw = host.slice(lastColon + 1).trim();
+  if (!portRaw) return { hostname: host.toLowerCase(), port: null };
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0) return { hostname: host.toLowerCase(), port: null };
+  return { hostname, port };
+}
+
 function isSameOrigin(req: import('fastify').FastifyRequest, origin: string): boolean {
   const hostHeader = req.headers.host;
   if (typeof hostHeader !== 'string' || !hostHeader.trim()) return false;
@@ -53,12 +91,20 @@ function isSameOrigin(req: import('fastify').FastifyRequest, origin: string): bo
   } catch {
     return false;
   }
-  const reqHost = hostHeader.trim().toLowerCase();
-  const originHost = parsed.host.trim().toLowerCase();
-  if (originHost !== reqHost) return false;
 
   const proto = parsed.protocol.toLowerCase();
-  return proto === 'http:' || proto === 'https:';
+  if (proto !== 'http:' && proto !== 'https:') return false;
+
+  const { hostname, port } = splitHostHeader(hostHeader);
+  if (!hostname) return false;
+  if (parsed.hostname.trim().toLowerCase() !== hostname) return false;
+
+  const originPort = parsed.port ? Number(parsed.port) : (proto === 'https:' ? 443 : 80);
+  if (!Number.isInteger(originPort) || originPort <= 0) return false;
+
+  const reqPort = port ?? req.socket.localPort ?? null;
+  if (typeof reqPort !== 'number' || !Number.isInteger(reqPort) || reqPort <= 0) return false;
+  return originPort === reqPort;
 }
 
 function isAllowedOrigin(
@@ -71,6 +117,63 @@ function isAllowedOrigin(
   if (o === 'null') return false;
   if (allowlist.has(o)) return true;
   return isSameOrigin(req, o);
+}
+
+function isBodyRecord(body: unknown): body is Record<string, unknown> {
+  return Boolean(body) && typeof body === 'object' && !Array.isArray(body);
+}
+
+function getBody(req: import('fastify').FastifyRequest): Record<string, unknown> {
+  return isBodyRecord(req.body) ? req.body : {};
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value) || value <= 0) return null;
+    return value;
+  }
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) return null;
+    return n;
+  }
+  return null;
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const v = value.trim();
+  return v ? v : undefined;
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return undefined;
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function parseOptionalBool(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true;
+    if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+  }
+  return undefined;
+}
+
+function errorToHttp(err: unknown): { status: number; message: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes('worktree already exists')) return { status: 409, message };
+  if (message.includes('issue.json not found')) return { status: 404, message };
+  return { status: 400, message };
 }
 
 async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
@@ -152,6 +255,9 @@ export async function buildServer(config: ViewerServerConfig) {
 
   const allowRemoteRun = config.allowRemoteRun || parseEnvBool(process.env.JEEVES_VIEWER_ALLOW_REMOTE_RUN);
   const allowedOrigins = parseAllowedOriginsFromEnv();
+  const pollMs = parseEnvInt(process.env.JEEVES_VIEWER_POLL_MS, 150, { min: 25, max: 10_000 });
+  const logSnapshotLines = parseEnvInt(process.env.JEEVES_VIEWER_LOG_TAIL_LINES, 500, { min: 0, max: 10_000 });
+  const viewerLogSnapshotLines = parseEnvInt(process.env.JEEVES_VIEWER_VIEWER_LOG_TAIL_LINES, 500, { min: 0, max: 10_000 });
 
   const hub = new EventHub();
   const app = Fastify({ logger: false });
@@ -189,7 +295,7 @@ export async function buildServer(config: ViewerServerConfig) {
         viewerLogTailer.reset(path.join(stateDir, 'viewer-run.log'));
         sdkTailer.reset(path.join(stateDir, 'sdk-output.json'));
       }
-      const lines = await logTailer.getAllLines(500);
+      const lines = await logTailer.getAllLines(logSnapshotLines);
       if (lines.length) hub.broadcast('logs', { lines, reset: true });
       const sdk = await readSdkOutput(stateDir);
       if (sdk) emitSdkSnapshot((event, data) => hub.broadcast(event, data), sdk);
@@ -315,7 +421,7 @@ export async function buildServer(config: ViewerServerConfig) {
     void pollTick().finally(() => {
       pollInFlight = false;
     });
-  }, 150);
+  }, pollMs);
 
   app.addHook('onClose', async () => {
     clearInterval(poller);
@@ -344,98 +450,112 @@ export async function buildServer(config: ViewerServerConfig) {
     };
   });
 
-  app.post('/api/issues/select', async (req, reply) => {
-    const gate = await requireMutatingAllowed(req);
-    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
-    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot select issue while Jeeves is running.' });
+	  app.post('/api/issues/select', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot select issue while Jeeves is running.' });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const issueRef = typeof body.issue_ref === 'string' ? body.issue_ref : '';
-    if (!issueRef.trim()) return reply.code(400).send({ ok: false, error: 'issue_ref is required' });
+	    const body = getBody(req);
+	    const issueRef = parseOptionalString(body.issue_ref);
+	    if (!issueRef) return reply.code(400).send({ ok: false, error: 'issue_ref is required' });
 
-    try {
-      await runManager.setIssue(issueRef.trim());
-      await saveActiveIssue(dataDir, issueRef.trim());
-      await refreshFileTargets();
-      return reply.send({ ok: true, issue_ref: issueRef.trim() });
-    } catch (err) {
-      return reply.code(400).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+	    try {
+	      await runManager.setIssue(issueRef);
+	      await saveActiveIssue(dataDir, issueRef);
+	      await refreshFileTargets();
+	      return reply.send({ ok: true, issue_ref: issueRef });
+	    } catch (err) {
+	      const mapped = errorToHttp(err);
+	      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+	    }
+	  });
 
-  app.post('/api/init/issue', async (req, reply) => {
-    const gate = await requireMutatingAllowed(req);
-    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
-    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot init while Jeeves is running.' });
+	  app.post('/api/init/issue', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot init while Jeeves is running.' });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const repoStr = typeof body.repo === 'string' ? body.repo : '';
-    const issueNum = typeof body.issue === 'number' ? body.issue : Number(body.issue);
-    if (!repoStr.trim()) return reply.code(400).send({ ok: false, error: 'repo is required (owner/repo)' });
-    if (!Number.isInteger(issueNum) || issueNum <= 0) return reply.code(400).send({ ok: false, error: 'issue must be a positive integer' });
+	    const body = getBody(req);
+	    const repoStr = parseOptionalString(body.repo);
+	    if (!repoStr) return reply.code(400).send({ ok: false, error: 'repo is required (owner/repo)' });
+	    const issueNum = parsePositiveInt(body.issue);
+	    if (!issueNum) return reply.code(400).send({ ok: false, error: 'issue must be a positive integer' });
 
-    try {
-      // Validate repo early
-      parseRepoSpec(repoStr.trim());
-      const res = await initIssue({
-        dataDir,
-        body: {
-          repo: repoStr.trim(),
-          issue: issueNum,
-          branch: typeof body.branch === 'string' ? body.branch : undefined,
-          workflow: typeof body.workflow === 'string' ? body.workflow : undefined,
-          phase: typeof body.phase === 'string' ? body.phase : undefined,
-          design_doc: typeof body.design_doc === 'string' ? body.design_doc : undefined,
-          force: Boolean(body.force ?? false),
-        },
-      });
+	    try {
+	      parseRepoSpec(repoStr);
+	    } catch (err) {
+	      const mapped = errorToHttp(err);
+	      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+	    }
 
-      await runManager.setIssue(res.issue_ref);
-      await saveActiveIssue(dataDir, res.issue_ref);
-      await refreshFileTargets();
-      return reply.send({ ok: true, ...res });
-    } catch (err) {
-      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+	    try {
+	      const res = await initIssue({
+	        dataDir,
+	        body: {
+	          repo: repoStr,
+	          issue: issueNum,
+	          branch: parseOptionalString(body.branch),
+	          workflow: parseOptionalString(body.workflow),
+	          phase: parseOptionalString(body.phase),
+	          design_doc: parseOptionalString(body.design_doc),
+	          force: parseOptionalBool(body.force) ?? false,
+	        },
+	      });
 
-  app.post('/api/run', async (req, reply) => {
-    const gate = await requireMutatingAllowed(req);
-    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	      await runManager.setIssue(res.issue_ref);
+	      await saveActiveIssue(dataDir, res.issue_ref);
+	      await refreshFileTargets();
+	      return reply.send({ ok: true, ...res });
+	    } catch (err) {
+	      const msg = err instanceof Error ? err.message : String(err);
+	      const status = msg.includes('worktree already exists') ? 409 : 500;
+	      return reply.code(status).send({ ok: false, error: msg });
+	    }
+	  });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const issueRef = typeof body.issue_ref === 'string' ? body.issue_ref.trim() : '';
-    if (issueRef) {
-      if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot change issue while running.' });
-      await runManager.setIssue(issueRef);
-      await saveActiveIssue(dataDir, issueRef);
-      await refreshFileTargets();
-    }
+	  app.post('/api/run', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
 
-    try {
-      const run = await runManager.start({
-        provider: body.provider,
-        workflow: body.workflow,
-        max_iterations: body.max_iterations,
-        inactivity_timeout_sec: body.inactivity_timeout_sec,
-        iteration_timeout_sec: body.iteration_timeout_sec,
-      });
-      return reply.send({ ok: true, run });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const status = msg.includes('already running') ? 409 : 400;
-      return reply.code(status).send({ ok: false, error: msg, run: runManager.getStatus() });
-    }
-  });
+	    const body = getBody(req);
+	    const issueRef = parseOptionalString(body.issue_ref);
+	    if (issueRef) {
+	      if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot change issue while running.' });
+	      try {
+	        await runManager.setIssue(issueRef);
+	        await saveActiveIssue(dataDir, issueRef);
+	        await refreshFileTargets();
+	      } catch (err) {
+	        const mapped = errorToHttp(err);
+	        return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+	      }
+	    }
 
-  app.post('/api/run/stop', async (req, reply) => {
-    const gate = await requireMutatingAllowed(req);
-    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    try {
+	      const run = await runManager.start({
+	        provider: parseOptionalString(body.provider) ?? body.provider,
+	        workflow: parseOptionalString(body.workflow) ?? body.workflow,
+	        max_iterations: parseOptionalNumber(body.max_iterations) ?? body.max_iterations,
+	        inactivity_timeout_sec: parseOptionalNumber(body.inactivity_timeout_sec) ?? body.inactivity_timeout_sec,
+	        iteration_timeout_sec: parseOptionalNumber(body.iteration_timeout_sec) ?? body.iteration_timeout_sec,
+	      });
+	      return reply.send({ ok: true, run });
+	    } catch (err) {
+	      const msg = err instanceof Error ? err.message : String(err);
+	      const status = msg.includes('already running') ? 409 : 400;
+	      return reply.code(status).send({ ok: false, error: msg, run: runManager.getStatus() });
+	    }
+	  });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    await runManager.stop({ force: Boolean(body.force ?? false) });
-    return reply.send({ ok: true, run: runManager.getStatus() });
-  });
+	  app.post('/api/run/stop', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+
+	    const body = getBody(req);
+	    const force = parseOptionalBool(body.force) ?? false;
+	    await runManager.stop({ force });
+	    return reply.send({ ok: true, run: runManager.getStatus() });
+	  });
 
   app.post('/api/issue/status', async (req, reply) => {
     const gate = await requireMutatingAllowed(req);
@@ -447,9 +567,9 @@ export async function buildServer(config: ViewerServerConfig) {
     const issueJson = await readIssueJson(issue.stateDir);
     if (!issueJson) return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const phase = typeof body.phase === 'string' ? body.phase.trim() : '';
-    if (!phase) return reply.code(400).send({ ok: false, error: 'phase is required' });
+	    const body = getBody(req);
+	    const phase = parseOptionalString(body.phase);
+	    if (!phase) return reply.code(400).send({ ok: false, error: 'phase is required' });
 
     const workflowName = typeof issueJson.workflow === 'string' ? issueJson.workflow : 'default';
     try {
@@ -521,33 +641,34 @@ export async function buildServer(config: ViewerServerConfig) {
 
     await refreshFileTargets();
     if (currentStateDir) {
-      const logLines = await logTailer.getAllLines(500);
+      const logLines = await logTailer.getAllLines(logSnapshotLines);
       if (logLines.length) hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-      const viewerLines = await viewerLogTailer.getAllLines(500);
+      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
       if (viewerLines.length) hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
       const sdk = await readSdkOutput(currentStateDir);
       if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
     }
   });
 
-  app.get('/api/ws', { websocket: true }, async (connection, req) => {
+  app.get('/api/ws', { websocket: true }, async (socket, req) => {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
-    if (origin && !isAllowedOrigin(req, origin, allowedOrigins)) {
+    const originAllowed = origin ? isAllowedOrigin(req, origin, allowedOrigins) : true;
+    if (origin && !originAllowed) {
       try {
-        connection.socket.close();
+        socket.close();
       } catch {
         // ignore
       }
       return;
     }
-    const id = hub.addWsClient(connection.socket);
-    connection.socket.on('close', () => hub.removeClient(id));
+    const id = hub.addWsClient(socket);
+    socket.on('close', () => hub.removeClient(id));
     hub.sendTo(id, 'state', await getStateSnapshot());
     await refreshFileTargets();
     if (currentStateDir) {
-      const logLines = await logTailer.getAllLines(500);
+      const logLines = await logTailer.getAllLines(logSnapshotLines);
       if (logLines.length) hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-      const viewerLines = await viewerLogTailer.getAllLines(500);
+      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
       if (viewerLines.length) hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
       const sdk = await readSdkOutput(currentStateDir);
       if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);

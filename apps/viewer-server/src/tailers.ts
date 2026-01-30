@@ -24,11 +24,43 @@ export class LogTailer {
 
   async getAllLines(maxLines: number): Promise<string[]> {
     if (!this.filePath) return [];
-    const raw = await fs
-      .readFile(this.filePath, 'utf-8')
-      .catch(() => '');
-    const lines = raw.split(/\r?\n/).filter(Boolean);
-    return lines.slice(Math.max(0, lines.length - maxLines));
+    if (maxLines <= 0) return [];
+    const stat = await fs
+      .stat(this.filePath)
+      .catch(() => null);
+    if (!stat || !stat.isFile()) return [];
+    if (stat.size === 0) return [];
+
+    const chunkSize = 64 * 1024;
+    let pos = stat.size;
+    let carry = '';
+    const outRev: string[] = [];
+
+    const fh = await fs.open(this.filePath, 'r');
+    try {
+      while (pos > 0 && outRev.length < maxLines) {
+        const start = Math.max(0, pos - chunkSize);
+        const toRead = pos - start;
+        const buf = Buffer.alloc(toRead);
+        const { bytesRead } = await fh.read(buf, 0, toRead, start);
+        const chunkText = buf.subarray(0, bytesRead).toString('utf-8');
+
+        const text = chunkText + carry;
+        const parts = text.split(/\r?\n/);
+        carry = start > 0 ? (parts.shift() ?? '') : '';
+
+        for (let i = parts.length - 1; i >= 0 && outRev.length < maxLines; i -= 1) {
+          const line = parts[i];
+          if (line) outRev.push(line);
+        }
+
+        pos = start;
+      }
+
+      return outRev.reverse();
+    } finally {
+      await fh.close();
+    }
   }
 
   async getNewLines(): Promise<{ lines: string[]; changed: boolean }> {

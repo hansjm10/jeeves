@@ -13,5 +13,9 @@
     "@fastify/websocket": "^11.0.0",
     "@jeeves/core": "workspace:*",
     "fastify": "^5.5.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "ws": "^8.18.3"
   }
 }

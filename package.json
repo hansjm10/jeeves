@@ -1,0 +1,26 @@
+{
+  "name": "jeeves",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "eslint \"packages/**/*.{ts,tsx,js,jsx}\" --max-warnings=0",
+    "typecheck": "tsc -b --pretty false --noEmit",
+    "build": "tsc -b --pretty false",
+    "test": "vitest run",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^25.1.0",
+    "eslint": "^9.39.2",
+    "lefthook": "^2.0.16",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

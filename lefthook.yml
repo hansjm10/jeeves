@@ -1,0 +1,15 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob:
+        - "packages/**/*.{js,jsx,ts,tsx}"
+        - "eslint.config.mjs"
+      run: pnpm lint
+    typecheck:
+      glob:
+        - "packages/**/*.{ts,tsx}"
+        - "packages/**/tsconfig*.json"
+        - "tsconfig*.json"
+        - "tsconfig.base.json"
+      run: pnpm typecheck

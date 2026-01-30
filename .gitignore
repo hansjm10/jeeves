@@ -33,3 +33,13 @@ __pycache__/
 
 # Claude
 .claude/
+
+# Node
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+.pnpm-store/
+pnpm-debug.log*
+.eslintcache

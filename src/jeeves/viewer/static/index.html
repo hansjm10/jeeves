@@ -4324,9 +4324,11 @@
                 this.promptSelect = document.getElementById('phaseEditorPrompt');
                 this.commandInput = document.getElementById('phaseEditorCommand');
                 this.allowedWritesInput = document.getElementById('phaseEditorAllowedWrites');
+                this.modelSelect = document.getElementById('phaseEditorModel');
                 this.promptField = document.getElementById('phaseEditorPromptField');
                 this.commandField = document.getElementById('phaseEditorCommandField');
                 this.allowedWritesField = document.getElementById('phaseEditorAllowedWritesField');
+                this.modelField = document.getElementById('phaseEditorModelField');
                 this.typeIndicator = document.getElementById('phaseEditorTypeIndicator');
                 this.deleteBtn = document.getElementById('phaseEditorDelete');
                 this.duplicateBtn = document.getElementById('phaseEditorDuplicate');
@@ -4346,7 +4348,7 @@
                 }
 
                 // Input change handlers
-                const inputs = [this.nameInput, this.descriptionInput, this.promptSelect, this.commandInput, this.allowedWritesInput];
+                const inputs = [this.nameInput, this.descriptionInput, this.promptSelect, this.commandInput, this.allowedWritesInput, this.modelSelect];
                 inputs.forEach(input => {
                     if (input) {
                         input.addEventListener('input', () => this._emitChange());

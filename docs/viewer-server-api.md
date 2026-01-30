@@ -39,6 +39,9 @@ JSON endpoints:
 - `GET /api/state`: returns current issue selection, paths, issue.json (if present), and run status.
 - `GET /api/run`: returns run status.
 - `GET /api/issues`: returns all known issue states under the data directory.
+- `GET /api/prompts`: returns prompt template IDs under the prompts directory.
+- `GET /api/prompts/<id>`: returns prompt contents (supports nested paths like `fixtures/trivial.md`).
+- `PUT /api/prompts/<id>`: writes prompt contents. Body: `{ "content": "..." }`.
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?, "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.

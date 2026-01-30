@@ -18,6 +18,7 @@ import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
+import { writeTextAtomic } from './textAtomic.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
   const a = (addr ?? '').trim();
@@ -174,6 +175,103 @@ function errorToHttp(err: unknown): { status: number; message: string } {
   if (message.includes('worktree already exists')) return { status: 409, message };
   if (message.includes('issue.json not found')) return { status: 404, message };
   return { status: 400, message };
+}
+
+function normalizePromptId(promptId: string): string {
+  return promptId.split('\\').join('/');
+}
+
+function isSafePromptId(promptId: string): boolean {
+  if (!promptId.trim()) return false;
+  if (promptId.includes('\0')) return false;
+  const normalized = normalizePromptId(promptId);
+  if (normalized.startsWith('/')) return false;
+  if (normalized.split('/').some((part) => part === '' || part === '.' || part === '..')) return false;
+  return true;
+}
+
+async function ensureNoSymlinkParents(baseDir: string, relPath: string): Promise<void> {
+  const parts = normalizePromptId(relPath).split('/').filter(Boolean);
+  let current = baseDir;
+  for (const part of parts) {
+    current = path.join(current, part);
+    const stat = await fs.lstat(current).catch(() => null);
+    if (stat?.isSymbolicLink()) {
+      throw new Error('Refusing to traverse symlinked path segment.');
+    }
+  }
+}
+
+async function listPromptIds(promptsDir: string): Promise<string[]> {
+  const baseDir = path.resolve(promptsDir);
+
+  async function walk(dir: string, prefix: string): Promise<string[]> {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const results: string[] = [];
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        results.push(...(await walk(path.join(dir, e.name), rel)));
+        continue;
+      }
+      if (e.isFile() && e.name.endsWith('.md')) {
+        results.push(normalizePromptId(rel));
+      }
+    }
+    return results;
+  }
+
+  const ids = await walk(baseDir, '');
+  ids.sort((a, b) => a.localeCompare(b));
+  return ids;
+}
+
+async function resolvePromptPathForRead(promptsDir: string, promptId: string): Promise<string> {
+  if (!isSafePromptId(promptId)) throw new Error('Invalid prompt id.');
+  const baseDir = path.resolve(promptsDir);
+  const normalized = normalizePromptId(promptId);
+  if (!normalized.endsWith('.md')) throw new Error('Prompt id must end with .md');
+
+  const candidate = path.resolve(baseDir, normalized);
+  const rel = path.relative(baseDir, candidate);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid prompt path.');
+
+  const baseReal = await fs.realpath(baseDir);
+  const candidateReal = await fs.realpath(candidate);
+  const relReal = path.relative(baseReal, candidateReal);
+  if (!relReal || relReal.startsWith('..') || path.isAbsolute(relReal)) throw new Error('Invalid prompt path.');
+
+  const stat = await fs.stat(candidateReal);
+  if (!stat.isFile()) throw new Error('Prompt is not a file.');
+  return candidateReal;
+}
+
+async function resolvePromptPathForWrite(promptsDir: string, promptId: string): Promise<string> {
+  if (!isSafePromptId(promptId)) throw new Error('Invalid prompt id.');
+  const baseDir = path.resolve(promptsDir);
+  const normalized = normalizePromptId(promptId);
+  if (!normalized.endsWith('.md')) throw new Error('Prompt id must end with .md');
+
+  const candidate = path.resolve(baseDir, normalized);
+  const rel = path.relative(baseDir, candidate);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid prompt path.');
+
+  const parentRel = normalizePromptId(path.posix.dirname(normalized));
+  if (parentRel && parentRel !== '.') {
+    await ensureNoSymlinkParents(baseDir, parentRel);
+  }
+
+  const existing = await fs.lstat(candidate).catch(() => null);
+  if (existing?.isSymbolicLink()) throw new Error('Refusing to write to a symlink.');
+  if (existing) {
+    const baseReal = await fs.realpath(baseDir);
+    const candidateReal = await fs.realpath(candidate);
+    const relReal = path.relative(baseReal, candidateReal);
+    if (!relReal || relReal.startsWith('..') || path.isAbsolute(relReal)) throw new Error('Invalid prompt path.');
+    return candidateReal;
+  }
+  return candidate;
 }
 
 async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
@@ -450,6 +548,46 @@ export async function buildServer(config: ViewerServerConfig) {
       count: issues.length,
       current_issue: runManager.getIssue().issueRef,
     };
+  });
+
+  app.get('/api/prompts', async () => {
+    const ids = await listPromptIds(promptsDir);
+    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
+  });
+
+  app.get('/api/prompts/*', async (req, reply) => {
+    const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);
+    if (!id) return reply.code(400).send({ ok: false, error: 'id is required' });
+    try {
+      const resolved = await resolvePromptPathForRead(promptsDir, id);
+      const content = await fs.readFile(resolved, 'utf-8');
+      return reply.send({ ok: true, id: normalizePromptId(id), content });
+    } catch (err) {
+      const mapped = errorToHttp(err);
+      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+    }
+  });
+
+  app.put('/api/prompts/*', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit prompts while Jeeves is running.' });
+
+    const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);
+    if (!id) return reply.code(400).send({ ok: false, error: 'id is required' });
+
+    const body = getBody(req);
+    const content = typeof body.content === 'string' ? body.content : null;
+    if (content === null) return reply.code(400).send({ ok: false, error: 'content is required' });
+
+    try {
+      const resolved = await resolvePromptPathForWrite(promptsDir, id);
+      await writeTextAtomic(resolved, content);
+      return reply.send({ ok: true, id: normalizePromptId(id) });
+    } catch (err) {
+      const mapped = errorToHttp(err);
+      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+    }
   });
 
 	  app.post('/api/issues/select', async (req, reply) => {

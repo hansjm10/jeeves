@@ -8,6 +8,8 @@
     "build": "tsc -b --pretty false",
     "test": "vitest run",
     "run:fixture": "pnpm exec jeeves-runner run-fixture",
+    "dev:viewer-server": "pnpm --filter @jeeves/viewer-server exec jeeves-viewer-server --host 127.0.0.1 --port 8080",
+    "dev:viewer": "pnpm --filter @jeeves/viewer dev",
     "prepare": "lefthook install"
   },
   "devDependencies": {

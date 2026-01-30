@@ -3760,8 +3760,18 @@
                     phases[node.id] = phaseData;
                 });
 
+                // Build workflow object, including default_model from the dropdown
+                const workflowObj = this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 };
+                const defaultModelSelect = document.getElementById('workflowDefaultModel');
+                if (defaultModelSelect && defaultModelSelect.value) {
+                    workflowObj.default_model = defaultModelSelect.value;
+                } else if (workflowObj.default_model) {
+                    // Remove default_model if dropdown is set to empty (system default)
+                    delete workflowObj.default_model;
+                }
+
                 return {
-                    workflow: this.workflow?.workflow || { name: this.workflowName || 'default', version: 1 },
+                    workflow: workflowObj,
                     phases: phases
                 };
             }
@@ -7229,6 +7239,15 @@
                         <option value="default">Loading...</option>
                     </select>
                 </div>
+                <div class="workflow-selector" id="workflowDefaultModelField">
+                    <label for="workflowDefaultModel">Default Model:</label>
+                    <select id="workflowDefaultModel" title="Default model for all phases in this workflow">
+                        <option value="">(System default)</option>
+                        <option value="sonnet">Sonnet</option>
+                        <option value="opus">Opus</option>
+                        <option value="haiku">Haiku</option>
+                    </select>
+                </div>
                 <div class="workflow-toolbar-group">
                     <button id="workflowSaveBtn" class="primary" title="Save workflow (Ctrl+S)">
                         <span>💾</span> Save
@@ -7343,6 +7362,11 @@
                         // Update selector
                         const select = document.getElementById('workflowSelect');
                         if (select) select.value = name;
+                        // Update default model dropdown
+                        const defaultModelSelect = document.getElementById('workflowDefaultModel');
+                        if (defaultModelSelect) {
+                            defaultModelSelect.value = data.workflow?.default_model || '';
+                        }
                     } else {
                         alert(`Failed to load workflow: ${data.error || 'Unknown error'}`);
                     }
@@ -7517,6 +7541,9 @@
                     yaml += `  version: ${data.workflow.version || 1}\n`;
                     if (data.workflow.start) {
                         yaml += `  start: ${data.workflow.start}\n`;
+                    }
+                    if (data.workflow.default_model) {
+                        yaml += `  default_model: ${data.workflow.default_model}\n`;
                     }
                     yaml += '\n';
                 }
@@ -7732,6 +7759,16 @@
             if (workflowSelect) {
                 workflowSelect.addEventListener('change', (e) => {
                     loadWorkflow(e.target.value);
+                });
+            }
+
+            // Default model selector change - mark as modified
+            const defaultModelSelect = document.getElementById('workflowDefaultModel');
+            if (defaultModelSelect) {
+                defaultModelSelect.addEventListener('change', () => {
+                    if (workflowGraph) {
+                        workflowGraph._markModified();
+                    }
                 });
             }
 

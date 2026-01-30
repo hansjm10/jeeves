@@ -91,13 +91,8 @@ class ViewerRunApiTests(unittest.TestCase):
         (self.tools_dir / "design.draft.md").write_text("# Design Draft Prompt\n")
         (self.tools_dir / "design.review.md").write_text("# Design Review Prompt\n")
         (self.tools_dir / "design.edit.md").write_text("# Design Edit Prompt\n")
-        (self.tools_dir / "implement.md").write_text("# Implement Prompt\n")
         (self.tools_dir / "review.evaluate.md").write_text("# Code Review Prompt\n")
         (self.tools_dir / "review.fix.md").write_text("# Code Fix Prompt\n")
-        # Also keep old prompts for backward compatibility
-        (self.tools_dir / "issue.design.md").write_text("# Design Prompt\n")
-        (self.tools_dir / "issue.implement.md").write_text("# Implement Prompt\n")
-        (self.tools_dir / "issue.review.md").write_text("# Review Prompt\n")
 
         self.owner = "acme"
         self.repo = "widgets"
@@ -441,18 +436,18 @@ print("dummy sdk: set review clean")
             status, data = _request_json(conn, "GET", "/api/prompts")
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
-            self.assertTrue(any(p.get("id") == "issue.design.md" for p in data.get("prompts", [])))
+            self.assertTrue(any(p.get("id") == "design.draft.md" for p in data.get("prompts", [])))
 
-            status, data = _request_json(conn, "GET", "/api/prompts/issue.design.md")
+            status, data = _request_json(conn, "GET", "/api/prompts/design.draft.md")
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
-            self.assertIn("Design Prompt", data["prompt"]["content"])
+            self.assertIn("Design Draft Prompt", data["prompt"]["content"])
 
-            status, data = _request_json(conn, "POST", "/api/prompts/issue.design.md", {"content": "# Updated\n"})
+            status, data = _request_json(conn, "POST", "/api/prompts/design.draft.md", {"content": "# Updated\n"})
             self.assertEqual(status, 200, data)
             self.assertTrue(data["ok"])
 
-            status, data = _request_json(conn, "GET", "/api/prompts/issue.design.md")
+            status, data = _request_json(conn, "GET", "/api/prompts/design.draft.md")
             self.assertEqual(status, 200, data)
             self.assertIn("# Updated", data["prompt"]["content"])
         finally:

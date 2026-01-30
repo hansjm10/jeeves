@@ -17,28 +17,29 @@ class TestPromptsDirectory:
         assert prompts_dir.exists(), f"prompts/ directory should exist at {prompts_dir}"
         assert prompts_dir.is_dir(), "prompts/ should be a directory"
 
-    def test_prompt_files_moved_and_renamed(self):
-        """Verify all prompt files are moved and renamed (remove 'prompt.' prefix)."""
+    def test_active_workflow_prompts_exist(self):
+        """Verify all 11 active workflow prompts exist in prompts/ directory."""
         repo_root = get_repo_root()
         prompts_dir = repo_root / "prompts"
 
+        # These are the 11 active prompts used by default.yaml workflow
         expected_files = [
-            "issue.ci.md",
-            "issue.coverage.md",
-            "issue.coverage.fix.md",
-            "issue.design.md",
-            "issue.implement.md",
-            "issue.questions.md",
-            "issue.review.md",
-            "issue.sonar.md",
-            "issue.task.implement.md",
-            "issue.task.quality-review.md",
-            "issue.task.spec-review.md",
+            "ci.fix.md",
+            "design.draft.md",
+            "design.edit.md",
+            "design.review.md",
+            "pr.prepare.md",
+            "review.evaluate.md",
+            "review.fix.md",
+            "task.decompose.md",
+            "task.implement.md",
+            "task.spec_check.md",
+            "verify.completeness.md",
         ]
 
         for expected_file in expected_files:
             file_path = prompts_dir / expected_file
-            assert file_path.exists(), f"Prompt file should exist at {file_path}"
+            assert file_path.exists(), f"Active workflow prompt should exist at {file_path}"
             assert file_path.is_file(), f"{expected_file} should be a file"
 
     def test_old_prompt_files_removed_from_root(self):
@@ -69,7 +70,5 @@ class TestPromptsDirectory:
         prompts_dir = repo_root / "prompts"
 
         prompt_files = list(prompts_dir.glob("*.md"))
-        # 11 original + 6 workflow prompts (design.draft, design.review, design.edit,
-        # implement, review.evaluate, review.fix) + 4 task prompts (task.decompose,
-        # task.implement, task.spec_check, verify.completeness) + 2 new prompts (ci.fix, pr.prepare)
-        assert len(prompt_files) == 23, f"Expected 23 prompt files, found {len(prompt_files)}: {prompt_files}"
+        # 11 active workflow prompts used by default.yaml
+        assert len(prompt_files) == 11, f"Expected 11 prompt files, found {len(prompt_files)}: {prompt_files}"

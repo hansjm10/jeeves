@@ -16,6 +16,30 @@ class WorkflowValidationError(Exception):
     pass
 
 
+# Valid model identifiers (short aliases)
+VALID_MODELS = {"sonnet", "opus", "haiku"}
+
+
+def _validate_model(model: Optional[str], context: str) -> None:
+    """Validate a model identifier.
+
+    Args:
+        model: The model string to validate (may be None)
+        context: Description of where this model was specified (for error messages)
+
+    Raises:
+        WorkflowValidationError: If model is invalid
+    """
+    if model is None:
+        return  # None is valid (uses default)
+
+    model_lower = model.lower()
+    if model_lower not in VALID_MODELS:
+        raise WorkflowValidationError(
+            f"{context}: Invalid model '{model}'. Must be one of: {sorted(VALID_MODELS)}"
+        )
+
+
 def _parse_phase_type(type_str: str) -> PhaseType:
     """Parse a phase type string into PhaseType enum."""
     try:
@@ -93,6 +117,13 @@ def _validate_workflow(workflow: Workflow) -> None:
                 raise WorkflowValidationError(
                     f"Script phase '{phase_name}' requires a command"
                 )
+
+    # Validate workflow default_model
+    _validate_model(workflow.default_model, "Workflow default_model")
+
+    # Validate phase models
+    for phase_name, phase in workflow.phases.items():
+        _validate_model(phase.model, f"Phase '{phase_name}' model")
 
 
 def load_workflow(path: Path) -> Workflow:

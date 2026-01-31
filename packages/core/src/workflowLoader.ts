@@ -44,6 +44,7 @@ const transitionSchema = z
 const rawPhaseSchema = z
   .object({
     type: z.unknown().optional(),
+    provider: z.unknown().optional(),
     prompt: z.string().optional(),
     command: z.string().optional(),
     description: z.string().optional(),
@@ -62,6 +63,7 @@ const rawWorkflowSchema = z
         name: z.string().optional(),
         version: z.number().int().optional().default(1),
         start: z.string().optional().default('design_draft'),
+        default_provider: z.unknown().optional(),
         default_model: z.unknown().optional(),
       })
       .passthrough()
@@ -83,6 +85,7 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
     phases[phaseName] = {
       name: phaseName,
       type: phaseType,
+      provider: typeof phaseRaw.provider === 'string' ? phaseRaw.provider : undefined,
       prompt: phaseRaw.prompt,
       command: phaseRaw.command,
       description: phaseRaw.description,
@@ -100,6 +103,7 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
     version: raw.workflow.version ?? 1,
     start: raw.workflow.start ?? 'design_draft',
     phases,
+    defaultProvider: typeof raw.workflow.default_provider === 'string' ? raw.workflow.default_provider : undefined,
     defaultModel: typeof raw.workflow.default_model === 'string' ? raw.workflow.default_model : undefined,
   };
 

@@ -18,6 +18,7 @@ export type Transition = Readonly<{
 export type Phase = Readonly<{
   name: string;
   type: PhaseType;
+  provider?: string;
   prompt?: string;
   command?: string;
   description?: string;
@@ -33,6 +34,7 @@ export type Workflow = Readonly<{
   version: number;
   start: string;
   phases: Readonly<Record<string, Phase>>;
+  defaultProvider?: string;
   defaultModel?: string;
 }>;
 

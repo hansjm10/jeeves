@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import type { CreateIssueRequest, CreateIssueResponse, CreateIssueRunProvider } from '../api/types.js';
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useCreateIssueMutation } from '../features/mutations.js';
+import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { useToast } from '../ui/toast/ToastProvider.js';
 
 const PROVIDERS = ['claude', 'codex', 'fake'] as const satisfies readonly CreateIssueRunProvider[];
@@ -26,6 +27,8 @@ export function CreateIssuePage() {
   const baseUrl = useViewerServerBaseUrl();
   const { pushToast } = useToast();
   const createIssue = useCreateIssueMutation(baseUrl);
+  const stream = useViewerStream();
+  const runRunning = stream.state?.run.running ?? false;
 
   const [repo, setRepo] = useState('');
   const [title, setTitle] = useState('');
@@ -42,6 +45,15 @@ export function CreateIssuePage() {
 
   const [localError, setLocalError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!runRunning) return;
+    if (!init) return;
+    // Create-only is allowed while a run is active, but init/select/run are not.
+    setInit(false);
+    setAutoSelect(false);
+    setAutoRun(false);
+  }, [init, runRunning]);
+
   const lastResponse: CreateIssueResponse | null = createIssue.data ?? null;
   const createdIssueUrl = lastResponse && lastResponse.ok ? lastResponse.issue_url : null;
   const createdIssueNumber = useMemo(() => (createdIssueUrl ? parseIssueNumber(createdIssueUrl) : null), [createdIssueUrl]);
@@ -50,6 +62,7 @@ export function CreateIssuePage() {
     if (!repo.trim()) return 'repo is required';
     if (!title.trim()) return 'title is required';
     if (!body.trim()) return 'body is required';
+    if (runRunning && init) return 'Cannot init while Jeeves is running. Disable init or stop the run.';
     return null;
   }
 
@@ -157,6 +170,7 @@ export function CreateIssuePage() {
             <input
               type="checkbox"
               checked={init}
+              disabled={createIssue.isPending || runRunning}
               onChange={(e) => {
                 const nextInit = e.target.checked;
                 setInit(nextInit);
@@ -169,11 +183,17 @@ export function CreateIssuePage() {
             init (create state + worktree)
           </label>
 
+          {runRunning ? (
+            <div className="muted" style={{ marginTop: 6 }}>
+              A run is active: init/select/run options are disabled. You can still create an issue without init.
+            </div>
+          ) : null}
+
           <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
               type="checkbox"
               checked={autoSelect}
-              disabled={!init}
+              disabled={!init || createIssue.isPending || runRunning}
               onChange={(e) => {
                 const nextAutoSelect = e.target.checked;
                 setAutoSelect(nextAutoSelect);
@@ -187,7 +207,7 @@ export function CreateIssuePage() {
             <input
               type="checkbox"
               checked={autoRun}
-              disabled={!init || !autoSelect}
+              disabled={!init || !autoSelect || createIssue.isPending || runRunning}
               onChange={(e) => setAutoRun(e.target.checked)}
             />
             start-run after create
@@ -201,7 +221,7 @@ export function CreateIssuePage() {
                 type="button"
                 className={`segBtn ${provider === p ? 'active' : ''}`}
                 onClick={() => setProvider(p)}
-                disabled={!autoRun || !init || !autoSelect}
+                disabled={!autoRun || !init || !autoSelect || createIssue.isPending || runRunning}
               >
                 {p}
               </button>
@@ -215,7 +235,7 @@ export function CreateIssuePage() {
             </div>
           ) : null}
 
-          <button className="btn primary" type="submit" disabled={createIssue.isPending}>
+          <button className="btn primary" type="submit" disabled={createIssue.isPending || (runRunning && init)}>
             {createIssue.isPending ? 'Creating…' : 'Create Issue'}
           </button>
         </form>

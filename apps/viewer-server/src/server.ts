@@ -594,6 +594,46 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
+  app.post('/api/github/issues/create', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, run: runManager.getStatus() });
+
+    const body = getBody(req);
+
+    const repo = typeof body.repo === 'string' ? body.repo.trim() : '';
+    if (!repo) return reply.code(400).send({ ok: false, error: 'repo is required (owner/repo)', run: runManager.getStatus() });
+
+    const titleRaw = typeof body.title === 'string' ? body.title : '';
+    if (!titleRaw.trim()) return reply.code(400).send({ ok: false, error: 'title is required', run: runManager.getStatus() });
+
+    const bodyRaw = typeof body.body === 'string' ? body.body : '';
+    if (!bodyRaw.trim()) return reply.code(400).send({ ok: false, error: 'body is required', run: runManager.getStatus() });
+
+    try {
+      parseRepoSpec(repo);
+    } catch (err) {
+      const mapped = errorToHttp(err);
+      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
+    }
+
+    try {
+      const res = await createGitHubIssue({ repo, title: titleRaw, body: bodyRaw });
+      return reply.send({
+        ok: true,
+        created: true,
+        issue_url: res.issue_url,
+        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
+        run: runManager.getStatus(),
+      });
+    } catch (err) {
+      const safeMessage =
+        err instanceof Error && err.name === 'CreateGitHubIssueError'
+          ? err.message
+          : 'Failed to create GitHub issue.';
+      return reply.code(500).send({ ok: false, error: safeMessage, run: runManager.getStatus() });
+    }
+  });
+
 	  app.post('/api/issues/select', async (req, reply) => {
 	    const gate = await requireMutatingAllowed(req);
 	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });

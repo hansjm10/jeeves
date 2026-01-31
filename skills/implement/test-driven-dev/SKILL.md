@@ -18,16 +18,19 @@ Write tests before implementation to drive design and ensure correctness.
 ## TDD Cycle
 
 ### 1. Red - Write a Failing Test
-```python
-def test_feature_does_something():
-    # Arrange
-    input_data = create_input()
+```ts
+import { expect, test } from 'vitest';
 
-    # Act
-    result = feature_under_test(input_data)
+test('feature does something', () => {
+  // Arrange
+  const inputData = createInput();
 
-    # Assert
-    assert result == expected_output
+  // Act
+  const result = featureUnderTest(inputData);
+
+  // Assert
+  expect(result).toEqual(expectedOutput);
+});
 ```
 
 ### 2. Green - Write Minimal Code to Pass
@@ -42,13 +45,16 @@ Clean up duplication, improve names, extract abstractions.
 
 Follow the **AAA Pattern**:
 
-```python
-def test_descriptive_name():
-    # Arrange - Set up test data and dependencies
+```ts
+import { test } from 'vitest';
 
-    # Act - Execute the code under test
+test('descriptive name', () => {
+  // Arrange - Set up test data and dependencies
 
-    # Assert - Verify the expected outcome
+  // Act - Execute the code under test
+
+  // Assert - Verify the expected outcome
+});
 ```
 
 ---
@@ -86,34 +92,35 @@ def test_descriptive_name():
 
 ```bash
 # Run all tests
-pytest
+pnpm test
 
 # Run specific test file
-pytest tests/test_feature.py
+pnpm exec vitest run path/to/feature.test.ts
 
-# Run with coverage
-pytest --cov=src
+# Run with coverage (if configured)
+pnpm exec vitest run --coverage
 
 # Run tests matching pattern
-pytest -k "test_feature"
+pnpm exec vitest run -t "feature"
 ```
 
 ---
 
 ## Common Assertions
 
-```python
-# Equality
-assert result == expected
+```ts
+import { expect } from 'vitest';
 
-# Exceptions
-with pytest.raises(ValueError):
-    function_that_raises()
+// Equality
+expect(result).toEqual(expected);
 
-# Collections
-assert item in collection
-assert len(result) == 3
+// Exceptions
+expect(() => functionThatThrows()).toThrow();
 
-# Approximate
-assert result == pytest.approx(3.14, rel=1e-2)
+// Collections
+expect(collection).toContain(item);
+expect(result).toHaveLength(3);
+
+// Approximate
+expect(result).toBeCloseTo(3.14, 2);
 ```

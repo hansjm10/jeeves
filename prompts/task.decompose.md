@@ -54,7 +54,7 @@ You are a senior software architect breaking down a design document into small, 
          "title": "Create data model",
          "summary": "Define the core data structures",
          "acceptanceCriteria": ["Class X exists", "Method Y works"],
-         "filesAllowed": ["src/models/*.py"],
+         "filesAllowed": ["src/models/*.ts"],
          "dependsOn": [],
          "status": "pending"
        }
@@ -81,8 +81,8 @@ Follow these guidelines when creating tasks:
    - BAD: "Code is well-organized"
 
 4. **File Permissions**: Be specific about allowed files:
-   - Use `["src/module/file.py"]` for single files
-   - Use `["src/module/*.py"]` for a directory
+   - Use `["src/module/file.ts"]` for single files
+   - Use `["src/module/*.ts"]` for a directory
    - Always include `[".jeeves/*"]` implicitly
 
 5. **Dependencies**: Only list direct dependencies, not transitive ones:

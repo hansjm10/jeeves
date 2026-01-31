@@ -155,7 +155,7 @@ git diff <range> | grep -E "internal|private|public|external"
 
 ```bash
 # Count callers for modified function
-grep -r "functionName(" --include="*.py" --include="*.ts" --include="*.sol" . | wc -l
+grep -r "functionName(" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.sol" . | wc -l
 ```
 
 | Callers | Blast Radius |

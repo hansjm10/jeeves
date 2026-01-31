@@ -30,9 +30,12 @@ viewer-run.log
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+*.egg-info/
 
 # Claude
 .claude/
+.codex/
 
 # Node
 node_modules/

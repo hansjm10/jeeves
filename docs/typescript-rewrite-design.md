@@ -1,12 +1,12 @@
 ---
-title: Rewrite Jeeves from Python to TypeScript
+title: Rewrite Jeeves to TypeScript
 sidebar_position: 99
 ---
 
-# Rewrite Jeeves from Python to TypeScript
+# Rewrite Jeeves to TypeScript
 
 ## Document Control
-- **Title**: Rewrite Jeeves from Python to TypeScript
+- **Title**: Rewrite Jeeves to TypeScript
 - **Authors**: Jeeves maintainers + agents
 - **Reviewers**: Project maintainers
 - **Status**: Draft
@@ -16,29 +16,29 @@ sidebar_position: 99
 
 ## 1. Summary
 
-Jeeves will be rewritten from Python into a TypeScript monorepo with a Node-based runner and a React-based viewer. The implementation will use the Claude Agent TypeScript SDK for agent execution, preserve the existing “fresh subprocess” iteration pattern, and remove Python entirely from the repository (code, tests, tooling, packaging, and CI). The TypeScript lint/typecheck + git hook workflow will match the patterns used in the `Idle-Game-Engine` repository (ESLint flat config, strict TS configs, and Lefthook-managed pre-commit checks).
+Jeeves will be implemented as a TypeScript monorepo with a Node-based runner and a React-based viewer. The implementation will use the Claude Agent TypeScript SDK for agent execution, preserve the existing “fresh subprocess” iteration pattern, and use a single Node/PNPM toolchain across code, tests, tooling, and CI. The lint/typecheck + git hook workflow will match the patterns used in the `Idle-Game-Engine` repository (ESLint flat config, strict TS configs, and Lefthook-managed pre-commit checks).
 
 ## 2. Context & Problem Statement
 
-- **Background**: Jeeves is currently a Python package with a real-time viewer implemented as a Python HTTP server, and an SDK runner that manages issue state, worktrees, workflows, prompt templates, and run artifacts.
-- **Problem**: The codebase is Python-first but the desired ecosystem and SDK dependencies have shifted to TypeScript/Node (React viewer, Claude Agent TS SDK). Maintaining two stacks would increase cost and complexity; a clean rewrite enables a unified toolchain and simpler onboarding.
+- **Background**: Jeeves began as a single-stack implementation with a simple local viewer server and a runner that manages issue state, worktrees, workflows, prompt templates, and run artifacts.
+- **Problem**: The desired ecosystem and SDK dependencies have shifted to TypeScript/Node (React viewer, Claude Agent TS SDK). Maintaining multiple stacks increases cost and complexity; a clean rewrite enables a unified toolchain and simpler onboarding.
 - **Forces**:
   - Must preserve core product behavior (issue init/select, run control, streaming events/logs, workflow phases).
   - Must preserve state layout (XDG data dir, issues/worktrees layout) to avoid breaking existing local state.
-  - Must remove Python entirely in the end state (“zero python left over”).
+  - Must converge on a single TypeScript/Node toolchain (“one stack”).
   - Must adopt lint/typecheck + hooks consistent with `Idle-Game-Engine`.
 
 ## 3. Goals & Non-Goals
 
 ### Goals
-1. **100% TypeScript**: No Python files, Python packaging, or Python tests remain in the repository.
-2. **Functional parity**: Viewer and runner support the same capabilities as the current Python implementation (see Acceptance Criteria).
+1. **100% TypeScript**: No non-TypeScript application code remains in the repository.
+2. **Functional parity**: Viewer and runner support the same capabilities as the prior implementation (see Acceptance Criteria).
 3. **Monorepo toolchain**: PNPM workspaces, strict TS configs, ESLint flat config, Lefthook hooks matching `Idle-Game-Engine` patterns.
 4. **Claude Agent TS SDK**: Agent execution uses the TypeScript SDK as the primary integration point.
 5. **Operational predictability**: Recreate the current “fresh subprocess” iteration pattern (viewer orchestrates repeated fresh-context runs; run handoff via files).
 
 ### Non-Goals
-1. **Backwards-compatible Python API**: No attempt to keep Python modules importable.
+1. **Backwards-compatible legacy API**: No attempt to keep legacy modules importable.
 2. **Perfect 1:1 internal architecture**: Preserve external behavior; internal refactors are expected.
 3. **Feature expansion**: Avoid adding unrelated features during the rewrite (auth, multi-user, cloud execution, etc.) unless required for parity.
 
@@ -50,19 +50,19 @@ Jeeves will be rewritten from Python into a TypeScript monorepo with a Node-base
   - **Core Agent**: State model (issues/worktrees), workflow engine, prompt resolution.
   - **Runner Agent**: Claude Agent TS SDK integration, subprocess orchestration, artifacts.
   - **Viewer Agent**: Node API server + React UI, streaming logs/events, run control.
-  - **Migration Agent**: Remove Python, translate docs, ensure parity and cleanup.
+  - **Migration Agent**: Remove legacy code, translate docs, ensure parity and cleanup.
 - **Affected Packages/Services**:
-  - Replace `src/jeeves/**` with `packages/**` and `apps/**`.
-  - Replace Python viewer server with Node server + React app.
-  - Replace Python tests with TypeScript tests (Vitest) and (optionally) E2E tests for viewer.
+  - Replace the legacy implementation with `packages/**` and `apps/**`.
+  - Replace the legacy viewer server with Node server + React app.
+  - Replace legacy tests with TypeScript tests (Vitest) and (optionally) E2E tests for viewer.
 - **Compatibility Considerations**:
   - Preserve on-disk state layout and filenames where feasible so existing local state remains usable.
   - Preserve workflow and prompt file formats (YAML workflows, Markdown prompts) unless explicitly migrated.
 
 ## 5. Current State
 
-- **Language/tooling**: Python package, Python tests under `tests/`, viewer under `src/jeeves/viewer/`.
-- **Viewer**: Python HTTP server providing a dashboard, state inspection, and log streaming.
+- **Language/tooling**: Prior implementation used a different toolchain and test stack.
+- **Viewer**: A local viewer server provides a dashboard, state inspection, and log streaming.
 - **State**: XDG-style data directory with `issues/<owner>/<repo>/<issue>/issue.json`, and `worktrees/<owner>/<repo>/issue-<N>/`.
 - **Iteration pattern**: Viewer spawns fresh subprocess runs; handoff via `progress.txt`; completion is signaled via a sentinel in output.
 
@@ -128,7 +128,7 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 
 ### 6.3 Operational Considerations
 
-- **CI**: Replace Python CI with Node/PNPM CI. Add lint/typecheck/test/build steps mirroring local hooks.
+- **CI**: Use Node/PNPM CI. Add lint/typecheck/test/build steps mirroring local hooks.
 - **Security**: Preserve path traversal protections on workflow/prompt file access, and ensure server endpoints are local-only by default.
 
 ## 7. Work Breakdown & Delivery Plan
@@ -143,12 +143,12 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 | feat(runner): Claude TS SDK runner | Adapter + run invocation, artifacts writing, progress handoff | Runner Agent | core/workflow | Can run a trivial workflow end-to-end |
 | feat(viewer-server): run control + streaming | HTTP API + WS/SSE streaming, spawn/stop runner | Viewer Agent | runner | Live log stream + state updates in UI |
 | feat(viewer): React UI | Run control, logs, prompt editing, workflow/issue selection | Viewer Agent | viewer-server | UI parity for core flows |
-| chore: remove Python | Delete Python code/tests/tooling/CI, update docs | Migration Agent | TS parity achieved | Repo contains no `.py` and no Python toolchain |
+| chore: finalize TS-only repo | Delete legacy code/tests/tooling, update docs | Migration Agent | TS parity achieved | Repo contains no legacy tooling |
 
 ### 7.2 Milestones
 - **Phase 1 — Toolchain + Core (foundation)**: Monorepo setup; core paths/state/workflows; baseline tests.
 - **Phase 2 — Runner + Viewer (parity)**: Runner integration; viewer-server APIs; viewer UI parity.
-- **Phase 3 — Cleanup + Hardening**: Remove Python; CI finalization; docs updates; perf/UX polish.
+- **Phase 3 — Cleanup + Hardening**: Remove legacy code; CI finalization; docs updates; perf/UX polish.
 
 ### 7.3 Coordination Notes
 - This is an “epic” level change; expect multiple PRs and a project board/milestone.
@@ -157,7 +157,7 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 ## 8. Agent Guidance & Guardrails
 
 - **Constraints**:
-  - No partial migration that leaves Python in the final merged state.
+  - No partial migration that leaves legacy code in the final merged state.
   - Match lint/typecheck semantics from `Idle-Game-Engine` unless there is a clear Jeeves-specific reason.
 - **Validation hooks** (must pass before merge):
   - `pnpm lint`
@@ -167,8 +167,8 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 
 ## 9. Alternatives Considered
 
-1. **Incremental migration (Python + TS co-existence)**: Reduces short-term risk but violates “zero python left” end-state and increases maintenance overhead.
-2. **Keep viewer in Python, only runner in TS**: Splits stacks and complicates deployment; rejects the “single toolchain” goal.
+1. **Incremental migration (mixed stacks)**: Reduces short-term risk but violates the “one stack” end-state and increases maintenance overhead.
+2. **Split viewer + runner stacks**: Splits stacks and complicates deployment; rejects the “single toolchain” goal.
 
 ## 10. Testing & Validation Plan
 
@@ -185,7 +185,7 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 ## 12. Rollout Plan
 
 - Develop behind a `main`-compatible series of PRs.
-- Only remove Python after TS runner + viewer are feature-complete and validated.
+- Only remove legacy code after TS runner + viewer are feature-complete and validated.
 
 ## 13. Open Questions
 
@@ -203,8 +203,8 @@ Adopt the same *patterns* used in `Idle-Game-Engine`, including:
 - `Idle-Game-Engine` toolchain patterns:
   - `eslint.config.mjs`, `tsconfig.base.json`, `lefthook.yml`, `package.json`
 - Current Jeeves implementation:
-  - `src/jeeves/viewer/server.py`
-  - `src/jeeves/core/**`
+  - `apps/viewer-server/src/server.ts`
+  - `packages/core/src/**`
 
 ## Appendix B — Change Log
 | Date       | Author | Change Summary |

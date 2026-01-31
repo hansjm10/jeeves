@@ -8,21 +8,22 @@ Jeeves is a proof‑of‑concept orchestration layer that runs a Claude Agent SD
 
 ### Prerequisites
 
-- Python 3.10+
+- Node.js 20+
+- pnpm 10+
 - `gh` CLI (optional, for GitHub issue metadata)
-- Claude Agent SDK (`pip install claude-agent-sdk`)
 
 ### Install
 
 ```bash
-pip install -e .
+pnpm install
 ```
 
 ### Start the viewer
 
 ```bash
-python -m jeeves.viewer.server
-# open http://localhost:8080
+pnpm dev
+# UI: http://127.0.0.1:8080
+# API: http://127.0.0.1:8081
 ```
 
 ## Viewer Workflow
@@ -98,10 +99,13 @@ See [docs/integrated-skills.md](docs/integrated-skills.md) for detailed skill do
 
 ```
 jeeves/
-├── src/jeeves/                  # Core Python package
-│   ├── core/                    # GitHub + worktree helpers
-│   ├── runner/                  # SDK runner
-│   └── viewer/                  # Web dashboard
+├── apps/
+│   ├── viewer/                  # React UI (Vite)
+│   └── viewer-server/           # Fastify API server + run control (Node)
+├── packages/
+│   ├── core/                    # State model, workflows, prompt resolution
+│   ├── runner/                  # CLI + SDK runner integration
+│   └── shared/                  # Shared utilities
 ├── skills/                      # Skill definitions (SKILL.md files)
 │   ├── common/                  # Skills for all phases
 │   ├── design/                  # Design phase skills
@@ -110,7 +114,6 @@ jeeves/
 │   └── registry.yaml            # Phase-to-skill mappings
 ├── prompts/                     # Prompt templates
 ├── scripts/                     # Helper scripts
-├── tests/                       # Test suite
 └── examples/                    # Example configurations
 ```
 
@@ -123,19 +126,13 @@ jeeves/
 ## Development
 
 ```bash
-pytest tests/
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
 TypeScript viewer-server API docs: `docs/viewer-server-api.md`
-
-### TypeScript viewer (WIP)
-
-The rewrite includes a TypeScript viewer-server (`apps/viewer-server`) and a React UI (`apps/viewer`).
-
-```bash
-pnpm install
-pnpm dev
-```
 
 Open the UI at `http://127.0.0.1:8080`.
 

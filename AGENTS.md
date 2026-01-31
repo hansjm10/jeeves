@@ -9,13 +9,15 @@ Jeeves is a proof-of-concept, SDK-only agent runner with a real-time viewer. The
 
 ```
 jeeves/
-├── src/jeeves/              # Core Python package
-│   ├── core/                # Core logic modules
-│   ├── runner/              # SDK runner
-│   └── viewer/              # Web dashboard (server.py, static/)
+├── apps/
+│   ├── viewer/              # React UI (Vite)
+│   └── viewer-server/       # Node viewer server (Fastify)
+├── packages/
+│   ├── core/                # State model + workflows
+│   ├── runner/              # Runner CLI + SDK integration
+│   └── shared/              # Shared utilities
 ├── prompts/                 # Prompt templates (issue.*.md)
 ├── scripts/                 # Helper scripts
-├── tests/                   # All test files
 ├── docs/                    # Documentation
 └── examples/                # Example configurations
 ```
@@ -23,8 +25,11 @@ jeeves/
 ## Commands
 
 ```bash
-# Start the real-time viewer dashboard
-python -m jeeves.viewer.server
+# Start the UI + viewer-server (recommended)
+pnpm dev
+
+# Start only the viewer-server API (no UI)
+pnpm dev:viewer-server
 ```
 
 ## Viewer
@@ -55,7 +60,7 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Outer Loop (JeevesRunManager in viewer/server.py)  │
+│  Outer Loop (RunManager in apps/viewer-server/...)  │
 │  for i in range(max_iterations):                    │
 │      spawn sdk_runner subprocess (fresh context)    │
 │      if output contains <promise>COMPLETE</promise>:│

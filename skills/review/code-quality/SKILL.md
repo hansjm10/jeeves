@@ -42,33 +42,37 @@ Review code for quality issues and provide actionable feedback for improvement.
 ## Common Issues
 
 ### Naming
-```python
-# Bad
-def proc(x, y):
-    return x + y
+```ts
+// Bad
+function proc(x: number, y: number): number {
+  return x + y;
+}
 
-# Good
-def calculate_total(base_price, tax):
-    return base_price + tax
+// Good
+function calculateTotal(basePrice: number, tax: number): number {
+  return basePrice + tax;
+}
 ```
 
 ### Function Size
 Functions should do one thing. If you need "and" to describe it, split it.
 
 ### Error Handling
-```python
-# Bad
-try:
-    do_something()
-except:
-    pass
+```ts
+// Bad
+try {
+  doSomething();
+} catch {
+  // swallowed
+}
 
-# Good
-try:
-    do_something()
-except SpecificError as e:
-    logger.error(f"Failed to do something: {e}")
-    raise
+// Good
+try {
+  doSomething();
+} catch (err) {
+  logger.error({ err }, 'failed to do something');
+  throw err;
+}
 ```
 
 ---
@@ -90,17 +94,11 @@ except SpecificError as e:
 ## Running Quality Checks
 
 ```bash
-# Linting
-ruff check src/
-
-# Type checking
-mypy src/
-
-# Formatting
-ruff format src/
-
 # All checks
-make lint
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
 ---

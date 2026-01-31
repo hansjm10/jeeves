@@ -72,6 +72,10 @@ Request body:
   "title": "Issue title",   // required
   "body": "Issue body",     // required
 
+  "labels": ["bug"],        // optional; array of strings
+  "assignees": ["octocat"], // optional; array of strings
+  "milestone": "v1.0",      // optional; string
+
   "init": {                 // optional; when omitted this endpoint is create-only
     "branch": "issue/123",
     "workflow": "default",
@@ -89,6 +93,11 @@ Request body:
   }
 }
 ```
+
+Optional create fields:
+- `labels`: array of strings
+- `assignees`: array of strings
+- `milestone`: string
 
 Success response (always includes run status):
 ```jsonc

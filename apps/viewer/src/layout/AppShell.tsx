@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { NavLink, Outlet, useBlocker } from 'react-router-dom';
 
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
@@ -7,15 +8,8 @@ import { Header } from './Header.js';
 import { Sidebar } from './Sidebar.js';
 
 function TabLink(props: { to: string; label: string }) {
-  const { confirmDiscard } = useUnsavedChanges();
   return (
-    <NavLink
-      to={props.to}
-      className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
-      onClick={(e) => {
-        if (!confirmDiscard()) e.preventDefault();
-      }}
-    >
+    <NavLink to={props.to} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
       {props.label}
     </NavLink>
   );
@@ -25,6 +19,20 @@ export function AppShell() {
   const baseUrl = useViewerServerBaseUrl();
   const stream = useViewerStream();
   const runRunning = stream.state?.run.running ?? false;
+  const { isDirty, confirmDiscard } = useUnsavedChanges();
+  const blocker = useBlocker(isDirty);
+  const hasPromptedRef = useRef(false);
+
+  useEffect(() => {
+    if (blocker.state !== 'blocked') {
+      hasPromptedRef.current = false;
+      return;
+    }
+    if (hasPromptedRef.current) return;
+    hasPromptedRef.current = true;
+    if (confirmDiscard()) blocker.proceed();
+    else blocker.reset();
+  }, [blocker, blocker.state, confirmDiscard]);
 
   return (
     <div className="app">

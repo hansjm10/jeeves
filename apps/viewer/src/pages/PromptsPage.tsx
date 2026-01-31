@@ -28,7 +28,7 @@ function usePromptIdFromRoute(): string | null {
 export function PromptsPage() {
   const baseUrl = useViewerServerBaseUrl();
   const { pushToast } = useToast();
-  const { confirmDiscard, setDirty: setUnsavedDirty } = useUnsavedChanges();
+  const { setDirty: setUnsavedDirty } = useUnsavedChanges();
   const navigate = useNavigate();
   const stream = useViewerStream();
 
@@ -46,11 +46,13 @@ export function PromptsPage() {
     if (!promptId) {
       setEditorValue('');
       setDirty(false);
+      setUnsavedDirty(false);
       return;
     }
     setEditorValue('');
     setDirty(false);
-  }, [promptId]);
+    setUnsavedDirty(false);
+  }, [promptId, setUnsavedDirty]);
 
   useEffect(() => {
     const data = promptQuery.data;
@@ -70,10 +72,6 @@ export function PromptsPage() {
   }, [dirty]);
 
   useEffect(() => {
-    setUnsavedDirty(dirty);
-  }, [dirty, setUnsavedDirty]);
-
-  useEffect(() => {
     return () => setUnsavedDirty(false);
   }, [setUnsavedDirty]);
 
@@ -85,6 +83,7 @@ export function PromptsPage() {
     if (!promptId) return;
     await savePrompt.mutateAsync({ id: promptId, content: editorValue });
     setDirty(false);
+    setUnsavedDirty(false);
     pushToast(`Saved ${promptId}`);
   }
 
@@ -92,6 +91,7 @@ export function PromptsPage() {
     if (!promptId) return;
     await promptQuery.refetch();
     setDirty(false);
+    setUnsavedDirty(false);
   }
 
   return (
@@ -111,8 +111,6 @@ export function PromptsPage() {
               key={id}
               className={`listItem ${promptId === id ? 'active' : ''}`}
               onClick={() => {
-                if (!confirmDiscard()) return;
-                setDirty(false);
                 navigate(promptRoutePath(id));
               }}
             >
@@ -142,6 +140,7 @@ export function PromptsPage() {
             onChange={(e) => {
               setEditorValue(e.target.value);
               setDirty(true);
+              setUnsavedDirty(true);
             }}
             spellCheck={false}
             disabled={!promptId}

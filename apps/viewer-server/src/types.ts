@@ -1,6 +1,12 @@
+import type { CreateGitHubIssueParams, CreateGitHubIssueResult } from './githubIssueCreate.js';
+
 export type IssueRefString = `${string}/${string}#${number}`;
 
 export type RepoSpec = Readonly<{ owner: string; repo: string }>;
+
+export type CreateGitHubIssueAdapter = (
+  params: CreateGitHubIssueParams,
+) => Promise<CreateGitHubIssueResult>;
 
 export type ViewerPaths = Readonly<{
   dataDir: string;
@@ -33,4 +39,3 @@ export type IssueStateSnapshot = Readonly<{
   issue_json: Record<string, unknown> | null;
   run: RunStatus;
 }>;
-

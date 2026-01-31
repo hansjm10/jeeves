@@ -13,12 +13,14 @@ import Fastify from 'fastify';
 
 import { loadActiveIssue, saveActiveIssue } from './activeIssue.js';
 import { EventHub } from './eventHub.js';
+import { createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
 import { initIssue } from './init.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { writeTextAtomic } from './textAtomic.js';
+import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
   const a = (addr ?? '').trim();
@@ -343,6 +345,7 @@ export type ViewerServerConfig = Readonly<{
   workflowsDir?: string;
   dataDir?: string;
   initialIssue?: string;
+  createGitHubIssue?: CreateGitHubIssueAdapter;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -350,6 +353,7 @@ export async function buildServer(config: ViewerServerConfig) {
   const dataDir = config.dataDir ?? resolveDataDir();
   const promptsDir = config.promptsDir ?? path.join(repoRoot, 'prompts');
   const workflowsDir = config.workflowsDir ?? path.join(repoRoot, 'workflows');
+  const createGitHubIssue = config.createGitHubIssue ?? defaultCreateGitHubIssue;
 
   const allowRemoteRun = config.allowRemoteRun || parseEnvBool(process.env.JEEVES_VIEWER_ALLOW_REMOTE_RUN);
   const allowedOrigins = parseAllowedOriginsFromEnv();
@@ -811,7 +815,7 @@ export async function buildServer(config: ViewerServerConfig) {
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
   });
 
-  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun };
+  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun, createGitHubIssue };
 }
 
 export async function startServer(config: ViewerServerConfig): Promise<void> {

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
+import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
 import { buildServer } from './server.js';
 
@@ -411,6 +412,72 @@ describe('viewer-server', () => {
       method: 'POST',
       url: '/api/github/issues/create',
       remoteAddress: '8.8.8.8',
+      payload: { repo: 'o/r', title: 't', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(typeof body.error).toBe('string');
+    expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('propagates create issue adapter 401 status and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-401-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new CreateGitHubIssueError({
+          status: 401,
+          code: 'NOT_AUTHENTICATED',
+          message: 'GitHub CLI (gh) is not authenticated. Run `gh auth login` on the viewer-server host.',
+        });
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b' },
+    });
+
+    expect(res.statusCode).toBe(401);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(typeof body.error).toBe('string');
+    expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('propagates create issue adapter 403 status and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-403-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new CreateGitHubIssueError({
+          status: 403,
+          code: 'REPO_NOT_FOUND_OR_FORBIDDEN',
+          message: 'Repository not found or access denied for the authenticated user. Check the repo name and your GitHub permissions.',
+        });
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
       payload: { repo: 'o/r', title: 't', body: 'b' },
     });
 

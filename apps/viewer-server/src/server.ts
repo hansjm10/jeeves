@@ -13,7 +13,7 @@ import Fastify from 'fastify';
 
 import { loadActiveIssue, saveActiveIssue } from './activeIssue.js';
 import { EventHub } from './eventHub.js';
-import { createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
+import { CreateGitHubIssueError, createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
 import { initIssue } from './init.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
@@ -718,11 +718,10 @@ export async function buildServer(config: ViewerServerConfig) {
 	        });
 	      }
 	    } catch (err) {
-	      const safeMessage =
-	        err instanceof Error && err.name === 'CreateGitHubIssueError'
-	          ? err.message
-	          : 'Failed to create GitHub issue.';
-      return reply.code(500).send({ ok: false, error: safeMessage, run: runManager.getStatus() });
+	      if (err instanceof CreateGitHubIssueError) {
+	        return reply.code(err.status).send({ ok: false, error: err.message, run: runManager.getStatus() });
+	      }
+	      return reply.code(500).send({ ok: false, error: 'Failed to create GitHub issue.', run: runManager.getStatus() });
     }
   });
 

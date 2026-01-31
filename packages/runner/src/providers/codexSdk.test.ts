@@ -101,6 +101,28 @@ describe('mapCodexEventToProviderEvents', () => {
     expect(events).toEqual([{ type: 'assistant', content: 'hi', timestamp: 'ts' }]);
   });
 
+  it('maps user_message completion to user', () => {
+    const state = makeState();
+    const events = mapCodexEventToProviderEvents(
+      { type: 'item.completed', item: { id: 'u1', type: 'user_message', text: 'hello' } } as unknown as CodexThreadEvent,
+      state,
+      () => 0,
+      () => 'ts',
+    );
+    expect(events).toEqual([{ type: 'user', content: 'hello', timestamp: 'ts' }]);
+  });
+
+  it('maps message completion with role=user to user', () => {
+    const state = makeState();
+    const events = mapCodexEventToProviderEvents(
+      { type: 'item.completed', item: { id: 'u2', type: 'message', role: 'user', content: 'hey' } } as unknown as CodexThreadEvent,
+      state,
+      () => 0,
+      () => 'ts',
+    );
+    expect(events).toEqual([{ type: 'user', content: 'hey', timestamp: 'ts' }]);
+  });
+
   it('maps turn.failed and error to system:error', () => {
     const state = makeState();
     const failed = mapCodexEventToProviderEvents(

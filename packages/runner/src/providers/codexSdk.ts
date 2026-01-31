@@ -123,6 +123,32 @@ function toolResultForItem(itemType: string, item: Record<string, unknown>): { c
   return { content: truncate(safeCompactString(item)), isError: false };
 }
 
+function extractMessageText(item: Record<string, unknown>): string | null {
+  const text = getString(item, 'text') ?? getString(item, 'content') ?? getString(item, 'message');
+  if (text) return text;
+
+  const content = item.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const obj = block as Record<string, unknown>;
+      const t = getString(obj, 'text');
+      if (t) parts.push(t);
+    }
+    if (parts.length) return parts.join('');
+  }
+
+  return null;
+}
+
+function extractMessageRole(item: Record<string, unknown>): string | null {
+  const role = getString(item, 'role');
+  if (!role) return null;
+  return role.trim().toLowerCase();
+}
+
 function ensureToolUseEmitted(params: {
   itemType: string;
   item: Record<string, unknown>;
@@ -233,6 +259,24 @@ export function mapCodexEventToProviderEvents(
     return events;
   }
 
+  if (itemType === 'user_message' || itemType === 'human_message') {
+    events.push({ type: 'user', content: extractMessageText(item) ?? '', timestamp: nowIsoFn() });
+    return events;
+  }
+
+  if (itemType === 'message' || itemType === 'chat_message') {
+    const role = extractMessageRole(item);
+    const content = extractMessageText(item) ?? '';
+    if (role === 'user') {
+      events.push({ type: 'user', content, timestamp: nowIsoFn() });
+      return events;
+    }
+    if (role === 'assistant' || role === 'agent') {
+      events.push({ type: 'assistant', content, timestamp: nowIsoFn() });
+      return events;
+    }
+  }
+
   if (itemType === 'reasoning') {
     events.push({ type: 'system', content: `[reasoning] ${truncate(getString(item, 'text') ?? '')}`, timestamp: nowIsoFn() });
     return events;
@@ -307,21 +351,57 @@ export class CodexSdkProvider implements AgentProvider {
     if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) env.CODEX_API_KEY = env.OPENAI_API_KEY;
     if (!env.OPENAI_BASE_URL && env.CODEX_BASE_URL) env.OPENAI_BASE_URL = env.CODEX_BASE_URL;
 
-    const child = spawn(process.execPath, [codexEntry, ...args], { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let spawnError: unknown | null = null;
-    child.once('error', (err) => {
-      spawnError = err;
+    let rl: readline.Interface | null = null;
+    const stderrChunks: Buffer[] = [];
+    const child = spawn(process.execPath, [codexEntry, ...args], { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const completion = new Promise<number>((resolve) => {
+      let settled = false;
+      const settle = (code: number) => {
+        if (settled) return;
+        settled = true;
+        resolve(code);
+      };
+      child.once('exit', (code) => settle(code ?? 0));
+      child.once('close', (code) => settle(code ?? 0));
+      child.once('error', (err) => {
+        spawnError = err;
+        try {
+          rl?.close();
+        } catch {
+          // ignore
+        }
+        try {
+          child.stdout.destroy();
+        } catch {
+          // ignore
+        }
+        try {
+          child.stderr.destroy();
+        } catch {
+          // ignore
+        }
+        settle(1);
+      });
     });
 
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (d) => stderrChunks.push(Buffer.from(d)));
 
-    const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     try {
-      for await (const line of rl) {
+      child.stdin.write(prompt);
+      child.stdin.end();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const message = `Codex exec stdin write failed: ${msg}`;
+      yield { type: 'system', subtype: 'error', content: message, timestamp: nowIso() };
+      throw new Error(message);
+    }
+
+    rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const activeRl = rl;
+
+    try {
+      for await (const line of activeRl) {
         if (!line || !line.trim()) continue;
         let parsed: unknown;
         try {
@@ -340,16 +420,27 @@ export class CodexSdkProvider implements AgentProvider {
         for (const out of mapped) yield out;
       }
 
-      const exitCode = await new Promise<number>((resolve) => {
-        child.once('exit', (code) => resolve(code ?? 0));
-      });
-      if (spawnError) throw spawnError;
+      const exitCode = await completion;
+
+      if (spawnError) {
+        const msg = spawnError instanceof Error ? spawnError.message : String(spawnError);
+        const message = `Codex exec spawn failed: ${msg}`;
+        yield { type: 'system', subtype: 'error', content: message, timestamp: nowIso() };
+        throw new Error(message);
+      }
+
       if (exitCode !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString('utf-8');
-        throw new Error(`Codex exec exited with code ${exitCode}: ${stderr}`);
+        const message = `Codex exec exited with code ${exitCode}: ${stderr}`.trim();
+        yield { type: 'system', subtype: 'error', content: message, timestamp: nowIso() };
+        throw new Error(message);
       }
     } finally {
-      rl.close();
+      try {
+        rl?.close();
+      } catch {
+        // ignore
+      }
       child.removeAllListeners();
       try {
         if (!child.killed) child.kill();

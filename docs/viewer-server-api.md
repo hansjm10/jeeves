@@ -42,6 +42,7 @@ JSON endpoints:
 - `GET /api/prompts`: returns prompt template IDs under the prompts directory.
 - `GET /api/prompts/<id>`: returns prompt contents (supports nested paths like `fixtures/trivial.md`).
 - `PUT /api/prompts/<id>`: writes prompt contents. Body: `{ "content": "..." }`.
+- `POST /api/github/issues/create`: create a GitHub issue via `gh` (optional init/select/auto-run).
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.
@@ -52,6 +53,59 @@ JSON endpoints:
 Streaming endpoints:
 - `GET /api/stream`: Server-Sent Events (SSE).
 - `GET /api/ws`: WebSocket that streams the same events as SSE.
+
+### `POST /api/github/issues/create`
+
+Create a new GitHub issue in a repository using the local GitHub CLI (`gh`) on the viewer-server host.
+
+Prerequisites:
+- `gh` must be installed on the viewer-server host.
+- `gh` must be authenticated on the viewer-server host: run `gh auth login`.
+
+GitHub host support:
+- GitHub.com only (`owner/repo` repos on github.com). GitHub Enterprise hosts are not supported.
+
+Request body:
+```jsonc
+{
+  "repo": "owner/repo",     // required
+  "title": "Issue title",   // required
+  "body": "Issue body",     // required
+
+  "init": true,             // optional; default false
+  "auto_select": true,      // optional; requires init
+  "auto_run": false,        // optional; requires init and auto_select=true
+  "provider": "codex"       // optional; used only when auto_run=true
+}
+```
+
+Success response (always includes run status):
+```jsonc
+{
+  "ok": true,
+  "created": true,
+  "issue_url": "https://github.com/owner/repo/issues/123",
+  "issue_ref": "owner/repo#123", // present when parseable
+  "init": { "ok": true, "issue_ref": "owner/repo#123" }, // present only when init=true
+  "auto_run": { "ok": true, "run_started": true },       // present only when auto_run=true
+  "run": { /* RunManager.getStatus() */ }
+}
+```
+
+Error responses:
+```jsonc
+{
+  "ok": false,
+  "error": "Human-readable error message.",
+  "run": { /* RunManager.getStatus() */ }
+}
+```
+
+Common `gh` error status mapping:
+- Missing `gh` / not in PATH: `500`
+- Not authenticated (`gh auth login` required): `401`
+- Repo not found or access denied: `403`
+- Other `gh` failures: `500`
 
 ## Streaming formats
 

@@ -134,8 +134,8 @@ The rewrite includes a TypeScript viewer-server (`apps/viewer-server`) and a Rea
 
 ```bash
 pnpm install
-JEEVES_VIEWER_ALLOWED_ORIGINS=http://127.0.0.1:5173 pnpm dev:viewer-server
+pnpm dev:viewer-server
 pnpm dev:viewer
 ```
 
-Open the UI at `http://127.0.0.1:5173`.
+Open the UI at `http://127.0.0.1:8080`.

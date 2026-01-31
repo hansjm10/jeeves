@@ -169,7 +169,7 @@ function pickGroupTarget(workflow: WorkflowResponse | null, group: GroupPhase): 
 export function App() {
   const baseUrl = useMemo(() => {
     const raw = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_VIEWER_SERVER_URL;
-    return (raw ?? 'http://127.0.0.1:8080').trim();
+    return (raw ?? window.location.origin).trim();
   }, []);
 
   const [model, dispatch] = useReducer(reducer, {

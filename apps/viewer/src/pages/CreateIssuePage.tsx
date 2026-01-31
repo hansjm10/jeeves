@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import type { CreateIssueResponse, CreateIssueRunProvider } from '../api/types.js';
+import type { CreateIssueRequest, CreateIssueResponse, CreateIssueRunProvider } from '../api/types.js';
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useCreateIssueMutation } from '../features/mutations.js';
 import { useToast } from '../ui/toast/ToastProvider.js';
@@ -31,6 +31,10 @@ export function CreateIssuePage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
 
+  const [labels, setLabels] = useState('');
+  const [assignees, setAssignees] = useState('');
+  const [milestone, setMilestone] = useState('');
+
   const [init, setInit] = useState(true);
   const [autoSelect, setAutoSelect] = useState(true);
   const [autoRun, setAutoRun] = useState(false);
@@ -49,6 +53,16 @@ export function CreateIssuePage() {
     return null;
   }
 
+  function parseCommaList(input: string): string[] | undefined {
+    const trimmed = input.trim();
+    if (!trimmed) return undefined;
+    const values = trimmed
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return values.length > 0 ? values : undefined;
+  }
+
   async function handleSubmit() {
     setLocalError(null);
     const err = validate();
@@ -57,19 +71,26 @@ export function CreateIssuePage() {
       return;
     }
 
-    const requestInit = init;
-    const requestAutoSelect = requestInit ? autoSelect : false;
-    const requestAutoRun = requestAutoSelect ? autoRun : false;
-
-    await createIssue.mutateAsync({
+    const labelsList = parseCommaList(labels);
+    const assigneesList = parseCommaList(assignees);
+    const milestoneTrimmed = milestone.trim();
+    const request: CreateIssueRequest = {
       repo: repo.trim(),
       title: title.trim(),
       body,
-      init: requestInit,
-      auto_select: requestAutoSelect,
-      auto_run: requestAutoRun,
-      ...(requestAutoRun ? { provider } : {}),
-    });
+      ...(labelsList ? { labels: labelsList } : {}),
+      ...(assigneesList ? { assignees: assigneesList } : {}),
+      ...(milestoneTrimmed ? { milestone: milestoneTrimmed } : {}),
+      ...(init
+        ? {
+            init: {},
+            auto_select: autoSelect,
+            ...(autoRun && autoSelect ? { auto_run: { provider } } : {}),
+          }
+        : {}),
+    };
+
+    await createIssue.mutateAsync(request);
   }
 
   return (
@@ -116,6 +137,21 @@ export function CreateIssuePage() {
           <div className="muted" style={{ marginTop: 10 }}>
             Options
           </div>
+
+          <label className="label">
+            labels (comma-separated)
+            <input className="input" value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, ui" />
+          </label>
+
+          <label className="label">
+            assignees (comma-separated)
+            <input className="input" value={assignees} onChange={(e) => setAssignees(e.target.value)} placeholder="octocat, hubot" />
+          </label>
+
+          <label className="label">
+            milestone
+            <input className="input" value={milestone} onChange={(e) => setMilestone(e.target.value)} placeholder="v1.0" />
+          </label>
 
           <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input

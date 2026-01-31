@@ -51,18 +51,44 @@ export type RunStatus = Readonly<{
 
 export type CreateIssueRunProvider = 'claude' | 'codex' | 'fake';
 
+export type CreateIssueInitParams = Readonly<{
+  branch?: string;
+  workflow?: string;
+  phase?: string;
+  design_doc?: string;
+  force?: boolean;
+}>;
+
+export type CreateIssueAutoRunParams = Readonly<{
+  provider?: CreateIssueRunProvider;
+  workflow?: string;
+  max_iterations?: number;
+  inactivity_timeout_sec?: number;
+  iteration_timeout_sec?: number;
+}>;
+
 export type CreateIssueRequest = Readonly<{
   repo: string;
   title: string;
   body: string;
-  init?: boolean;
+  labels?: string[];
+  assignees?: string[];
+  milestone?: string;
+  init?: CreateIssueInitParams;
   auto_select?: boolean;
-  auto_run?: boolean;
-  provider?: CreateIssueRunProvider;
+  auto_run?: CreateIssueAutoRunParams;
+}>;
+
+export type CreateIssueInitOkResult = Readonly<{
+  issue_ref: string;
+  state_dir: string;
+  work_dir: string;
+  repo_dir: string;
+  branch: string;
 }>;
 
 export type CreateIssueInitResult =
-  | Readonly<{ ok: true; issue_ref: string }>
+  | Readonly<{ ok: true; result: CreateIssueInitOkResult }>
   | Readonly<{ ok: false; error: string }>;
 
 export type CreateIssueAutoRunResult =

@@ -29,7 +29,7 @@ export class CreateGitHubIssueError extends Error {
     this.name = 'CreateGitHubIssueError';
     this.status = params.status;
     this.code = params.code;
-    (this as unknown as { cause?: unknown }).cause = params.cause;
+    if (params.cause !== undefined) (this as unknown as { cause?: unknown }).cause = params.cause;
   }
 }
 
@@ -146,14 +146,12 @@ export async function createGitHubIssue(params: CreateGitHubIssueParams): Promis
         status: 500,
         code: 'MISSING_GH',
         message: 'GitHub CLI (gh) is not installed or not found in PATH on the viewer-server host.',
-        cause: err,
       });
     }
     throw new CreateGitHubIssueError({
       status: 500,
       code: 'UNKNOWN',
       message: 'Failed to spawn `gh` to create GitHub issue.',
-      cause: err,
     });
   }
 

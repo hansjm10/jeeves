@@ -535,10 +535,10 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.get('/api/run', async () => ({ run: runManager.getStatus() }));
 
-  app.get('/api/issues', async () => {
-    const issues = await listIssueStates(dataDir);
-    return {
-      ok: true,
+	  app.get('/api/issues', async () => {
+	    const issues = await listIssueStates(dataDir);
+	    return {
+	      ok: true,
       issues: issues.map((i) => ({
         owner: i.owner,
         repo: i.repo,
@@ -550,14 +550,31 @@ export async function buildServer(config: ViewerServerConfig) {
       })),
       data_dir: dataDir,
       count: issues.length,
-      current_issue: runManager.getIssue().issueRef,
-    };
-  });
+	      current_issue: runManager.getIssue().issueRef,
+	    };
+	  });
 
-  app.get('/api/prompts', async () => {
-    const ids = await listPromptIds(promptsDir);
-    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
-  });
+	  app.get('/api/workflows', async (_req, reply) => {
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    try {
+	      const entries = await fs.readdir(absWorkflowsDir, { withFileTypes: true });
+	      const workflows = entries
+	        .filter((ent) => ent.isFile() && ent.name.endsWith('.yaml'))
+	        .map((ent) => ({ name: path.basename(ent.name, '.yaml') }))
+	        .sort((a, b) => a.name.localeCompare(b.name));
+	      return reply.send({ ok: true, workflows, workflows_dir: absWorkflowsDir });
+	    } catch (err) {
+	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+	        return reply.send({ ok: true, workflows: [], workflows_dir: absWorkflowsDir });
+	      }
+	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+	  });
+
+	  app.get('/api/prompts', async () => {
+	    const ids = await listPromptIds(promptsDir);
+	    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
+	  });
 
   app.get('/api/prompts/*', async (req, reply) => {
     const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);

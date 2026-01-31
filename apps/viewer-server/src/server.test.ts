@@ -195,6 +195,37 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('lists yaml workflows directly under workflowsDir', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflows-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflows-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    await fs.writeFile(path.join(workflowsDir, 'b.yaml'), 'workflow: {}\nphases: {}\n', 'utf-8');
+    await fs.writeFile(path.join(workflowsDir, 'a.yaml'), 'workflow: {}\nphases: {}\n', 'utf-8');
+    await fs.writeFile(path.join(workflowsDir, 'ignore.txt'), 'nope\n', 'utf-8');
+    await fs.mkdir(path.join(workflowsDir, 'nested'), { recursive: true });
+    await fs.writeFile(path.join(workflowsDir, 'nested', 'c.yaml'), 'nope\n', 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      workflows: [{ name: 'a' }, { name: 'b' }],
+      workflows_dir: path.resolve(workflowsDir),
+    });
+
+    await app.close();
+  });
+
   it('SSE stream responds with event-stream and includes initial state event', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-sse-');
     const { app } = await buildServer({

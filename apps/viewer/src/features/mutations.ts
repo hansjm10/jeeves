@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiJson } from '../api/http.js';
+import type { CreateIssueRequest, CreateIssueResponse } from '../api/types.js';
 import { encodePathPreservingSlashes } from '../api/paths.js';
 import { queryKeys } from '../query/queryKeys.js';
 
@@ -22,6 +23,17 @@ export function useInitIssueMutation(baseUrl: string) {
       apiJson(baseUrl, '/api/init/issue', { method: 'POST', body: JSON.stringify(input) }),
     onSuccess: async () => {
       await Promise.all([qc.invalidateQueries({ queryKey: queryKeys.issues(baseUrl) }), qc.invalidateQueries({ queryKey: queryKeys.workflow(baseUrl) })]);
+    },
+  });
+}
+
+export function useCreateIssueMutation(baseUrl: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: CreateIssueRequest) =>
+      apiJson<CreateIssueResponse>(baseUrl, '/api/github/issues/create', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.issues(baseUrl) });
     },
   });
 }

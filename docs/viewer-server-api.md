@@ -42,6 +42,7 @@ JSON endpoints:
 - `GET /api/prompts`: returns prompt template IDs under the prompts directory.
 - `GET /api/prompts/<id>`: returns prompt contents (supports nested paths like `fixtures/trivial.md`).
 - `PUT /api/prompts/<id>`: writes prompt contents. Body: `{ "content": "..." }`.
+- `POST /api/github/issues/create`: create a GitHub issue via `gh` (optional init/select/auto-run).
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.
@@ -52,6 +53,91 @@ JSON endpoints:
 Streaming endpoints:
 - `GET /api/stream`: Server-Sent Events (SSE).
 - `GET /api/ws`: WebSocket that streams the same events as SSE.
+
+### `POST /api/github/issues/create`
+
+Create a new GitHub issue in a repository using the local GitHub CLI (`gh`) on the viewer-server host.
+
+Prerequisites:
+- `gh` must be installed on the viewer-server host.
+- `gh` must be authenticated on the viewer-server host: run `gh auth login`.
+
+GitHub host support:
+- GitHub.com only (`owner/repo` repos on github.com). GitHub Enterprise hosts are not supported.
+
+Request body:
+```jsonc
+{
+  "repo": "owner/repo",     // required
+  "title": "Issue title",   // required
+  "body": "Issue body",     // required
+
+  "labels": ["bug"],        // optional; array of strings
+  "assignees": ["octocat"], // optional; array of strings
+  "milestone": "v1.0",      // optional; string
+
+  "init": {                 // optional; when omitted this endpoint is create-only
+    "branch": "issue/123",
+    "workflow": "default",
+    "phase": "design_draft",
+    "design_doc": "docs/issue-123-design.md",
+    "force": false
+  },
+  "auto_select": true,      // optional; default true when init is provided
+  "auto_run": {             // optional; requires init and auto_select !== false
+    "provider": "codex",
+    "workflow": "default",
+    "max_iterations": 10,
+    "inactivity_timeout_sec": 600,
+    "iteration_timeout_sec": 3600
+  }
+}
+```
+
+Optional create fields:
+- `labels`: array of strings
+- `assignees`: array of strings
+- `milestone`: string
+
+Success response (always includes run status):
+```jsonc
+{
+  "ok": true,
+  "created": true,
+  "issue_url": "https://github.com/owner/repo/issues/123",
+  "issue_ref": "owner/repo#123", // present when parseable
+  "init": {                                             // present only when init is requested
+    "ok": true,
+    "result": {
+      "issue_ref": "owner/repo#123",
+      "state_dir": "...",
+      "work_dir": "...",
+      "repo_dir": "...",
+      "branch": "issue/123"
+    }
+  },
+  "auto_run": { "ok": true, "run_started": true },       // present only when auto_run is requested
+  "run": { /* RunManager.getStatus() */ }
+}
+```
+
+Error responses:
+```jsonc
+{
+  "ok": false,
+  "error": "Human-readable error message.",
+  "run": { /* RunManager.getStatus() */ }
+}
+```
+
+Common `gh` error status mapping:
+- Missing `gh` / not in PATH: `500`
+- Not authenticated (`gh auth login` required): `401`
+- Repo not found or access denied: `403`
+- Other `gh` failures: `500`
+
+GitHub host limitation (v1):
+- If issue creation succeeds but `gh` returns an `issue_url` that is not a `github.com/.../issues/<n>` URL, the endpoint returns `200` with `ok: true` and `init: { ok: false, error: "Only github.com issue URLs are supported in v1." }` (when init was requested).
 
 ## Streaming formats
 

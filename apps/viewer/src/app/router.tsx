@@ -12,12 +12,12 @@ export function makeRouter(): ReturnType<typeof createBrowserRouter> {
       path: '/',
       element: <AppShell />,
       children: [
-        { index: true, element: <Navigate to="/logs" replace /> },
+        { index: true, element: <Navigate to="/sdk" replace /> },
+        { path: 'sdk', element: <SdkPage /> },
         { path: 'logs', element: <LogsPage /> },
         { path: 'viewer-logs', element: <ViewerLogsPage /> },
-        { path: 'sdk', element: <SdkPage /> },
         { path: 'prompts/*', element: <PromptsPage /> },
-        { path: '*', element: <Navigate to="/logs" replace /> },
+        { path: '*', element: <Navigate to="/sdk" replace /> },
       ],
     },
   ]);

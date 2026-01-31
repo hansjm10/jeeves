@@ -6,6 +6,9 @@ export type CreateGitHubIssueParams = Readonly<{
   repo: string;
   title: string;
   body: string;
+  labels?: readonly string[];
+  assignees?: readonly string[];
+  milestone?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }>;
@@ -117,7 +120,18 @@ export async function createGitHubIssue(params: CreateGitHubIssueParams): Promis
   const title = params.title;
   const body = params.body;
 
-  const child = spawn('gh', ['issue', 'create', '--repo', repo, '--title', title, '--body-file', '-'], {
+  const args = ['issue', 'create', '--repo', repo, '--title', title, '--body-file', '-'];
+  if (params.labels && params.labels.length > 0) {
+    for (const label of params.labels) args.push('--label', label);
+  }
+  if (params.assignees && params.assignees.length > 0) {
+    args.push('--assignee', params.assignees.join(','));
+  }
+  if (params.milestone) {
+    args.push('--milestone', params.milestone);
+  }
+
+  const child = spawn('gh', args, {
     cwd: params.cwd,
     env: params.env,
     stdio: ['pipe', 'pipe', 'pipe'],

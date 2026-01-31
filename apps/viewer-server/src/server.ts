@@ -594,27 +594,53 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
-	  app.post('/api/github/issues/create', async (req, reply) => {
-	    const gate = await requireMutatingAllowed(req);
-	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, run: runManager.getStatus() });
+		  app.post('/api/github/issues/create', async (req, reply) => {
+		    const gate = await requireMutatingAllowed(req);
+		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, run: runManager.getStatus() });
 
-	    const body = getBody(req);
+		    const body = getBody(req);
 
-	    const repo = typeof body.repo === 'string' ? body.repo.trim() : '';
-	    if (!repo) return reply.code(400).send({ ok: false, error: 'repo is required (owner/repo)', run: runManager.getStatus() });
+		    const repo = typeof body.repo === 'string' ? body.repo.trim() : '';
+		    if (!repo) return reply.code(400).send({ ok: false, error: 'repo is required (owner/repo)', run: runManager.getStatus() });
 
-	    const titleRaw = typeof body.title === 'string' ? body.title : '';
-	    if (!titleRaw.trim()) return reply.code(400).send({ ok: false, error: 'title is required', run: runManager.getStatus() });
+		    const titleRaw = typeof body.title === 'string' ? body.title : '';
+		    if (!titleRaw.trim()) return reply.code(400).send({ ok: false, error: 'title is required', run: runManager.getStatus() });
 
-	    const bodyRaw = typeof body.body === 'string' ? body.body : '';
-	    if (!bodyRaw.trim()) return reply.code(400).send({ ok: false, error: 'body is required', run: runManager.getStatus() });
+		    const bodyRaw = typeof body.body === 'string' ? body.body : '';
+		    if (!bodyRaw.trim()) return reply.code(400).send({ ok: false, error: 'body is required', run: runManager.getStatus() });
 
-	    const initRequested = parseOptionalBool(body.init) ?? false;
-	    const autoSelectRequested = parseOptionalBool(body.auto_select);
-	    const autoRunRequested = parseOptionalBool(body.auto_run) ?? false;
-	    if (!initRequested && autoSelectRequested !== undefined) {
-	      return reply.code(400).send({ ok: false, error: '`auto_select` requires `init`', run: runManager.getStatus() });
-	    }
+		    const labels =
+		      body.labels === undefined
+		        ? undefined
+		        : Array.isArray(body.labels)
+		          ? body.labels
+		              .filter((v: unknown): v is string => typeof v === 'string')
+		              .map((s: string) => s.trim())
+		              .filter((s: string) => s.length > 0)
+		          : null;
+		    if (labels === null) return reply.code(400).send({ ok: false, error: '`labels` must be an array of strings', run: runManager.getStatus() });
+
+		    const assignees =
+		      body.assignees === undefined
+		        ? undefined
+		        : Array.isArray(body.assignees)
+		          ? body.assignees
+		              .filter((v: unknown): v is string => typeof v === 'string')
+		              .map((s: string) => s.trim())
+		              .filter((s: string) => s.length > 0)
+		          : null;
+		    if (assignees === null)
+		      return reply.code(400).send({ ok: false, error: '`assignees` must be an array of strings', run: runManager.getStatus() });
+
+		    const milestoneRaw = typeof body.milestone === 'string' ? body.milestone.trim() : '';
+		    const milestone = milestoneRaw.length > 0 ? milestoneRaw : undefined;
+
+		    const initRequested = parseOptionalBool(body.init) ?? false;
+		    const autoSelectRequested = parseOptionalBool(body.auto_select);
+		    const autoRunRequested = parseOptionalBool(body.auto_run) ?? false;
+		    if (!initRequested && autoSelectRequested !== undefined) {
+		      return reply.code(400).send({ ok: false, error: '`auto_select` requires `init`', run: runManager.getStatus() });
+		    }
 	    if (!initRequested && autoRunRequested) {
 	      return reply.code(400).send({ ok: false, error: '`auto_run` requires `init`', run: runManager.getStatus() });
 	    }
@@ -632,14 +658,14 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
 	    }
 
-	    try {
-	      const res = await createGitHubIssue({ repo, title: titleRaw, body: bodyRaw });
-	      const baseResponse = {
-	        ok: true,
-	        created: true,
-	        issue_url: res.issue_url,
-	        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
-	      };
+		    try {
+		      const res = await createGitHubIssue({ repo, title: titleRaw, body: bodyRaw, labels, assignees, milestone });
+		      const baseResponse = {
+		        ok: true,
+		        created: true,
+		        issue_url: res.issue_url,
+		        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
+		      };
 
 	      if (!initRequested) return reply.send({ ...baseResponse, run: runManager.getStatus() });
 

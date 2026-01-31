@@ -532,6 +532,46 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('sanitizes labels/assignees/milestone and passes them to the create adapter', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-extra-fields-');
+
+    let captured: { labels?: unknown; assignees?: unknown; milestone?: unknown } | null = null;
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async (params) => {
+        captured = params as unknown as { labels?: unknown; assignees?: unknown; milestone?: unknown };
+        return { issue_ref: null, issue_url: 'https://github.com/o/r/issues/123' };
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        repo: 'o/r',
+        title: 't',
+        body: 'b',
+        labels: [' bug ', '', 123],
+        assignees: [' octocat ', ''],
+        milestone: ' v1.0 ',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    if (!captured) throw new Error('expected create adapter to be called');
+    const capturedParams = captured as { labels?: unknown; assignees?: unknown; milestone?: unknown };
+    expect(capturedParams.labels).toEqual(['bug']);
+    expect(capturedParams.assignees).toEqual(['octocat']);
+    expect(capturedParams.milestone).toBe('v1.0');
+
+    await app.close();
+  });
+
   it('returns 409 when init is requested while a run is active', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-create-init-running-');
 

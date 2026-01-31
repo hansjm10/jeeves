@@ -43,3 +43,7 @@ coverage/
 .pnpm-store/
 pnpm-debug.log*
 .eslintcache
+
+# TypeScript build info
+*.tsbuildinfo
+**/*.tsbuildinfo

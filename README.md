@@ -127,3 +127,24 @@ pytest tests/
 ```
 
 TypeScript viewer-server API docs: `docs/viewer-server-api.md`
+
+### TypeScript viewer (WIP)
+
+The rewrite includes a TypeScript viewer-server (`apps/viewer-server`) and a React UI (`apps/viewer`).
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Open the UI at `http://127.0.0.1:8080`.
+
+#### Docker note (port mapping)
+
+If you run the UI in a container and publish `8060:8080`, open `http://<docker-host-ip>:8060/`.
+
+If the viewer-server is running somewhere other than `127.0.0.1:8081` *from inside the UI container*, set:
+
+```bash
+VITE_VIEWER_SERVER_PROXY_TARGET=http://<host-or-service>:8081 pnpm dev:viewer
+```

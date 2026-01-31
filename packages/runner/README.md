@@ -22,6 +22,24 @@ pnpm exec jeeves-runner run-workflow --workflow <name> [--issue <owner/repo#N>]
 
 If `--issue` is provided, the runner defaults to XDG state/worktree paths (override with `JEEVES_DATA_DIR`).
 
+## Providers
+
+### Codex (`--provider codex`)
+
+Runs phases via the OpenAI Codex SDK.
+
+Auth:
+- Recommended: run `pnpm exec codex` once and choose **Sign in with ChatGPT** (no env var required after sign-in).
+- API key: set `OPENAI_API_KEY` (also supports `CODEX_API_KEY`).
+
+Optional configuration:
+- `CODEX_MODEL` (or `OPENAI_MODEL`)
+- `OPENAI_BASE_URL` (or `CODEX_BASE_URL`)
+
+Default execution policy:
+- `sandboxMode: danger-full-access`
+- `approvalPolicy: never`
+
 ## Artifacts
 
 For each run, the runner writes to the state directory:
@@ -38,4 +56,3 @@ The `claude` provider uses the Claude Agent TypeScript SDK with:
 - `allowDangerouslySkipPermissions: true`
 
 This is an intentional default for now (trusted local automation) and is not configurable yet.
-

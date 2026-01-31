@@ -635,28 +635,57 @@ export async function buildServer(config: ViewerServerConfig) {
 		    const milestoneRaw = typeof body.milestone === 'string' ? body.milestone.trim() : '';
 		    const milestone = milestoneRaw.length > 0 ? milestoneRaw : undefined;
 
-		    const initRequested = parseOptionalBool(body.init) ?? false;
+		    const initValue = body.init;
+		    const initBool = parseOptionalBool(initValue);
+		    const initObj = isBodyRecord(initValue) ? initValue : null;
+		    if (initValue !== undefined && initObj === null && initBool === undefined) {
+		      return reply.code(400).send({ ok: false, error: '`init` must be an object', run: runManager.getStatus() });
+		    }
+		    const initRequested = initObj !== null || initBool === true;
+
+		    const autoRunValue = body.auto_run;
+		    const autoRunBool = parseOptionalBool(autoRunValue);
+		    const autoRunObj = isBodyRecord(autoRunValue) ? autoRunValue : null;
+		    if (autoRunValue !== undefined && autoRunObj === null && autoRunBool === undefined) {
+		      return reply.code(400).send({ ok: false, error: '`auto_run` must be an object', run: runManager.getStatus() });
+		    }
+		    const autoRunRequested = autoRunObj !== null || autoRunBool === true;
+
 		    const autoSelectRequested = parseOptionalBool(body.auto_select);
-		    const autoRunRequested = parseOptionalBool(body.auto_run) ?? false;
 		    if (!initRequested && autoSelectRequested !== undefined) {
 		      return reply.code(400).send({ ok: false, error: '`auto_select` requires `init`', run: runManager.getStatus() });
 		    }
-	    if (!initRequested && autoRunRequested) {
-	      return reply.code(400).send({ ok: false, error: '`auto_run` requires `init`', run: runManager.getStatus() });
-	    }
-	    if (autoRunRequested && autoSelectRequested === false) {
-	      return reply.code(400).send({ ok: false, error: '`auto_run` requires `auto_select`', run: runManager.getStatus() });
-	    }
-	    if (initRequested && runManager.getStatus().running) {
-	      return reply.code(409).send({ ok: false, error: 'Cannot init while Jeeves is running.', run: runManager.getStatus() });
-	    }
 
-	    try {
-	      parseRepoSpec(repo);
-	    } catch (err) {
-	      const mapped = errorToHttp(err);
-	      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
-	    }
+		    const autoSelectEnabled = initRequested ? (autoSelectRequested ?? true) : false;
+		    if (autoRunRequested && (!initRequested || !autoSelectEnabled)) {
+		      return reply.code(400).send({ ok: false, error: '`auto_run` requires `init` + `auto_select`', run: runManager.getStatus() });
+		    }
+
+		    if (initRequested && runManager.getStatus().running) {
+		      return reply.code(409).send({ ok: false, error: 'Cannot init while Jeeves is running.', run: runManager.getStatus() });
+		    }
+
+		    try {
+		      parseRepoSpec(repo);
+		    } catch (err) {
+		      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
+		    }
+
+		    function parseGitHubDotComIssueUrl(issueUrl: string): { issueNumber: number } | null {
+		      let parsed: URL;
+		      try {
+		        parsed = new URL(issueUrl);
+		      } catch {
+		        return null;
+		      }
+		      if (parsed.hostname.trim().toLowerCase() !== 'github.com') return null;
+		      const m = parsed.pathname.match(/^\/[^/]+\/[^/]+\/issues\/(\d+)(?:\/.*)?$/);
+		      if (!m) return null;
+		      const n = Number(m[1]);
+		      if (!Number.isInteger(n) || n <= 0) return null;
+		      return { issueNumber: n };
+		    }
 
 		    try {
 		      const res = await createGitHubIssue({ repo, title: titleRaw, body: bodyRaw, labels, assignees, milestone });
@@ -667,89 +696,104 @@ export async function buildServer(config: ViewerServerConfig) {
 		        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
 		      };
 
-	      if (!initRequested) return reply.send({ ...baseResponse, run: runManager.getStatus() });
+		      if (!initRequested) return reply.send({ ...baseResponse, run: runManager.getStatus() });
 
-	      const issueRef = res.issue_ref;
-	      const issueNumber =
-	        typeof issueRef === 'string'
-	          ? (() => {
-              const m = issueRef.match(/#(\d+)$/);
-              if (!m) return null;
-              const n = Number(m[1]);
-              return Number.isInteger(n) && n > 0 ? n : null;
-            })()
-          : null;
+		      const issueUrlInfo = parseGitHubDotComIssueUrl(res.issue_url);
+		      if (!issueUrlInfo) {
+		        return reply.send({
+		          ...baseResponse,
+		          run: runManager.getStatus(),
+		          init: { ok: false, error: 'Only github.com issue URLs are supported in v1.' },
+		        });
+		      }
 
-	      if (!issueNumber) {
-	        return reply.send({
-	          ...baseResponse,
-	          run: runManager.getStatus(),
-	          init: { ok: false, error: 'Issue created but could not determine issue number for init.' },
-	        });
-	      }
+		      const initParams = initObj ?? {};
+		      const prevActiveIssue = await loadActiveIssue(dataDir);
 
-	      try {
-	        const initRes = await initIssue({ dataDir, body: { repo, issue: issueNumber } });
+		      try {
+		        const initRes = await initIssue({
+		          dataDir,
+		          body: {
+		            repo,
+		            issue: issueUrlInfo.issueNumber,
+		            branch: parseOptionalString(initParams.branch),
+		            workflow: parseOptionalString(initParams.workflow),
+		            phase: parseOptionalString(initParams.phase),
+		            design_doc: parseOptionalString(initParams.design_doc),
+		            force: parseOptionalBool(initParams.force),
+		          },
+		        });
 
-	        const issueJson = ((await readIssueJson(initRes.state_dir)) ?? {}) as Record<string, unknown>;
-	        const issueField =
-	          issueJson.issue && typeof issueJson.issue === 'object' && !Array.isArray(issueJson.issue)
-	            ? (issueJson.issue as Record<string, unknown>)
-	            : {};
+		        const issueJson = ((await readIssueJson(initRes.state_dir)) ?? {}) as Record<string, unknown>;
+		        const issueField =
+		          issueJson.issue && typeof issueJson.issue === 'object' && !Array.isArray(issueJson.issue)
+		            ? (issueJson.issue as Record<string, unknown>)
+		            : {};
 
-	        await writeIssueJson(initRes.state_dir, {
-	          ...issueJson,
-	          issue: {
-	            ...issueField,
-	            title: titleRaw.trim(),
-	            url: res.issue_url,
-	          },
-	        });
+		        await writeIssueJson(initRes.state_dir, {
+		          ...issueJson,
+		          issue: {
+		            ...issueField,
+		            title: titleRaw.trim(),
+		            url: res.issue_url,
+		          },
+		        });
 
-	        await runManager.setIssue(initRes.issue_ref);
-	        await saveActiveIssue(dataDir, initRes.issue_ref);
-	        await refreshFileTargets();
+		        if (autoSelectEnabled) {
+		          await runManager.setIssue(initRes.issue_ref);
+		          await saveActiveIssue(dataDir, initRes.issue_ref);
+		          await refreshFileTargets();
+		        } else {
+		          const activeIssueFile = path.join(dataDir, 'active-issue.json');
+		          if (prevActiveIssue) await saveActiveIssue(dataDir, prevActiveIssue);
+		          else await fs.rm(activeIssueFile, { force: true }).catch(() => void 0);
+		        }
 
-	        if (!autoRunRequested) {
-	          return reply.send({
-	            ...baseResponse,
-	            init: { ok: true, issue_ref: initRes.issue_ref },
-	            run: runManager.getStatus(),
-	          });
-	        }
+		        if (!autoRunRequested) {
+		          return reply.send({
+		            ...baseResponse,
+		            init: { ok: true, result: initRes },
+		            run: runManager.getStatus(),
+		          });
+		        }
 
-	        let autoRunResult: { ok: true; run_started: true } | { ok: false; run_started: false; error: string };
-	        try {
-	          await runManager.start({
-	            provider: parseOptionalString(body.provider) ?? body.provider,
-	          });
-	          autoRunResult = { ok: true, run_started: true };
-	        } catch (err) {
-	          const msg = err instanceof Error ? err.message : 'Failed to start run.';
-	          autoRunResult = { ok: false, run_started: false, error: msg };
-	        }
+		        const autoRunParams = autoRunObj ?? {};
+		        let autoRunResult: { ok: true; run_started: true } | { ok: false; run_started: false; error: string };
+		        try {
+		          await runManager.start({
+		            provider: parseOptionalString(autoRunParams.provider) ?? parseOptionalString(body.provider) ?? body.provider,
+		            workflow: parseOptionalString(autoRunParams.workflow),
+		            max_iterations: parseOptionalNumber(autoRunParams.max_iterations),
+		            inactivity_timeout_sec: parseOptionalNumber(autoRunParams.inactivity_timeout_sec),
+		            iteration_timeout_sec: parseOptionalNumber(autoRunParams.iteration_timeout_sec),
+		          });
+		          autoRunResult = { ok: true, run_started: true };
+		        } catch (err) {
+		          const msg = err instanceof Error ? err.message : 'Failed to start run.';
+		          autoRunResult = { ok: false, run_started: false, error: msg };
+		        }
 
-	        return reply.send({
-	          ...baseResponse,
-	          init: { ok: true, issue_ref: initRes.issue_ref },
-	          auto_run: autoRunResult,
-	          run: runManager.getStatus(),
-	        });
-	      } catch (err) {
-	        const safeMessage = err instanceof Error ? err.message : 'Failed to init issue.';
-	        return reply.send({
-	          ...baseResponse,
-	          run: runManager.getStatus(),
-	          init: { ok: false, error: safeMessage },
-	        });
-	      }
-	    } catch (err) {
-	      if (err instanceof CreateGitHubIssueError) {
-	        return reply.code(err.status).send({ ok: false, error: err.message, run: runManager.getStatus() });
-	      }
-	      return reply.code(500).send({ ok: false, error: 'Failed to create GitHub issue.', run: runManager.getStatus() });
-    }
-  });
+		        return reply.send({
+		          ...baseResponse,
+		          init: { ok: true, result: initRes },
+		          auto_run: autoRunResult,
+		          run: runManager.getStatus(),
+		        });
+		      } catch (err) {
+		        const safeMessage = err instanceof Error ? err.message : 'Failed to init issue.';
+		        return reply.send({
+		          ...baseResponse,
+		          run: runManager.getStatus(),
+		          init: { ok: false, error: safeMessage },
+		        });
+		      }
+		    } catch (err) {
+		      if (err instanceof CreateGitHubIssueError) {
+		        return reply.code(err.status).send({ ok: false, error: err.message, run: runManager.getStatus() });
+		      }
+		      return reply.code(500).send({ ok: false, error: 'Failed to create GitHub issue.', run: runManager.getStatus() });
+		    }
+		  });
 
 	  app.post('/api/issues/select', async (req, reply) => {
 	    const gate = await requireMutatingAllowed(req);

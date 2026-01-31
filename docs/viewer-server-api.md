@@ -72,10 +72,21 @@ Request body:
   "title": "Issue title",   // required
   "body": "Issue body",     // required
 
-  "init": true,             // optional; default false
-  "auto_select": true,      // optional; requires init
-  "auto_run": false,        // optional; requires init and auto_select=true
-  "provider": "codex"       // optional; used only when auto_run=true
+  "init": {                 // optional; when omitted this endpoint is create-only
+    "branch": "issue/123",
+    "workflow": "default",
+    "phase": "design_draft",
+    "design_doc": "docs/issue-123-design.md",
+    "force": false
+  },
+  "auto_select": true,      // optional; default true when init is provided
+  "auto_run": {             // optional; requires init and auto_select !== false
+    "provider": "codex",
+    "workflow": "default",
+    "max_iterations": 10,
+    "inactivity_timeout_sec": 600,
+    "iteration_timeout_sec": 3600
+  }
 }
 ```
 
@@ -86,8 +97,17 @@ Success response (always includes run status):
   "created": true,
   "issue_url": "https://github.com/owner/repo/issues/123",
   "issue_ref": "owner/repo#123", // present when parseable
-  "init": { "ok": true, "issue_ref": "owner/repo#123" }, // present only when init=true
-  "auto_run": { "ok": true, "run_started": true },       // present only when auto_run=true
+  "init": {                                             // present only when init is requested
+    "ok": true,
+    "result": {
+      "issue_ref": "owner/repo#123",
+      "state_dir": "...",
+      "work_dir": "...",
+      "repo_dir": "...",
+      "branch": "issue/123"
+    }
+  },
+  "auto_run": { "ok": true, "run_started": true },       // present only when auto_run is requested
   "run": { /* RunManager.getStatus() */ }
 }
 ```
@@ -106,6 +126,9 @@ Common `gh` error status mapping:
 - Not authenticated (`gh auth login` required): `401`
 - Repo not found or access denied: `403`
 - Other `gh` failures: `500`
+
+GitHub host limitation (v1):
+- If issue creation succeeds but `gh` returns an `issue_url` that is not a `github.com/.../issues/<n>` URL, the endpoint returns `200` with `ok: true` and `init: { ok: false, error: "Only github.com issue URLs are supported in v1." }` (when init was requested).
 
 ## Streaming formats
 

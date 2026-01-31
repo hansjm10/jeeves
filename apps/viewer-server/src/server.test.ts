@@ -525,7 +525,7 @@ describe('viewer-server', () => {
       method: 'POST',
       url: '/api/github/issues/create',
       remoteAddress: '127.0.0.1',
-      payload: { repo: 'o/r', title: 't', body: 'b', auto_run: true },
+      payload: { repo: 'o/r', title: 't', body: 'b', auto_run: { provider: 'fake' } },
     });
     expect(res.statusCode).toBe(400);
 
@@ -608,6 +608,7 @@ describe('viewer-server', () => {
       promptsDir: path.join(process.cwd(), 'prompts'),
       workflowsDir: path.join(process.cwd(), 'workflows'),
       initialIssue: issueRef,
+      createGitHubIssue: async () => ({ issue_ref: 'o/r#999', issue_url: 'https://github.com/o/r/issues/999' }),
     });
 
     const runRes = await app.inject({
@@ -619,11 +620,21 @@ describe('viewer-server', () => {
     expect(runRes.statusCode).toBe(200);
     expect((runRes.json() as { run?: { running?: unknown } }).run?.running).toBe(true);
 
+    const createOnlyRes = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b' },
+    });
+    expect(createOnlyRes.statusCode).toBe(200);
+    expect((createOnlyRes.json() as { ok?: unknown; run?: { running?: unknown } }).ok).toBe(true);
+    expect((createOnlyRes.json() as { ok?: unknown; run?: { running?: unknown } }).run?.running).toBe(true);
+
     const res = await app.inject({
       method: 'POST',
       url: '/api/github/issues/create',
       remoteAddress: '127.0.0.1',
-      payload: { repo: 'o/r', title: 't', body: 'b', init: true },
+      payload: { repo: 'o/r', title: 't', body: 'b', init: {} },
     });
     expect(res.statusCode).toBe(409);
     expect((res.json() as { error?: unknown }).error).toBe('Cannot init while Jeeves is running.');
@@ -660,15 +671,29 @@ describe('viewer-server', () => {
       method: 'POST',
       url: '/api/github/issues/create',
       remoteAddress: '127.0.0.1',
-      payload: { repo: 'o/r', title: ' My Title ', body: 'Hello', init: true, auto_select: true },
+      payload: { repo: 'o/r', title: ' My Title ', body: 'Hello', init: { branch: 'issue/123-test' } },
     });
     expect(res.statusCode).toBe(200);
 
-    const body = res.json() as { ok?: unknown; created?: unknown; issue_ref?: unknown; issue_url?: unknown };
+    const body = res.json() as {
+      ok?: unknown;
+      created?: unknown;
+      issue_ref?: unknown;
+      issue_url?: unknown;
+      init?: { ok?: unknown; result?: { state_dir?: unknown; work_dir?: unknown; repo_dir?: unknown; branch?: unknown } };
+    };
     expect(body.ok).toBe(true);
     expect(body.created).toBe(true);
     expect(body.issue_ref).toBe(createdIssueRef);
     expect(body.issue_url).toBe(createdIssueUrl);
+    expect(body.init?.ok).toBe(true);
+    expect(body.init?.result?.state_dir).toBe(getIssueStateDir('o', 'r', 123, dataDir));
+    expect(body.init?.result?.work_dir).toBe(getWorktreePath('o', 'r', 123, dataDir));
+    expect(body.init?.result?.repo_dir).toBe(path.join(dataDir, 'repos', 'o', 'r'));
+    expect(body.init?.result?.branch).toBe('issue/123-test');
+
+    const stateRes = await app.inject({ method: 'GET', url: '/api/state' });
+    expect((stateRes.json() as { issue_ref?: unknown }).issue_ref).toBe(createdIssueRef);
 
     const stateDir = getIssueStateDir('o', 'r', 123, dataDir);
     const issueJson = await readIssueJson(stateDir);
@@ -676,6 +701,90 @@ describe('viewer-server', () => {
     const issue = (issueJson as { issue?: unknown }).issue as Record<string, unknown> | undefined;
     expect(issue?.title).toBe('My Title');
     expect(issue?.url).toBe(createdIssueUrl);
+
+    await app.close();
+  });
+
+  it('supports init with auto_select=false without changing selected issue', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-init-no-select-');
+    await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+    const initialIssueNumber = 1;
+    const initialIssueRef = `o/r#${initialIssueNumber}`;
+    const initialStateDir = getIssueStateDir('o', 'r', initialIssueNumber, dataDir);
+    const initialWorkDir = getWorktreePath('o', 'r', initialIssueNumber, dataDir);
+    await fs.mkdir(initialStateDir, { recursive: true });
+    await fs.mkdir(initialWorkDir, { recursive: true });
+    await fs.writeFile(
+      path.join(initialStateDir, 'issue.json'),
+      JSON.stringify({ repo: 'o/r', issue: { number: initialIssueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const createdIssueRef = 'o/r#123';
+    const createdIssueUrl = 'https://github.com/o/r/issues/123';
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      initialIssue: initialIssueRef,
+      createGitHubIssue: async () => ({ issue_ref: createdIssueRef, issue_url: createdIssueUrl }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 'My Title', body: 'Hello', init: {}, auto_select: false },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok?: unknown; init?: { ok?: unknown } }).ok).toBe(true);
+    expect((res.json() as { ok?: unknown; init?: { ok?: unknown } }).init?.ok).toBe(true);
+
+    const stateRes = await app.inject({ method: 'GET', url: '/api/state' });
+    expect((stateRes.json() as { issue_ref?: unknown }).issue_ref).toBe(initialIssueRef);
+
+    const activeIssueRaw = await fs.readFile(path.join(dataDir, 'active-issue.json'), 'utf-8');
+    expect(JSON.parse(activeIssueRaw).issue_ref).toBe(initialIssueRef);
+
+    const createdStateDir = getIssueStateDir('o', 'r', 123, dataDir);
+    const createdIssueJson = await readIssueJson(createdStateDir);
+    expect(createdIssueJson).toBeTruthy();
+    const createdIssue = (createdIssueJson as { issue?: unknown }).issue as Record<string, unknown> | undefined;
+    expect(createdIssue?.title).toBe('My Title');
+    expect(createdIssue?.url).toBe(createdIssueUrl);
+
+    await app.close();
+  });
+
+  it('returns v1 limitation error for non-github.com issue URLs when init is requested', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-init-host-limitation-');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => ({ issue_ref: 'o/r#123', issue_url: 'https://github.enterprise.example/o/r/issues/123' }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b', init: {} },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok?: unknown; init?: { ok?: unknown; error?: unknown }; run?: unknown };
+    expect(body.ok).toBe(true);
+    expect(body.init?.ok).toBe(false);
+    expect(body.init?.error).toBe('Only github.com issue URLs are supported in v1.');
+    expect(body.run).toBeTruthy();
 
     await app.close();
   });

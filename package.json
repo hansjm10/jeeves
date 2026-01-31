@@ -8,9 +8,9 @@
     "build": "tsc -b --pretty false",
     "test": "vitest run",
     "run:fixture": "pnpm exec jeeves-runner run-fixture",
-    "dev:viewer-server": "JEEVES_VIEWER_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 pnpm --filter @jeeves/viewer-server exec jeeves-viewer-server --host 127.0.0.1 --port 8081",
+    "dev:viewer-server": "pnpm build && JEEVES_VIEWER_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 node apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081",
     "dev:viewer": "pnpm --filter @jeeves/viewer dev",
-    "dev": "concurrently -k -n viewer,viewer-server -c cyan,magenta \"pnpm dev:viewer\" \"pnpm dev:viewer-server\"",
+    "dev": "pnpm build && concurrently -k -n viewer,viewer-server -c cyan,magenta \"pnpm dev:viewer\" \"JEEVES_VIEWER_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 node apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081\"",
     "prepare": "lefthook install"
   },
   "devDependencies": {

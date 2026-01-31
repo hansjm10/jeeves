@@ -166,9 +166,9 @@ You may only modify files matching the task’s filesAllowed patterns.
 
 Examples:
 
-["src/module/*.py"] → Any .py file in that directory
+["src/module/*.ts"] → Any .ts file in that directory
 
-["src/specific.py"] → That file only
+["src/specific.ts"] → That file only
 
 Special case:
 

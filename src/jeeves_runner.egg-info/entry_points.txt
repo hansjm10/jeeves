@@ -1,3 +1,0 @@
-[console_scripts]
-jeeves = jeeves.cli:main
-jeeves-sdk-runner = jeeves.runner.sdk_runner:main

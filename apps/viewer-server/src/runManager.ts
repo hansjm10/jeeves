@@ -23,11 +23,12 @@ async function pathExists(filePath: string): Promise<boolean> {
     .catch(() => false);
 }
 
-function mapProvider(value: unknown): 'claude' | 'fake' {
+function mapProvider(value: unknown): 'claude' | 'fake' | 'codex' {
   if (!isNonEmptyString(value)) return 'claude';
   const v = value.trim().toLowerCase();
   if (v === 'fake') return 'fake';
   if (v === 'claude' || v === 'claude-agent-sdk' || v === 'claude_agent_sdk') return 'claude';
+  if (v === 'codex' || v === 'codex-sdk' || v === 'codex_sdk' || v === 'openai' || v === 'openai-codex') return 'codex';
   return 'claude';
 }
 
@@ -247,7 +248,7 @@ export class RunManager {
   }
 
   private async runLoop(params: {
-    provider: 'claude' | 'fake';
+    provider: 'claude' | 'fake' | 'codex';
     maxIterations: number;
     inactivityTimeoutSec: number;
     iterationTimeoutSec: number;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useInitIssueMutation, useSelectIssueMutation, useSetIssuePhaseMutation, useStartRunMutation, useStopRunMutation } from '../features/mutations.js';
@@ -7,6 +7,15 @@ import { groupForPhase, pickGroupTarget, type GroupPhase } from '../features/wor
 import { useWorkflowQuery } from '../features/workflow/queries.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { useToast } from '../ui/toast/ToastProvider.js';
+
+const PROVIDERS = ['claude', 'codex', 'fake'] as const;
+type Provider = (typeof PROVIDERS)[number];
+const PROVIDER_STORAGE_KEY = 'jeeves.provider';
+
+function normalizeProvider(value: unknown): Provider {
+  if (value === 'claude' || value === 'codex' || value === 'fake') return value;
+  return 'claude';
+}
 
 export function Sidebar() {
   const baseUrl = useViewerServerBaseUrl();
@@ -27,12 +36,23 @@ export function Sidebar() {
   const currentPhase = workflowQuery.data?.current_phase ?? null;
   const currentGroup = groupForPhase(currentPhase);
 
+  const [provider, setProvider] = useState<Provider>(() => normalizeProvider(localStorage.getItem(PROVIDER_STORAGE_KEY)));
+
   const issues = issuesQuery.data?.issues ?? [];
   const issueListEmpty = issuesQuery.isSuccess && issues.length === 0;
 
   const groupedPhaseButtons = useMemo(() => {
     return ['design', 'implement', 'review', 'complete'] as GroupPhase[];
   }, []);
+
+  function handleSetProvider(next: Provider) {
+    setProvider(next);
+    try {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, next);
+    } catch {
+      // ignore
+    }
+  }
 
   async function handleInitIssue(form: HTMLFormElement) {
     const fd = new FormData(form);
@@ -113,10 +133,23 @@ export function Sidebar() {
       <section className="card">
         <div className="cardTitle">Controls</div>
         <div className="cardBody">
+          <div className="muted">Provider</div>
+          <div className="segmented" style={{ marginBottom: 10 }}>
+            {PROVIDERS.map((p) => (
+              <button
+                key={p}
+                className={`segBtn ${provider === p ? 'active' : ''}`}
+                onClick={() => handleSetProvider(p)}
+                disabled={run?.running ?? false}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
           <div className="row">
             <button
               className="btn primary"
-              onClick={() => void startRun.mutateAsync().catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
+              onClick={() => void startRun.mutateAsync({ provider }).catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
               disabled={!activeIssue || (run?.running ?? false) || startRun.isPending}
             >
               {startRun.isPending ? 'Starting…' : 'Start'}

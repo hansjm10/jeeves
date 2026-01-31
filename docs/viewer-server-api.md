@@ -44,7 +44,7 @@ JSON endpoints:
 - `PUT /api/prompts/<id>`: writes prompt contents. Body: `{ "content": "..." }`.
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
-- `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?, "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.
+- `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.
 - `POST /api/run/stop`: stop the current run. Body: `{ "force"?: boolean }`.
 - `POST /api/issue/status`: update current issue phase. Body: `{ "phase": "design_draft" }`.
 - `GET /api/workflow`: returns workflow metadata (phases, current phase, ordering).

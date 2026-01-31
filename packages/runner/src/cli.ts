@@ -4,14 +4,15 @@ import { parseArgs } from 'node:util';
 import { parseIssueRef, getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
 import { ClaudeAgentProvider } from './providers/claudeAgentSdk.js';
+import { CodexSdkProvider } from './providers/codexSdk.js';
 import { FakeProvider } from './providers/fake.js';
 import { runSinglePhaseOnce, runWorkflowOnce } from './runner.js';
 
 function usage(): string {
   return [
     'Usage:',
-    '  jeeves-runner run-workflow --workflow <name> [--provider claude|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
-    '  jeeves-runner run-phase --workflow <name> --phase <phaseName> [--provider claude|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
+    '  jeeves-runner run-workflow --workflow <name> [--provider claude|codex|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
+    '  jeeves-runner run-phase --workflow <name> --phase <phaseName> [--provider claude|codex|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
     '  jeeves-runner run-fixture [--state-dir <dir>]',
     '',
     'Notes:',
@@ -20,9 +21,13 @@ function usage(): string {
   ].join('\n');
 }
 
-function resolveProvider(name: string): { providerName: string; provider: FakeProvider | ClaudeAgentProvider } {
-  if (name === 'fake') return { providerName: 'fake', provider: new FakeProvider() };
-  if (name === 'claude') return { providerName: 'claude', provider: new ClaudeAgentProvider() };
+function resolveProvider(
+  name: string,
+): { providerName: string; provider: FakeProvider | ClaudeAgentProvider | CodexSdkProvider } {
+  const n = name.trim().toLowerCase();
+  if (n === 'fake') return { providerName: 'fake', provider: new FakeProvider() };
+  if (n === 'claude') return { providerName: 'claude', provider: new ClaudeAgentProvider() };
+  if (n === 'codex' || n === 'codex-sdk' || n === 'codex_sdk') return { providerName: 'codex', provider: new CodexSdkProvider() };
   throw new Error(`Unknown provider: ${name}`);
 }
 

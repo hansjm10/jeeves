@@ -28,7 +28,8 @@ export function useInitIssueMutation(baseUrl: string) {
 
 export function useStartRunMutation(baseUrl: string) {
   return useMutation({
-    mutationFn: async () => apiJson(baseUrl, '/api/run', { method: 'POST', body: JSON.stringify({}) }),
+    mutationFn: async (input: { provider: 'claude' | 'codex' | 'fake' }) =>
+      apiJson(baseUrl, '/api/run', { method: 'POST', body: JSON.stringify({ provider: input.provider }) }),
   });
 }
 
@@ -61,4 +62,3 @@ export function useSavePromptMutation(baseUrl: string) {
     },
   });
 }
-

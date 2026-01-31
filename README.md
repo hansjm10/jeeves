@@ -2,7 +2,7 @@
 
 **SDK-only agent runner with a real-time viewer**
 
-Jeeves is a proof‑of‑concept orchestration layer that runs a Claude Agent SDK session and streams structured output to a web dashboard. The viewer is the primary interface: it initializes issues, manages worktrees, launches runs, and shows logs and SDK events in real time.
+Jeeves is a proof‑of‑concept orchestration layer that runs agent SDK sessions (Claude Agent SDK or OpenAI Codex) and streams structured output to a web dashboard. The viewer is the primary interface: it initializes issues, manages worktrees, launches runs, and shows logs and SDK events in real time.
 
 ## Quick Start
 
@@ -123,6 +123,9 @@ jeeves/
 |----------|---------|-------------|
 | `JEEVES_DATA_DIR` | `~/.local/share/jeeves` | Base directory for repos/worktrees/issues |
 | `VITE_VIEWER_SERVER_URL` | `window.location.origin` | Viewer UI base URL for viewer-server REST/WS calls (set to bypass the Vite proxy) |
+| `OPENAI_API_KEY` | (none) | OpenAI API key for the `codex` provider (also supports `CODEX_API_KEY`) |
+| `CODEX_MODEL` | (none) | Model override for the `codex` provider (falls back to `OPENAI_MODEL`) |
+| `OPENAI_BASE_URL` | (none) | Base URL override for the `codex` provider (also supports `CODEX_BASE_URL`) |
 
 ## Development
 

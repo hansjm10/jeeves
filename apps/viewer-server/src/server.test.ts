@@ -507,6 +507,119 @@ describe('viewer-server', () => {
       payload: { title: 't', body: 'b' },
     });
     expect(res.statusCode).toBe(400);
+    expect((res.json() as { run?: unknown }).run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('rejects create issue endpoint missing title (400) and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-missing-title-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new Error('unexpected createGitHubIssue call');
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', body: 'b' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('title is required');
+    expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('rejects create issue endpoint missing body (400) and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-missing-body-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new Error('unexpected createGitHubIssue call');
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('body is required');
+    expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('rejects auto_select without init (400) and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-auto-select-no-init-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new Error('unexpected createGitHubIssue call');
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b', auto_select: true },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('`auto_select` requires `init`');
+    expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('rejects auto_run with auto_select=false (400) and includes run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-create-auto-run-no-auto-select-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createGitHubIssue: async () => {
+        throw new Error('unexpected createGitHubIssue call');
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b', init: {}, auto_select: false, auto_run: { provider: 'fake' } },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as { ok?: unknown; error?: unknown; run?: unknown };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('`auto_run` requires `init` + `auto_select`');
+    expect(body.run).toBeTruthy();
 
     await app.close();
   });

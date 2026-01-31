@@ -71,3 +71,96 @@ export type LogEvent = Readonly<{ lines: string[]; reset?: boolean }>;
 
 export type SdkEvent = Readonly<{ event: string; data: unknown }>;
 
+// SDK Event Data Types
+export type SdkInitData = Readonly<{
+  session_id: string;
+  started_at: string;
+  status: string;
+}>;
+
+export type SdkToolStartData = Readonly<{
+  tool_use_id: string;
+  name: string;
+  input: Record<string, unknown>;
+}>;
+
+export type SdkToolCompleteData = Readonly<{
+  tool_use_id: string;
+  name: string;
+  duration_ms: number;
+  is_error: boolean;
+}>;
+
+export type SdkMessageData = Readonly<{
+  message: string;
+  index: number;
+  total: number;
+}>;
+
+export type SdkCompleteSummary = Readonly<{
+  message_count?: number;
+  tool_call_count?: number;
+  duration_seconds?: number;
+}>;
+
+export type SdkCompleteData = Readonly<{
+  status: string;
+  summary?: SdkCompleteSummary;
+}>;
+
+// Tool Input Types for specific tools
+export type BashToolInput = Readonly<{
+  command: string;
+  description?: string;
+  timeout?: number;
+}>;
+
+export type ReadToolInput = Readonly<{
+  file_path: string;
+  offset?: number;
+  limit?: number;
+}>;
+
+export type WriteToolInput = Readonly<{
+  file_path: string;
+  content: string;
+}>;
+
+export type EditToolInput = Readonly<{
+  file_path: string;
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
+}>;
+
+export type GlobToolInput = Readonly<{
+  pattern: string;
+  path?: string;
+}>;
+
+export type GrepToolInput = Readonly<{
+  pattern: string;
+  path?: string;
+  glob?: string;
+  type?: string;
+  output_mode?: 'content' | 'files_with_matches' | 'count';
+}>;
+
+export type TaskToolInput = Readonly<{
+  prompt: string;
+  description: string;
+  subagent_type: string;
+  model?: string;
+}>;
+
+// Union type for all tool inputs
+export type ToolInput =
+  | BashToolInput
+  | ReadToolInput
+  | WriteToolInput
+  | EditToolInput
+  | GlobToolInput
+  | GrepToolInput
+  | TaskToolInput
+  | Record<string, unknown>;
+

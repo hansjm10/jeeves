@@ -10,12 +10,14 @@
     "run:fixture": "pnpm exec jeeves-runner run-fixture",
     "dev:viewer-server": "JEEVES_VIEWER_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 pnpm --filter @jeeves/viewer-server exec jeeves-viewer-server --host 127.0.0.1 --port 8081",
     "dev:viewer": "pnpm --filter @jeeves/viewer dev",
+    "dev": "concurrently -k -n viewer,viewer-server -c cyan,magenta \"pnpm dev:viewer\" \"pnpm dev:viewer-server\"",
     "prepare": "lefthook install"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@jeeves/runner": "workspace:*",
     "@types/node": "^25.1.0",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.2",
     "lefthook": "^2.0.16",
     "typescript": "^5.9.3",

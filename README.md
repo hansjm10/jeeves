@@ -134,8 +134,7 @@ The rewrite includes a TypeScript viewer-server (`apps/viewer-server`) and a Rea
 
 ```bash
 pnpm install
-pnpm dev:viewer-server
-pnpm dev:viewer
+pnpm dev
 ```
 
 Open the UI at `http://127.0.0.1:8080`.

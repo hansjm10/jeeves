@@ -58,8 +58,10 @@ export function PromptsPage() {
     const data = promptQuery.data;
     if (!data) return;
     if (dirty) return;
+    if (!promptId) return;
+    if (data.id !== promptId) return;
     setEditorValue(data.content);
-  }, [dirty, promptQuery.data]);
+  }, [dirty, promptId, promptQuery.data]);
 
   useEffect(() => {
     if (!dirty) return;

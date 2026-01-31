@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 type ToastApi = Readonly<{ pushToast: (message: string) => void }>;
 
@@ -7,13 +7,25 @@ const ToastContext = createContext<ToastApi | null>(null);
 
 export function ToastProvider(props: { children: ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
+  const timeoutRef = useRef<number | null>(null);
 
   const api = useMemo<ToastApi>(() => {
     return {
       pushToast: (message: string) => {
         setToast(message);
-        window.setTimeout(() => setToast(null), 3500);
+        if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = window.setTimeout(() => {
+          timeoutRef.current = null;
+          setToast(null);
+        }, 3500);
       },
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     };
   }, []);
 

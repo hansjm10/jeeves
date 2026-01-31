@@ -26,8 +26,15 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     let cancelled = false;
     let reconnectTimer: number | null = null;
 
+    function scheduleReconnect() {
+      if (cancelled) return;
+      if (reconnectTimer) return;
+      reconnectTimer = window.setTimeout(connect, RECONNECT_MS);
+    }
+
     function connect() {
       if (cancelled) return;
+      reconnectTimer = null;
       const ws = new WebSocket(wsUrlFromBaseUrl(props.baseUrl));
       wsRef.current = ws;
 
@@ -45,18 +52,26 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
           else if (event === 'viewer-logs') dispatch({ type: 'viewer-logs', data: parsed.data as LogEvent });
           else dispatch({ type: 'sdk', event, data: parsed.data });
         } catch {
-          // ignore
+          dispatch({
+            type: 'viewer-logs',
+            data: { lines: ['[client] failed to parse websocket message'] },
+          });
         }
       });
 
       ws.addEventListener('close', () => {
         dispatch({ type: 'ws_disconnected', error: 'WebSocket disconnected' });
-        if (cancelled) return;
-        reconnectTimer = window.setTimeout(connect, RECONNECT_MS);
+        scheduleReconnect();
       });
 
       ws.addEventListener('error', () => {
         dispatch({ type: 'ws_disconnected', error: 'WebSocket error' });
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+        scheduleReconnect();
       });
     }
 

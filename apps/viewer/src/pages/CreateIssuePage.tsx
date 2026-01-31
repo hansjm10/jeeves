@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
 
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
 import type { CreateIssueResponse, CreateIssueRunProvider } from '../api/types.js';
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useCreateIssueMutation } from '../features/mutations.js';
@@ -92,6 +95,23 @@ export function CreateIssuePage() {
             body
             <textarea className="textarea" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Describe the issue…" />
           </label>
+
+          <div className="muted" style={{ marginTop: 10 }}>
+            Preview
+          </div>
+          <div
+            style={{
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 6,
+              padding: 10,
+              background: 'rgba(0,0,0,0.15)',
+              overflowX: 'auto',
+            }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+              {body.trim() ? body : '_Nothing to preview._'}
+            </ReactMarkdown>
+          </div>
 
           <div className="muted" style={{ marginTop: 10 }}>
             Options

@@ -35,7 +35,9 @@ export {
 export {
   loadWorkflowByName,
   loadWorkflowFromFile,
+  parseWorkflowObject,
   parseWorkflowYaml,
+  toWorkflowYaml,
   toRawWorkflowJson,
 } from './workflowLoader.js';
 

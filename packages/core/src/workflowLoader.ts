@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { z } from 'zod';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { phaseTypes, validModels, type Phase, type PhaseType, type Transition, type Workflow, WorkflowValidationError } from './workflow.js';
 
@@ -142,6 +142,11 @@ export function parseWorkflowYaml(yamlText: string, options?: { sourceName?: str
   return normalizeWorkflow(raw, options?.sourceName ?? 'workflow');
 }
 
+export function parseWorkflowObject(raw: unknown, options?: { sourceName?: string }): Workflow {
+  const parsed = rawWorkflowSchema.parse(raw);
+  return normalizeWorkflow(parsed, options?.sourceName ?? 'workflow');
+}
+
 export async function loadWorkflowFromFile(filePath: string): Promise<Workflow> {
   const content = await fs.readFile(filePath, 'utf-8');
   return parseWorkflowYaml(content, { sourceName: path.basename(filePath, path.extname(filePath)) });
@@ -202,4 +207,54 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
   if (workflow.defaultModel) workflowJson.default_model = workflow.defaultModel;
 
   return { workflow: workflowJson, phases };
+}
+
+export function toWorkflowYaml(workflow: Workflow): string {
+  validateWorkflow(workflow);
+
+  const workflowJson: UnknownRecord = {
+    name: workflow.name,
+    version: workflow.version,
+    start: workflow.start,
+  };
+  if (workflow.defaultProvider) workflowJson.default_provider = workflow.defaultProvider;
+  if (workflow.defaultModel) workflowJson.default_model = workflow.defaultModel;
+
+  const phasesJson: Record<string, UnknownRecord> = {};
+  const phaseNames = Object.keys(workflow.phases).sort((a, b) => a.localeCompare(b));
+  for (const phaseName of phaseNames) {
+    const phase = workflow.phases[phaseName];
+
+    const phaseJson: UnknownRecord = {
+      type: phase.type,
+    };
+    if (phase.provider) phaseJson.provider = phase.provider;
+    if (phase.prompt) phaseJson.prompt = phase.prompt;
+    if (phase.command) phaseJson.command = phase.command;
+    if (phase.description) phaseJson.description = phase.description;
+
+    const transitions = [...phase.transitions].sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      if (a.to !== b.to) return a.to.localeCompare(b.to);
+      return (a.when ?? '').localeCompare(b.when ?? '');
+    });
+    phaseJson.transitions = transitions.map((t) => {
+      const transitionJson: UnknownRecord = { to: t.to };
+      if (t.when) transitionJson.when = t.when;
+      if (t.auto) transitionJson.auto = t.auto;
+      if (t.priority !== 0) transitionJson.priority = t.priority;
+      return transitionJson;
+    });
+
+    if (phase.allowedWrites.length !== 1 || phase.allowedWrites[0] !== '.jeeves/*') {
+      phaseJson.allowed_writes = [...phase.allowedWrites];
+    }
+    if (phase.statusMapping) phaseJson.status_mapping = phase.statusMapping;
+    if (phase.outputFile) phaseJson.output_file = phase.outputFile;
+    if (phase.model) phaseJson.model = phase.model;
+
+    phasesJson[phaseName] = phaseJson;
+  }
+
+  return stringifyYaml({ workflow: workflowJson, phases: phasesJson }, { indent: 2 });
 }

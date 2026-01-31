@@ -122,6 +122,7 @@ jeeves/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JEEVES_DATA_DIR` | `~/.local/share/jeeves` | Base directory for repos/worktrees/issues |
+| `VITE_VIEWER_SERVER_URL` | `window.location.origin` | Viewer UI base URL for viewer-server REST/WS calls (set to bypass the Vite proxy) |
 
 ## Development
 

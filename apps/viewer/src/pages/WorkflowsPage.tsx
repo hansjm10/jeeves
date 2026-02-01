@@ -11,6 +11,7 @@ import {
 import { WorkflowGraph, type WorkflowGraphSelection } from '../features/workflows/WorkflowGraph.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { useUnsavedChanges } from '../ui/unsaved/UnsavedChangesProvider.js';
+import './WorkflowsPage.css';
 
 /** Add Phase dialog state */
 type AddPhaseDialogState = { open: false } | { open: true };
@@ -98,8 +99,7 @@ export function WorkflowsPage() {
     if (isDirty && lastLoadedNameRef.current === data.name) return;
     lastLoadedNameRef.current = data.name;
     setDraftWorkflow(deepCloneJson(data.workflow));
-    saveMutation.reset();
-  }, [isDirty, saveMutation, selectedWorkflowQuery.data]);
+  }, [isDirty, selectedWorkflowQuery.data]);
 
   const onSelectWorkflow = (name: string) => {
     if (name === selectedName) return;
@@ -306,46 +306,34 @@ export function WorkflowsPage() {
       : null;
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '280px 1fr 320px',
-        gap: 12,
-        padding: 12,
-        alignItems: 'stretch',
-      }}
-    >
-      <section
-        aria-label="workflow list"
-        style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, minHeight: 240 }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 14 }}>Workflows</h2>
-          <button onClick={() => void workflowsQuery.refetch()} style={{ fontSize: 12 }}>
+    <div className="wf-container">
+      {/* Workflow List Panel */}
+      <section className="wf-panel wf-list-panel" aria-label="workflow list">
+        <div className="wf-panel-header">
+          <h2 className="wf-panel-title">Workflows</h2>
+          <button className="wf-btn" onClick={() => void workflowsQuery.refetch()}>
             Refresh
           </button>
         </div>
 
-        {stream.state?.issue_ref ? (
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>Issue: {stream.state.issue_ref}</div>
-        ) : (
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>No issue selected</div>
-        )}
+        <div className="wf-issue-ref">
+          {stream.state?.issue_ref ? `Issue: ${stream.state.issue_ref}` : 'No issue selected'}
+        </div>
 
-        <div style={{ marginTop: 10, borderTop: '1px solid #eee', paddingTop: 10 }}>
-          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Create workflow</div>
-          <div style={{ display: 'flex', gap: 6 }}>
+        <div className="wf-create-section">
+          <div className="wf-create-section-title">Create workflow</div>
+          <div className="wf-create-form">
             <input
+              className="wf-input"
               value={createName}
               onChange={(e) => setCreateName(e.target.value)}
               placeholder="name"
-              style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
             />
-            <button onClick={onCreate} style={{ fontSize: 12 }} disabled={createMutation.isPending}>
+            <button className="wf-btn wf-btn-primary" onClick={onCreate} disabled={createMutation.isPending}>
               Create
             </button>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+          <label className="wf-checkbox-label" style={{ marginTop: 8 }}>
             <input
               type="checkbox"
               checked={createFromSelected}
@@ -354,46 +342,41 @@ export function WorkflowsPage() {
             Clone from selected
           </label>
           {createMutation.isError ? (
-            <div style={{ marginTop: 6, fontSize: 12, color: '#b00' }}>
+            <div className="wf-error">
               {createMutation.error instanceof Error ? createMutation.error.message : String(createMutation.error)}
             </div>
           ) : null}
         </div>
 
-        {workflowsQuery.isLoading ? <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Loading…</div> : null}
+        {workflowsQuery.isLoading ? <div className="wf-loading">Loading...</div> : null}
         {workflowsQuery.isError ? (
-          <div style={{ marginTop: 8, fontSize: 12, color: '#b00' }}>
+          <div className="wf-error">
             {workflowsQuery.error instanceof Error ? workflowsQuery.error.message : String(workflowsQuery.error)}
           </div>
         ) : null}
 
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div className="wf-workflow-list">
           {workflows.map((w) => (
             <button
               key={w.name}
+              className={`wf-workflow-item ${w.name === selectedName ? 'selected' : ''}`}
               onClick={() => onSelectWorkflow(w.name)}
-              style={{
-                textAlign: 'left',
-                padding: '6px 8px',
-                borderRadius: 6,
-                border: '1px solid #ddd',
-                background: w.name === selectedName ? '#eef5ff' : 'white',
-                cursor: 'pointer',
-                fontSize: 12,
-              }}
             >
-              {w.name}
-              {issueWorkflow && w.name === issueWorkflow ? <span style={{ opacity: 0.7 }}> (active)</span> : null}
+              <span>{w.name}</span>
+              {issueWorkflow && w.name === issueWorkflow ? (
+                <span className="wf-workflow-active-badge">active</span>
+              ) : null}
             </button>
           ))}
         </div>
       </section>
-      <section
-        aria-label="workflow graph"
-        style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, minHeight: 240 }}
-      >
-        <h2 style={{ margin: 0, fontSize: 14 }}>Graph</h2>
-        <div style={{ marginTop: 8, height: 520 }}>
+
+      {/* Graph Panel */}
+      <section className="wf-panel wf-graph-panel" aria-label="workflow graph">
+        <div className="wf-panel-header">
+          <h2 className="wf-panel-title">Graph</h2>
+        </div>
+        <div className="wf-graph-container">
           <WorkflowGraph
             workflow={draftWorkflow ?? selectedRawWorkflow}
             currentPhaseId={currentIssuePhase}
@@ -402,45 +385,53 @@ export function WorkflowsPage() {
           />
         </div>
       </section>
-      <section
-        aria-label="workflow inspector"
-        style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, minHeight: 240 }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 14 }}>Inspector</h2>
-          <div style={{ display: 'flex', gap: 6 }}>
+
+      {/* Inspector Panel */}
+      <section className="wf-panel wf-inspector-panel" aria-label="workflow inspector">
+        <div className="wf-panel-header">
+          <h2 className="wf-panel-title">Inspector</h2>
+          <div className="wf-inspector-actions">
             <button
+              className="wf-btn"
               onClick={() => void onReload()}
-              style={{ fontSize: 12 }}
               disabled={!selectedName || selectedWorkflowQuery.isLoading}
             >
               Reload
             </button>
-            <button onClick={() => void onSave()} style={{ fontSize: 12 }} disabled={!isDirty || saveMutation.isPending}>
+            <button
+              className="wf-btn wf-btn-primary"
+              onClick={() => void onSave()}
+              disabled={!isDirty || saveMutation.isPending}
+            >
               Save
             </button>
           </div>
         </div>
 
-        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Selected: {selectedName ? selectedName : '(none)'}</div>
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-          Selection:{' '}
-          {selection?.kind === 'node'
-            ? `phase ${selection.id}`
-            : selection?.kind === 'edge'
-              ? `transition ${selection.from} → ${selection.to}`
-              : '(none)'}
+        <div className="wf-inspector-info">
+          <div>Selected: <strong>{selectedName || '(none)'}</strong></div>
+          <div className="wf-inspector-selection" style={{ marginTop: 4 }}>
+            Selection:{' '}
+            <strong>
+              {selection?.kind === 'node'
+                ? `phase ${selection.id}`
+                : selection?.kind === 'edge'
+                  ? `${selection.from} -> ${selection.to}`
+                  : '(none)'}
+            </strong>
+          </div>
         </div>
-        <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+
+        <div className="wf-set-active-section">
           <button
+            className="wf-btn wf-btn-primary"
             onClick={onSetActive}
-            style={{ fontSize: 12 }}
             disabled={!selectedName || !stream.state?.issue_ref || selectIssueWorkflowMutation.isPending}
             title={!stream.state?.issue_ref ? 'Select an issue first' : undefined}
           >
             Set active
           </button>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: 0.85 }}>
+          <label className="wf-checkbox-label">
             <input
               type="checkbox"
               checked={resetPhaseOnSelect}
@@ -449,46 +440,48 @@ export function WorkflowsPage() {
             Reset phase
           </label>
         </div>
+
         {selectIssueWorkflowMutation.isError ? (
-          <div style={{ marginTop: 6, fontSize: 12, color: '#b00' }}>
+          <div className="wf-error">
             {selectIssueWorkflowMutation.error instanceof Error
               ? selectIssueWorkflowMutation.error.message
               : String(selectIssueWorkflowMutation.error)}
           </div>
         ) : null}
-        {selectedWorkflowQuery.isLoading ? (
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Loading…</div>
-        ) : null}
+        {selectedWorkflowQuery.isLoading ? <div className="wf-loading">Loading...</div> : null}
         {selectedWorkflowQuery.isError ? (
-          <div style={{ marginTop: 8, fontSize: 12, color: '#b00' }}>
+          <div className="wf-error">
             {selectedWorkflowQuery.error instanceof Error
               ? selectedWorkflowQuery.error.message
               : String(selectedWorkflowQuery.error)}
           </div>
         ) : null}
-
         {saveMutation.isError ? (
-          <div style={{ marginTop: 8, fontSize: 12, color: '#b00' }}>
+          <div className="wf-error">
             {saveMutation.error instanceof Error ? saveMutation.error.message : String(saveMutation.error)}
           </div>
         ) : null}
 
         {draftWorkflow ? (
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-              <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Workflow</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-                <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                  <span style={{ opacity: 0.85 }}>start</span>
+          <>
+            {/* Workflow Settings */}
+            <div className="wf-section">
+              <div className="wf-section-header">
+                <span className="wf-section-title">Workflow</span>
+              </div>
+              <div className="wf-form-grid">
+                <div className="wf-field">
+                  <span className="wf-field-label">start</span>
                   <input
+                    className="wf-input"
                     value={workflowSection && typeof workflowSection.start === 'string' ? workflowSection.start : ''}
                     onChange={(e) => setWorkflowField('start', e.target.value)}
-                    style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                   />
-                </label>
-                <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                  <span style={{ opacity: 0.85 }}>default_provider</span>
+                </div>
+                <div className="wf-field">
+                  <span className="wf-field-label">default_provider</span>
                   <input
+                    className="wf-input"
                     value={
                       workflowSection && typeof workflowSection.default_provider === 'string'
                         ? workflowSection.default_provider
@@ -496,12 +489,12 @@ export function WorkflowsPage() {
                     }
                     onChange={(e) => setWorkflowField('default_provider', e.target.value)}
                     placeholder="(optional)"
-                    style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                   />
-                </label>
-                <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                  <span style={{ opacity: 0.85 }}>default_model</span>
+                </div>
+                <div className="wf-field">
+                  <span className="wf-field-label">default_model</span>
                   <input
+                    className="wf-input"
                     value={
                       workflowSection && typeof workflowSection.default_model === 'string'
                         ? workflowSection.default_model
@@ -509,124 +502,118 @@ export function WorkflowsPage() {
                     }
                     onChange={(e) => setWorkflowField('default_model', e.target.value)}
                     placeholder="(optional)"
-                    style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                   />
-                </label>
+                </div>
               </div>
             </div>
 
-            {/* Add Phase section */}
-            <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-              <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Phases</div>
+            {/* Phases Section */}
+            <div className="wf-section">
+              <div className="wf-section-header">
+                <span className="wf-section-title">Phases</span>
+              </div>
               {!addPhaseDialog.open ? (
                 <button
+                  className="wf-btn"
                   onClick={() => {
                     setNewPhaseId('');
                     setAddPhaseDialog({ open: true });
                   }}
-                  style={{ fontSize: 12 }}
                 >
                   + Add Phase
                 </button>
               ) : (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="wf-inline-form">
                   <input
+                    className="wf-input"
                     value={newPhaseId}
                     onChange={(e) => setNewPhaseId(e.target.value)}
                     placeholder="phase_id"
-                    style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                   />
                   <button
+                    className="wf-btn wf-btn-primary"
                     onClick={() => {
                       addPhase(newPhaseId);
                       setAddPhaseDialog({ open: false });
                       setNewPhaseId('');
                     }}
                     disabled={!newPhaseId.trim() || phaseIds.includes(newPhaseId.trim())}
-                    style={{ fontSize: 12 }}
                   >
                     Add
                   </button>
-                  <button
-                    onClick={() => setAddPhaseDialog({ open: false })}
-                    style={{ fontSize: 12 }}
-                  >
+                  <button className="wf-btn" onClick={() => setAddPhaseDialog({ open: false })}>
                     Cancel
                   </button>
                 </div>
               )}
             </div>
 
+            {/* Selected Phase Editor */}
             {selection?.kind === 'node' ? (
-              <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, opacity: 0.85 }}>Phase: {selection.id}</span>
+              <div className="wf-section">
+                <div className="wf-section-header">
+                  <span className="wf-section-title">Phase: {selection.id}</span>
                   <button
+                    className="wf-btn-danger"
                     onClick={() => {
                       if (confirm(`Remove phase "${selection.id}"?`)) {
                         removePhase(selection.id);
                       }
                     }}
-                    style={{ fontSize: 11, color: '#b00', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                   >
                     Remove
                   </button>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>prompt</span>
+                <div className="wf-form-grid">
+                  <div className="wf-field">
+                    <span className="wf-field-label">prompt</span>
                     <input
+                      className="wf-input"
                       value={selectedPhase && typeof selectedPhase.prompt === 'string' ? selectedPhase.prompt : ''}
                       onChange={(e) => setPhaseField(selection.id, 'prompt', e.target.value)}
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>type</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">type</span>
                     <input
+                      className="wf-input"
                       value={selectedPhase && typeof selectedPhase.type === 'string' ? selectedPhase.type : ''}
                       onChange={(e) => setPhaseField(selection.id, 'type', e.target.value)}
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>provider</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">provider</span>
                     <input
+                      className="wf-input"
                       value={selectedPhase && typeof selectedPhase.provider === 'string' ? selectedPhase.provider : ''}
                       onChange={(e) => setPhaseField(selection.id, 'provider', e.target.value)}
                       placeholder="(optional)"
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>model</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">model</span>
                     <input
+                      className="wf-input"
                       value={selectedPhase && typeof selectedPhase.model === 'string' ? selectedPhase.model : ''}
                       onChange={(e) => setPhaseField(selection.id, 'model', e.target.value)}
                       placeholder="(optional)"
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>description</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">description</span>
                     <textarea
+                      className="wf-textarea"
                       value={
                         selectedPhase && typeof selectedPhase.description === 'string' ? selectedPhase.description : ''
                       }
                       onChange={(e) => setPhaseField(selection.id, 'description', e.target.value)}
                       rows={3}
-                      style={{
-                        fontSize: 12,
-                        padding: '6px 8px',
-                        border: '1px solid #ddd',
-                        borderRadius: 6,
-                        resize: 'vertical',
-                      }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>allowed_writes (one per line)</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">allowed_writes (one per line)</span>
                     <textarea
+                      className="wf-textarea"
                       value={
                         selectedPhase && Array.isArray(selectedPhase.allowed_writes)
                           ? (selectedPhase.allowed_writes as unknown[]).filter((v) => typeof v === 'string').join('\n')
@@ -640,32 +627,26 @@ export function WorkflowsPage() {
                         setPhaseField(selection.id, 'allowed_writes', next.length ? next : undefined);
                       }}
                       rows={3}
-                      style={{
-                        fontSize: 12,
-                        padding: '6px 8px',
-                        border: '1px solid #ddd',
-                        borderRadius: 6,
-                        resize: 'vertical',
-                      }}
                     />
-                  </label>
+                  </div>
                 </div>
 
-                {/* Add Transition section */}
-                <div style={{ marginTop: 10, borderTop: '1px solid #eee', paddingTop: 10 }}>
-                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Transitions from {selection.id}</div>
+                {/* Transitions from this phase */}
+                <div style={{ marginTop: 12 }}>
+                  <div className="wf-section-header">
+                    <span className="wf-section-title">Transitions from {selection.id}</span>
+                  </div>
                   {addTransitionDialog.open && addTransitionDialog.from === selection.id ? (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+                    <div className="wf-inline-form" style={{ marginBottom: 8 }}>
                       <select
+                        className="wf-select"
                         value={newTransitionTo}
                         onChange={(e) => setNewTransitionTo(e.target.value)}
-                        style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                       >
                         <option value="">Select target phase...</option>
                         {phaseIds
                           .filter((id) => id !== selection.id)
                           .filter((id) => {
-                            // Exclude phases that already have a transition
                             const phase = phasesSection?.[selection.id];
                             if (!isRecord(phase)) return true;
                             const transitions = phase.transitions;
@@ -679,33 +660,34 @@ export function WorkflowsPage() {
                           ))}
                       </select>
                       <button
+                        className="wf-btn wf-btn-primary"
                         onClick={() => {
                           addTransition(selection.id, newTransitionTo);
                           setAddTransitionDialog({ open: false });
                           setNewTransitionTo('');
                         }}
                         disabled={!newTransitionTo}
-                        style={{ fontSize: 12 }}
                       >
                         Add
                       </button>
                       <button
+                        className="wf-btn"
                         onClick={() => {
                           setAddTransitionDialog({ open: false });
                           setNewTransitionTo('');
                         }}
-                        style={{ fontSize: 12 }}
                       >
                         Cancel
                       </button>
                     </div>
                   ) : (
                     <button
+                      className="wf-btn"
                       onClick={() => {
                         setNewTransitionTo('');
                         setAddTransitionDialog({ open: true, from: selection.id });
                       }}
-                      style={{ fontSize: 12, marginBottom: 8 }}
+                      style={{ marginBottom: 8 }}
                     >
                       + Add Transition
                     </button>
@@ -714,33 +696,34 @@ export function WorkflowsPage() {
               </div>
             ) : null}
 
+            {/* Selected Transition Editor */}
             {selection?.kind === 'edge' ? (
-              <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, opacity: 0.85 }}>
-                    Transition: {selection.from} → {selection.to}
+              <div className="wf-section">
+                <div className="wf-section-header">
+                  <span className="wf-section-title">
+                    Transition: {selection.from} -&gt; {selection.to}
                   </span>
                   <button
+                    className="wf-btn-danger"
                     onClick={() => {
-                      if (confirm(`Remove transition "${selection.from} → ${selection.to}"?`)) {
+                      if (confirm(`Remove transition "${selection.from} -> ${selection.to}"?`)) {
                         removeTransition(selection.from, selection.to);
                       }
                     }}
-                    style={{ fontSize: 11, color: '#b00', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                   >
                     Remove
                   </button>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>to</span>
+                <div className="wf-form-grid">
+                  <div className="wf-field">
+                    <span className="wf-field-label">to</span>
                     <select
+                      className="wf-select"
                       value={selection.to}
                       onChange={(e) => {
                         const oldTo = selection.to;
                         const newTo = e.target.value;
                         if (oldTo === newTo) return;
-                        // Update the transition's "to" field
                         updateDraft((draft) => {
                           const phases = isRecord(draft.phases) ? draft.phases : {};
                           const phase = isRecord(phases[selection.from]) ? (phases[selection.from] as Record<string, unknown>) : null;
@@ -756,7 +739,6 @@ export function WorkflowsPage() {
                         });
                         setSelection({ kind: 'edge', from: selection.from, to: newTo });
                       }}
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     >
                       {phaseIds.map((id) => (
                         <option key={id} value={id}>
@@ -764,8 +746,8 @@ export function WorkflowsPage() {
                         </option>
                       ))}
                     </select>
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  </div>
+                  <label className="wf-checkbox-label">
                     <input
                       type="checkbox"
                       checked={selectedTransition?.auto === true}
@@ -773,18 +755,19 @@ export function WorkflowsPage() {
                     />
                     auto
                   </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>when</span>
+                  <div className="wf-field">
+                    <span className="wf-field-label">when</span>
                     <input
+                      className="wf-input"
                       value={selectedTransition && typeof selectedTransition.when === 'string' ? selectedTransition.when : ''}
                       onChange={(e) => setTransitionField(selection.from, selection.to, 'when', e.target.value)}
                       placeholder="(optional)"
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                    <span style={{ opacity: 0.85 }}>priority</span>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">priority</span>
                     <input
+                      className="wf-input"
                       value={
                         selectedTransition && typeof selectedTransition.priority === 'number'
                           ? String(selectedTransition.priority)
@@ -796,31 +779,20 @@ export function WorkflowsPage() {
                         else setTransitionField(selection.from, selection.to, 'priority', Number(raw));
                       }}
                       placeholder="(optional)"
-                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
-                  </label>
+                  </div>
                 </div>
               </div>
             ) : null}
 
-            <details style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-              <summary style={{ fontSize: 12, cursor: 'pointer', opacity: 0.85 }}>Draft JSON</summary>
-              <pre
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  border: '1px solid #eee',
-                  borderRadius: 6,
-                  overflow: 'auto',
-                  maxHeight: 280,
-                  fontSize: 11,
-                  lineHeight: 1.4,
-                }}
-              >
+            {/* JSON Preview */}
+            <details className="wf-json-details">
+              <summary>Draft JSON</summary>
+              <pre className="wf-json-pre">
                 {JSON.stringify(draftWorkflow, null, 2)}
               </pre>
             </details>
-          </div>
+          </>
         ) : null}
       </section>
     </div>

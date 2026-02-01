@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
 
 export type WorkflowGraphSelection =
@@ -55,11 +55,31 @@ export function WorkflowGraph(props: Readonly<{
 }>) {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
+  // Refs for persisting state across renders
+  const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null);
+  const nodePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const linksGRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
+  const nodesGRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
+  const nodesDataRef = useRef<GraphNode[]>([]);
+  const linksDataRef = useRef<GraphLink[]>([]);
+
   const graph = useMemo(() => {
     if (!props.workflow) return null;
     return parseWorkflowGraph(props.workflow);
   }, [props.workflow]);
 
+  // Memoize selection check functions to avoid recreating on every render
+  const isSelectedNode = useCallback((id: string) =>
+    props.selection?.kind === 'node' && props.selection.id === id,
+    [props.selection]
+  );
+
+  const isSelectedEdge = useCallback((from: string, to: string) =>
+    props.selection?.kind === 'edge' && props.selection.from === from && props.selection.to === to,
+    [props.selection]
+  );
+
+  // Effect 1: Setup simulation when graph structure changes
   useEffect(() => {
     const svgEl = svgRef.current;
     if (!svgEl) return;
@@ -71,8 +91,6 @@ export function WorkflowGraph(props: Readonly<{
     svg.selectAll('*').remove();
 
     svg.attr('viewBox', `0 0 ${width} ${height}`).attr('preserveAspectRatio', 'xMidYMid meet');
-
-    svg.on('click', () => props.onSelectionChange(null));
 
     const defs = svg.append('defs');
     defs
@@ -86,7 +104,21 @@ export function WorkflowGraph(props: Readonly<{
       .attr('orient', 'auto')
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
-      .attr('fill', '#98a2b3');
+      .attr('fill', '#4a5668');
+
+    // Arrow marker for selected edges
+    defs
+      .append('marker')
+      .attr('id', 'wf-arrow-selected')
+      .attr('viewBox', '0 -5 10 10')
+      .attr('refX', 14)
+      .attr('refY', 0)
+      .attr('markerWidth', 8)
+      .attr('markerHeight', 8)
+      .attr('orient', 'auto')
+      .append('path')
+      .attr('d', 'M0,-5L10,0L0,5')
+      .attr('fill', '#63b3ed');
 
     const viewport = svg.append('g');
     svg.call(
@@ -101,82 +133,81 @@ export function WorkflowGraph(props: Readonly<{
         .append('text')
         .attr('x', 16)
         .attr('y', 24)
-        .attr('fill', '#666')
+        .attr('fill', '#6b7a8f')
         .style('font-size', '12px')
+        .style('font-family', 'inherit')
         .text('No workflow graph data.');
+      linksGRef.current = null;
+      nodesGRef.current = null;
+      nodesDataRef.current = [];
+      linksDataRef.current = [];
       return;
     }
 
-    const nodes: GraphNode[] = graph.nodes.map((n) => ({ ...n }));
+    // Create nodes with restored positions
+    const nodes: GraphNode[] = graph.nodes.map((n) => {
+      const saved = nodePositionsRef.current.get(n.id);
+      return saved ? { ...n, x: saved.x, y: saved.y } : { ...n };
+    });
+
     const links: GraphLink[] = graph.links.map((l) => ({ ...l }));
 
-    const isSelectedNode = (id: string) => props.selection?.kind === 'node' && props.selection.id === id;
-    const isSelectedEdge = (from: string, to: string) =>
-      props.selection?.kind === 'edge' && props.selection.from === from && props.selection.to === to;
+    // Store data refs for visual update effect
+    nodesDataRef.current = nodes;
+    linksDataRef.current = links;
 
-    const linksG = viewport.append('g').attr('stroke', '#98a2b3').attr('stroke-opacity', 0.85);
+    const linksG = viewport.append('g').attr('stroke', '#4a5668').attr('stroke-opacity', 0.85);
     const nodesG = viewport.append('g');
+
+    linksGRef.current = linksG;
+    nodesGRef.current = nodesG;
 
     const link = linksG
       .selectAll('line')
       .data(links)
       .join('line')
-      .attr('stroke-width', (d) => {
-        const from = getLinkEndpointId(d.source);
-        const to = getLinkEndpointId(d.target);
-        return isSelectedEdge(from, to) ? 3 : 1.5;
-      })
-      .attr('stroke', (d) => {
-        const from = getLinkEndpointId(d.source);
-        const to = getLinkEndpointId(d.target);
-        return isSelectedEdge(from, to) ? '#2563eb' : '#98a2b3';
-      })
+      .attr('stroke-width', 1.5)
+      .attr('stroke', '#4a5668')
       .attr('marker-end', 'url(#wf-arrow)')
-      .style('cursor', 'pointer')
-      .on('click', (event, d) => {
-        event.stopPropagation();
-        const from = getLinkEndpointId(d.source);
-        const to = getLinkEndpointId(d.target);
-        props.onSelectionChange({ kind: 'edge', from, to });
-      });
+      .style('cursor', 'pointer');
 
     const node = nodesG
       .selectAll('g')
       .data(nodes)
       .join('g')
-      .style('cursor', 'pointer')
-      .on('click', (event, d) => {
-        event.stopPropagation();
-        props.onSelectionChange({ kind: 'node', id: d.id });
-      });
+      .style('cursor', 'pointer');
 
     node
       .append('circle')
       .attr('r', 18)
-      .attr('fill', (d) => (isSelectedNode(d.id) ? '#dbeafe' : '#fff'))
-      .attr('stroke', (d) => {
-        if (props.currentPhaseId && d.id === props.currentPhaseId) return '#f59e0b';
-        return isSelectedNode(d.id) ? '#2563eb' : '#94a3b8';
-      })
-      .attr('stroke-width', (d) => {
-        if (props.currentPhaseId && d.id === props.currentPhaseId) return 3;
-        return isSelectedNode(d.id) ? 2.5 : 1.5;
-      });
+      .attr('fill', '#12171e')
+      .attr('stroke', '#4a5668')
+      .attr('stroke-width', 1.5);
 
     node
       .append('text')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
       .style('font-size', '10px')
-      .style('fill', '#111827')
+      .style('font-family', 'inherit')
+      .style('fill', '#e8eef5')
       .text((d) => d.label);
+
+    // Stop existing simulation if any
+    if (simulationRef.current) {
+      simulationRef.current.stop();
+    }
 
     const simulation = d3
       .forceSimulation<GraphNode>(nodes)
       .force('link', d3.forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(120))
-      .force('charge', d3.forceManyBody().strength(-620))
+      .force('charge', d3.forceManyBody().strength(-400))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide(34));
+      .force('collide', d3.forceCollide(34))
+      .alphaDecay(0.05)
+      .velocityDecay(0.4);
+
+    simulationRef.current = simulation;
 
     simulation.on('tick', () => {
       link
@@ -186,13 +217,88 @@ export function WorkflowGraph(props: Readonly<{
         .attr('y2', (d) => (typeof d.target === 'string' ? 0 : (d.target.y ?? 0)));
 
       node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+
+      // Save positions
+      for (const n of nodes) {
+        if (n.x !== undefined && n.y !== undefined) {
+          nodePositionsRef.current.set(n.id, { x: n.x, y: n.y });
+        }
+      }
     });
 
     return () => {
       simulation.stop();
+    };
+  }, [graph]);
+
+  // Effect 2: Update visual styles and click handlers when selection/props change
+  useEffect(() => {
+    const svgEl = svgRef.current;
+    const linksG = linksGRef.current;
+    const nodesG = nodesGRef.current;
+
+    if (!svgEl || !linksG || !nodesG) return;
+
+    const svg = d3.select<SVGSVGElement, unknown>(svgEl);
+    const nodes = nodesDataRef.current;
+    const links = linksDataRef.current;
+
+    // Update SVG click handler
+    svg.on('click', () => props.onSelectionChange(null));
+
+    // Update link styles
+    linksG
+      .selectAll<SVGLineElement, GraphLink>('line')
+      .data(links)
+      .attr('stroke-width', (d) => {
+        const from = getLinkEndpointId(d.source);
+        const to = getLinkEndpointId(d.target);
+        return isSelectedEdge(from, to) ? 3 : 1.5;
+      })
+      .attr('stroke', (d) => {
+        const from = getLinkEndpointId(d.source);
+        const to = getLinkEndpointId(d.target);
+        return isSelectedEdge(from, to) ? '#63b3ed' : '#4a5668';
+      })
+      .attr('marker-end', (d) => {
+        const from = getLinkEndpointId(d.source);
+        const to = getLinkEndpointId(d.target);
+        return isSelectedEdge(from, to) ? 'url(#wf-arrow-selected)' : 'url(#wf-arrow)';
+      })
+      .on('click', (event, d) => {
+        event.stopPropagation();
+        const from = getLinkEndpointId(d.source);
+        const to = getLinkEndpointId(d.target);
+        props.onSelectionChange({ kind: 'edge', from, to });
+      });
+
+    // Update node styles
+    const nodeGroups = nodesG
+      .selectAll<SVGGElement, GraphNode>('g')
+      .data(nodes);
+
+    nodeGroups
+      .on('click', (event, d) => {
+        event.stopPropagation();
+        props.onSelectionChange({ kind: 'node', id: d.id });
+      });
+
+    nodeGroups
+      .select('circle')
+      .attr('fill', (d) => (isSelectedNode(d.id) ? '#1a2028' : '#12171e'))
+      .attr('stroke', (d) => {
+        if (props.currentPhaseId && d.id === props.currentPhaseId) return '#ecc94b';
+        return isSelectedNode(d.id) ? '#63b3ed' : '#4a5668';
+      })
+      .attr('stroke-width', (d) => {
+        if (props.currentPhaseId && d.id === props.currentPhaseId) return 3;
+        return isSelectedNode(d.id) ? 2.5 : 1.5;
+      });
+
+    return () => {
       svg.on('click', null);
     };
-  }, [graph, props.currentPhaseId, props.selection, props.onSelectionChange]);
+  }, [graph, props.currentPhaseId, props.onSelectionChange, isSelectedNode, isSelectedEdge]);
 
   return (
     <svg
@@ -200,9 +306,6 @@ export function WorkflowGraph(props: Readonly<{
       style={{
         width: '100%',
         height: '100%',
-        background: 'white',
-        border: '1px dashed #bbb',
-        borderRadius: 6,
       }}
       role="img"
       aria-label="workflow graph"

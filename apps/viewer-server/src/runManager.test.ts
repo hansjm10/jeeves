@@ -15,6 +15,11 @@ async function makeTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+async function writeWorkflowYaml(workflowsDir: string, name: string, yaml: string): Promise<void> {
+  await fs.mkdir(workflowsDir, { recursive: true });
+  await fs.writeFile(path.join(workflowsDir, `${name}.yaml`), yaml, 'utf-8');
+}
+
 function makeFakeChild(exitCode = 0, delayMs = 25) {
   class FakeChild extends EventEmitter {
     pid = 12345;
@@ -191,5 +196,233 @@ describe('RunManager', () => {
     expect(rm.getStatus().completion_reason).toContain('already in terminal phase: complete');
     const updated = await readIssueJson(stateDir);
     expect(updated?.phase).toBe('complete');
+  });
+
+  it('uses phase.provider over workflow.defaultProvider over run-start provider', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-provider';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '  default_provider: fake',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    provider: codex',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 4;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/4', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedProvider: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      const idx = a.indexOf('--provider');
+      observedProvider = idx >= 0 ? a[idx + 1] : undefined;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'claude', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(observedProvider).toBe('codex');
+  });
+
+  it('uses workflow.defaultProvider when phase.provider is unset', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-provider';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '  default_provider: codex',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 5;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/5', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedProvider: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      const idx = a.indexOf('--provider');
+      observedProvider = idx >= 0 ? a[idx + 1] : undefined;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(observedProvider).toBe('codex');
+  });
+
+  it('falls back to the run-start provider when phase and workflow providers are unset', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-provider';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 6;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/6', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedProvider: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      const idx = a.indexOf('--provider');
+      observedProvider = idx >= 0 ? a[idx + 1] : undefined;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(observedProvider).toBe('fake');
   });
 });

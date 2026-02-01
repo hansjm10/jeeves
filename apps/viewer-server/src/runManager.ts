@@ -278,6 +278,7 @@ export class RunManager {
 
         const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
         const engine = new WorkflowEngine(workflow);
+        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
         if (engine.isTerminal(currentPhase)) {
           await this.appendViewerLog(viewerLogPath, `[COMPLETE] Already in terminal phase: ${currentPhase}`);
           this.status = {
@@ -302,7 +303,7 @@ export class RunManager {
             '--phase',
             currentPhase,
             '--provider',
-            params.provider,
+            effectiveProvider,
             '--workflows-dir',
             this.workflowsDir,
             '--prompts-dir',

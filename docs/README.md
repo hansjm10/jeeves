@@ -57,6 +57,7 @@ jeeves run --iterations 5 --server http://192.168.1.100:8081
 | `--iterations <n>` | Maximum iterations for the run (positive integer) | Server default (10) |
 | `--server <url>` | Viewer-server URL | `http://127.0.0.1:8081` |
 | `--help` | Show help message | — |
+| `--version, -v` | Show version number | — |
 
 #### Exit Codes
 

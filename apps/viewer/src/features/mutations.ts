@@ -38,13 +38,22 @@ export function useCreateIssueMutation(baseUrl: string) {
   });
 }
 
+/**
+ * Builds the request body for starting a run.
+ * Exported for testing purposes.
+ */
+export function buildStartRunRequestBody(input: StartRunInput): { provider: string; max_iterations?: number } {
+  const body: { provider: string; max_iterations?: number } = { provider: input.provider };
+  if (input.max_iterations !== undefined) {
+    body.max_iterations = input.max_iterations;
+  }
+  return body;
+}
+
 export function useStartRunMutation(baseUrl: string) {
   return useMutation({
     mutationFn: async (input: StartRunInput) => {
-      const body: { provider: string; max_iterations?: number } = { provider: input.provider };
-      if (input.max_iterations !== undefined) {
-        body.max_iterations = input.max_iterations;
-      }
+      const body = buildStartRunRequestBody(input);
       return apiJson(baseUrl, '/api/run', { method: 'POST', body: JSON.stringify(body) });
     },
   });

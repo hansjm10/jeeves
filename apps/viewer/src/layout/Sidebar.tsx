@@ -11,7 +11,7 @@ import { useToast } from '../ui/toast/ToastProvider.js';
 const PROVIDERS = ['claude', 'codex', 'fake'] as const;
 type Provider = (typeof PROVIDERS)[number];
 const PROVIDER_STORAGE_KEY = 'jeeves.provider';
-const ITERATIONS_STORAGE_KEY = 'jeeves.iterations';
+export const ITERATIONS_STORAGE_KEY = 'jeeves.iterations';
 
 function normalizeProvider(value: unknown): Provider {
   if (value === 'claude' || value === 'codex' || value === 'fake') return value;
@@ -24,7 +24,7 @@ function normalizeProvider(value: unknown): Provider {
  * Invalid: 0, negative, non-integer (2.5), non-numeric ('abc'), blank/empty
  * Returns: { value: number } for valid, { error: string } for invalid, null for blank
  */
-function validateIterations(input: string): { value: number } | { error: string } | null {
+export function validateIterations(input: string): { value: number } | { error: string } | null {
   const trimmed = input.trim();
   if (trimmed === '') return null; // blank is valid (omit from request)
   const num = Number(trimmed);

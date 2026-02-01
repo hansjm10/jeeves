@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StartRunInput } from '../api/types.js';
+import { buildStartRunRequestBody } from './mutations.js';
 
 /**
  * Tests for mutations.ts payload formation.
@@ -8,29 +9,16 @@ import type { StartRunInput } from '../api/types.js';
  * These tests verify that the useStartRunMutation correctly forms the request body:
  * - Omits max_iterations when undefined (blank input from UI)
  * - Includes max_iterations when a valid positive integer is provided
- */
-
-/**
- * Replicates the body formation logic from useStartRunMutation in mutations.ts:
  *
- * const body: { provider: string; max_iterations?: number } = { provider: input.provider };
- * if (input.max_iterations !== undefined) {
- *   body.max_iterations = input.max_iterations;
- * }
+ * These tests import the actual buildStartRunRequestBody function from mutations.ts
+ * to ensure we're testing the production code, not a copy of it.
  */
-function buildRequestBody(input: StartRunInput): { provider: string; max_iterations?: number } {
-  const body: { provider: string; max_iterations?: number } = { provider: input.provider };
-  if (input.max_iterations !== undefined) {
-    body.max_iterations = input.max_iterations;
-  }
-  return body;
-}
 
 describe('useStartRunMutation request body formation', () => {
   describe('max_iterations omission (blank/undefined)', () => {
     it('omits max_iterations when undefined', () => {
       const input: StartRunInput = { provider: 'claude' };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'claude' });
       expect(Object.keys(body)).not.toContain('max_iterations');
@@ -39,7 +27,7 @@ describe('useStartRunMutation request body formation', () => {
 
     it('omits max_iterations when explicitly undefined', () => {
       const input: StartRunInput = { provider: 'codex', max_iterations: undefined };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'codex' });
       expect(Object.keys(body)).not.toContain('max_iterations');
@@ -49,28 +37,28 @@ describe('useStartRunMutation request body formation', () => {
   describe('max_iterations inclusion (valid positive integer)', () => {
     it('includes max_iterations when value is 1', () => {
       const input: StartRunInput = { provider: 'claude', max_iterations: 1 };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'claude', max_iterations: 1 });
     });
 
     it('includes max_iterations when value is 10', () => {
       const input: StartRunInput = { provider: 'fake', max_iterations: 10 };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'fake', max_iterations: 10 });
     });
 
     it('includes max_iterations when value is 20', () => {
       const input: StartRunInput = { provider: 'codex', max_iterations: 20 };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'codex', max_iterations: 20 });
     });
 
     it('includes max_iterations when value is 100', () => {
       const input: StartRunInput = { provider: 'claude', max_iterations: 100 };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
 
       expect(body).toEqual({ provider: 'claude', max_iterations: 100 });
     });
@@ -79,7 +67,7 @@ describe('useStartRunMutation request body formation', () => {
   describe('JSON serialization preserves correct structure', () => {
     it('serializes body without max_iterations correctly', () => {
       const input: StartRunInput = { provider: 'claude' };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
       const json = JSON.stringify(body);
 
       expect(json).toBe('{"provider":"claude"}');
@@ -88,7 +76,7 @@ describe('useStartRunMutation request body formation', () => {
 
     it('serializes body with max_iterations correctly', () => {
       const input: StartRunInput = { provider: 'fake', max_iterations: 5 };
-      const body = buildRequestBody(input);
+      const body = buildStartRunRequestBody(input);
       const json = JSON.stringify(body);
 
       expect(json).toBe('{"provider":"fake","max_iterations":5}');
@@ -102,7 +90,7 @@ describe('useStartRunMutation request body formation', () => {
       ];
 
       for (const { input, expected } of testCases) {
-        const body = buildRequestBody(input);
+        const body = buildStartRunRequestBody(input);
         expect(JSON.stringify(body)).toBe(expected);
       }
     });

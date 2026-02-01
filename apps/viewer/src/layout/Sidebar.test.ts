@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { validateIterations, ITERATIONS_STORAGE_KEY } from './Sidebar.js';
 
 /**
  * Tests for Sidebar iterations input UI behavior.
@@ -37,18 +38,6 @@ const localStorageMock = (() => {
 
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock });
 
-// === Replicate Sidebar.tsx validation logic (lines 27-35) ===
-// This MUST match the implementation in Sidebar.tsx exactly
-function validateIterations(input: string): { value: number } | { error: string } | null {
-  const trimmed = input.trim();
-  if (trimmed === '') return null; // blank is valid (omit from request)
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) return { error: 'Must be a number' };
-  if (!Number.isInteger(num)) return { error: 'Must be a whole number' };
-  if (num <= 0) return { error: 'Must be a positive integer' };
-  return { value: num };
-}
-
 // === Replicate Sidebar.tsx state derivation (lines 60-62) ===
 function deriveUIState(iterationsInput: string) {
   const iterationsValidation = validateIterations(iterationsInput);
@@ -66,8 +55,6 @@ function deriveUIState(iterationsInput: string) {
 function isStartButtonDisabledDueToIterations(iterationsError: string | null): boolean {
   return iterationsError !== null;
 }
-
-const ITERATIONS_STORAGE_KEY = 'jeeves.iterations';
 
 // === ACCEPTANCE CRITERIA TESTS ===
 

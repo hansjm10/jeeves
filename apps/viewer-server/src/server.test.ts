@@ -261,6 +261,132 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('GET /api/workflows/:name includes provider fields in workflow payload', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-get-provider-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-get-provider-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: provider-workflow',
+      '  version: 1',
+      '  start: start',
+      '  default_provider: openai',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    provider: anthropic',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'provider-workflow.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/provider-workflow' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(body.ok).toBe(true);
+    expect(body.workflow.workflow.default_provider).toBe('openai');
+    expect(body.workflow.phases.start.provider).toBe('anthropic');
+    expect(body.workflow.phases.complete.provider).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/workflows/:name round-trips provider fields through save', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-put-provider-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-put-provider-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    // Create an initial workflow without provider fields
+    const initialYaml = [
+      'workflow:',
+      '  name: roundtrip',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "initial"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'roundtrip.yaml'), initialYaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    // PUT a workflow with provider fields
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/workflows/roundtrip',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        workflow: {
+          workflow: {
+            name: 'roundtrip',
+            version: 1,
+            start: 'start',
+            default_provider: 'openai',
+          },
+          phases: {
+            start: {
+              type: 'execute',
+              provider: 'anthropic',
+              prompt: 'updated',
+              transitions: [{ to: 'complete' }],
+            },
+            complete: {
+              type: 'terminal',
+              transitions: [],
+            },
+          },
+        },
+      },
+    });
+    expect(putRes.statusCode).toBe(200);
+    const putBody = putRes.json() as { ok: boolean; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.workflow.workflow.default_provider).toBe('openai');
+    expect(putBody.workflow.phases.start.provider).toBe('anthropic');
+
+    // GET the workflow again to verify providers are persisted
+    const getRes = await app.inject({ method: 'GET', url: '/api/workflows/roundtrip' });
+    expect(getRes.statusCode).toBe(200);
+    const getBody = getRes.json() as { ok: boolean; yaml: string; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(getBody.ok).toBe(true);
+    expect(getBody.workflow.workflow.default_provider).toBe('openai');
+    expect(getBody.workflow.phases.start.provider).toBe('anthropic');
+
+    // Verify the YAML on disk includes provider fields
+    const yamlOnDisk = await fs.readFile(path.join(workflowsDir, 'roundtrip.yaml'), 'utf-8');
+    expect(yamlOnDisk).toContain('default_provider: openai');
+    expect(yamlOnDisk).toContain('provider: anthropic');
+
+    await app.close();
+  });
+
   it('returns 404 for unknown workflows', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-workflow-missing-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-missing-');

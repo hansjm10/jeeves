@@ -187,6 +187,7 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
       })),
     };
 
+    if (phase.provider) phaseJson.provider = phase.provider;
     if (phase.prompt) phaseJson.prompt = phase.prompt;
     if (phase.command) phaseJson.command = phase.command;
     if (phase.allowedWrites.length !== 1 || phase.allowedWrites[0] !== '.jeeves/*') {
@@ -204,6 +205,7 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
     version: workflow.version,
     start: workflow.start,
   };
+  if (workflow.defaultProvider) workflowJson.default_provider = workflow.defaultProvider;
   if (workflow.defaultModel) workflowJson.default_model = workflow.defaultModel;
 
   return { workflow: workflowJson, phases };

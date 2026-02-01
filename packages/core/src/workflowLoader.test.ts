@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadWorkflowFromFile, parseWorkflowObject, parseWorkflowYaml, toWorkflowYaml } from './workflowLoader.js';
+import { loadWorkflowFromFile, parseWorkflowObject, parseWorkflowYaml, toRawWorkflowJson, toWorkflowYaml } from './workflowLoader.js';
 
 describe('workflowLoader', () => {
   it('loads and validates the repo default workflow YAML', async () => {
@@ -65,5 +65,58 @@ describe('workflowLoader', () => {
 
     const parsedAgain = parseWorkflowYaml(yaml1);
     expect(parsedAgain).toEqual(workflow);
+  });
+
+  it('toRawWorkflowJson includes default_provider and phase.provider when set', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'provider-json-test',
+        version: 1,
+        start: 'start',
+        default_provider: 'openai',
+      },
+      phases: {
+        start: {
+          type: 'execute',
+          provider: 'anthropic',
+          prompt: 'Do the thing.',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    const rawJson = toRawWorkflowJson(workflow);
+    const workflowSection = rawJson.workflow as Record<string, unknown>;
+    const phasesSection = rawJson.phases as Record<string, Record<string, unknown>>;
+
+    expect(workflowSection.default_provider).toBe('openai');
+    expect(phasesSection.start.provider).toBe('anthropic');
+    expect(phasesSection.complete.provider).toBeUndefined();
+  });
+
+  it('toRawWorkflowJson omits provider fields when not set', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'no-provider-test',
+        version: 1,
+        start: 'start',
+      },
+      phases: {
+        start: {
+          type: 'execute',
+          prompt: 'Do the thing.',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    const rawJson = toRawWorkflowJson(workflow);
+    const workflowSection = rawJson.workflow as Record<string, unknown>;
+    const phasesSection = rawJson.phases as Record<string, Record<string, unknown>>;
+
+    expect('default_provider' in workflowSection).toBe(false);
+    expect('provider' in phasesSection.start).toBe(false);
   });
 });

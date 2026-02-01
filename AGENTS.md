@@ -58,7 +58,9 @@ jeeves/
 
 For viewer UI changes, follow the design token system documented in **[`apps/viewer/CLAUDE.md`](apps/viewer/CLAUDE.md)**:
 - Use CSS tokens from `apps/viewer/src/styles/tokens.css`
-- No raw hex/rgb values; no `color-mix()`
+- **No hex colors outside tokens.css** — all `#rrggbb` definitions belong in `tokens.css`
+- **Explicit RGBA overlays allowed** — for transparency, use `rgba(r, g, b, opacity)` derived from token values
+- **No `color-mix()`** — use RGBA overlays instead
 - Prefer shared classes from `apps/viewer/src/styles.css`
 
 ## Commands Reference

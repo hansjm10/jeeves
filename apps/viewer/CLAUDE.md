@@ -50,17 +50,28 @@ All styles must use tokens from `src/styles/tokens.css`:
 
 ### Rules
 
-1. **Use tokens, not raw values**: Always reference `--color-*`, `--font-*`, etc.
-2. **No `color-mix()`**: Use explicit RGBA values for transparency (e.g., `rgba(88, 166, 255, 0.12)`)
-3. **Legacy aliases are deprecated**: `--bg`, `--panel`, `--text`, etc. exist for backward compatibility only
-4. **Semantic naming**: Use accent colors for semantic purposes (success, error, warning)
+1. **Use tokens, not raw values**: Always reference `--color-*`, `--font-*`, etc. from `src/styles/tokens.css`
+2. **No hex colors outside tokens.css**: All hex color definitions (`#rrggbb`) must be in `src/styles/tokens.css`
+3. **RGBA overlays are allowed**: For transparency effects (hover states, focus rings, shadows), use explicit RGBA values derived from token colors (e.g., `rgba(88, 166, 255, 0.12)` for blue accent at 12% opacity)
+4. **No `color-mix()`**: Avoid `color-mix()` entirely; use explicit RGBA overlays instead
+5. **Legacy aliases are deprecated**: `--bg`, `--panel`, `--text`, etc. exist for backward compatibility only
+6. **Semantic naming**: Use accent colors for semantic purposes (success, error, warning)
+
+### Color Policy Summary
+
+| Allowed | Not Allowed |
+|---------|-------------|
+| `var(--color-accent-blue)` | `#58a6ff` (outside tokens.css) |
+| `rgba(88, 166, 255, 0.15)` | `color-mix(in srgb, var(--color-accent-blue) 15%, transparent)` |
+| Token references anywhere | Hex literals outside tokens.css |
 
 ### Adding New Styles
 
 1. Check if a shared class exists in `src/styles.css`
 2. Prefer extending shared classes over creating new ones
 3. Page-specific styles go in `src/pages/<Page>.css`
-4. Always use token variables, never raw hex/rgb values
+4. For solid colors, use token variables (e.g., `var(--color-accent-blue)`)
+5. For transparent colors, use RGBA overlays based on token values
 
 ## Validating UI Changes
 

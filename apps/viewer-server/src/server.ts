@@ -582,7 +582,7 @@ export async function buildServer(config: ViewerServerConfig) {
 	    try {
 	      const entries = await fs.readdir(absWorkflowsDir, { withFileTypes: true });
 	      const workflows = entries
-	        .filter((ent) => ent.isFile() && ent.name.endsWith('.yaml'))
+	        .filter((ent) => ent.isFile() && !ent.isSymbolicLink() && ent.name.endsWith('.yaml'))
 	        .map((ent) => ({ name: path.basename(ent.name, '.yaml') }))
 	        .sort((a, b) => a.name.localeCompare(b.name));
 	      return reply.send({ ok: true, workflows, workflows_dir: absWorkflowsDir });
@@ -670,6 +670,12 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
 	    }
 
+	    // Check for symlink before reading (security: prevent reading arbitrary files via symlink)
+	    const stat = await fs.lstat(resolved).catch(() => null);
+	    if (!stat || stat.isSymbolicLink()) {
+	      return reply.code(404).send({ ok: false, error: 'workflow not found' });
+	    }
+
 	    let yaml: string;
 	    try {
 	      yaml = await fs.readFile(resolved, 'utf-8');
@@ -708,6 +714,12 @@ export async function buildServer(config: ViewerServerConfig) {
 		    const rel = path.relative(absWorkflowsDir, resolved);
 		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
 		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		    }
+
+		    // Check for symlink before writing (security: prevent writing to arbitrary files via symlink)
+		    const stat = await fs.lstat(resolved).catch(() => null);
+		    if (stat?.isSymbolicLink()) {
+		      return reply.code(409).send({ ok: false, error: 'Refusing to write to a symlink.' });
 		    }
 
 		    try {

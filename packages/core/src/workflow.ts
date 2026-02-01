@@ -1,11 +1,20 @@
 export const phaseTypes = ['execute', 'evaluate', 'script', 'terminal'] as const;
 export type PhaseType = (typeof phaseTypes)[number];
 
-export const validModels = ['sonnet', 'opus', 'haiku'] as const;
-export type ModelId = (typeof validModels)[number];
+/** Claude model aliases */
+export const claudeModels = ['sonnet', 'opus', 'haiku'] as const;
+export type ClaudeModelId = (typeof claudeModels)[number];
+
+/** Codex/OpenAI model IDs */
+export const codexModels = ['gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5-codex'] as const;
+export type CodexModelId = (typeof codexModels)[number];
+
+/** All valid models across providers */
+export const validModels = [...claudeModels, ...codexModels] as const;
+export type ModelId = ClaudeModelId | CodexModelId;
 
 export function isValidModel(model: unknown): model is ModelId {
-  return typeof model === 'string' && validModels.includes(model as ModelId);
+  return typeof model === 'string' && (validModels as readonly string[]).includes(model);
 }
 
 export class WorkflowValidationError extends Error {

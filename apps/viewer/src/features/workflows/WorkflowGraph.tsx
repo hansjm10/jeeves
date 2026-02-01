@@ -1,6 +1,36 @@
 import { useEffect, useMemo, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
 
+/**
+ * Get a CSS custom property value from :root. Allows D3 SVG code to use
+ * the same design tokens defined in tokens.css.
+ */
+function getCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/**
+ * Graph color palette derived from design tokens.
+ * Values are resolved lazily at render time to respect theme changes.
+ */
+function getGraphColors() {
+  return {
+    // Backgrounds
+    nodeFill: getCssVar('--color-surface-1'),
+    nodeFillSelected: getCssVar('--color-surface-2'),
+    badgeFill: getCssVar('--color-surface-inset'),
+    // Borders
+    border: getCssVar('--color-border'),
+    borderSubtle: getCssVar('--color-border-subtle'),
+    // Text
+    text: getCssVar('--color-text'),
+    textMuted: getCssVar('--color-text-muted'),
+    // Accents
+    accentBlue: getCssVar('--color-accent-blue'),
+    accentAmber: getCssVar('--color-accent-amber'),
+  };
+}
+
 export type WorkflowGraphSelection =
   | Readonly<{ kind: 'node'; id: string }>
   | Readonly<{ kind: 'edge'; from: string; to: string }>
@@ -145,6 +175,9 @@ export function WorkflowGraph(props: Readonly<{
     const svgEl = svgRef.current;
     if (!svgEl) return;
 
+    // Resolve design tokens for this render pass
+    const colors = getGraphColors();
+
     // Keep rendering scale stable across screen sizes by making the SVG coordinate system
     // match the actual viewport size (1 SVG unit == 1 CSS pixel). We then lay out the
     // graph in a larger, node-count-based "canvas" and pan/zoom within it.
@@ -175,7 +208,7 @@ export function WorkflowGraph(props: Readonly<{
       .attr('orient', 'auto')
       .append('path')
       .attr('d', `M0,${-arrowHalfHeight}L${arrowSize},0L0,${arrowHalfHeight}`)
-      .attr('fill', '#8b9bb4');
+      .attr('fill', colors.textMuted);
 
     // Arrow marker for selected edges
     defs
@@ -189,7 +222,7 @@ export function WorkflowGraph(props: Readonly<{
       .attr('orient', 'auto')
       .append('path')
       .attr('d', `M0,${-arrowHalfHeight}L${arrowSize},0L0,${arrowHalfHeight}`)
-      .attr('fill', '#63b3ed');
+      .attr('fill', colors.accentBlue);
 
     const viewport = svg.append('g');
     viewportGRef.current = viewport;
@@ -212,7 +245,7 @@ export function WorkflowGraph(props: Readonly<{
         .append('text')
         .attr('x', 16)
         .attr('y', 24)
-        .attr('fill', '#6b7a8f')
+        .attr('fill', colors.textMuted)
         .style('font-size', '12px')
         .style('font-family', 'inherit')
         .text('No workflow graph data.');
@@ -259,7 +292,7 @@ export function WorkflowGraph(props: Readonly<{
     nodesDataRef.current = nodes;
     linksDataRef.current = links;
 
-    const linksG = viewport.append('g').attr('stroke', '#6b7a8f').attr('stroke-opacity', 0.85);
+    const linksG = viewport.append('g').attr('stroke', colors.textMuted).attr('stroke-opacity', 0.85);
     const nodesG = viewport.append('g');
 
     linksGRef.current = linksG;
@@ -276,7 +309,7 @@ export function WorkflowGraph(props: Readonly<{
       .append('path')
       .attr('class', 'wf-link-hit')
       .attr('fill', 'none')
-      .attr('stroke', '#000')
+      .attr('stroke', 'transparent')
       .attr('stroke-opacity', 0)
       .attr('stroke-width', 14)
       .style('pointer-events', 'stroke')
@@ -289,7 +322,7 @@ export function WorkflowGraph(props: Readonly<{
       .attr('stroke-width', 2)
       .attr('stroke-linecap', 'round')
       .attr('stroke-linejoin', 'round')
-      .attr('stroke', '#6b7a8f')
+      .attr('stroke', colors.textMuted)
       .attr('marker-end', 'url(#wf-arrow)')
       .style('pointer-events', 'none');
 
@@ -303,8 +336,8 @@ export function WorkflowGraph(props: Readonly<{
     badgeG
       .append('circle')
       .attr('r', 9)
-      .attr('fill', '#0b0f14')
-      .attr('stroke', '#4a5668')
+      .attr('fill', colors.badgeFill)
+      .attr('stroke', colors.border)
       .attr('stroke-width', 1);
 
     badgeG
@@ -313,7 +346,7 @@ export function WorkflowGraph(props: Readonly<{
       .attr('dominant-baseline', 'central')
       .style('font-size', '10px')
       .style('font-family', 'inherit')
-      .style('fill', '#e8eef5')
+      .style('fill', colors.text)
       .text((d) => String(d.count ?? 1));
 
     const node = nodesG
@@ -325,8 +358,8 @@ export function WorkflowGraph(props: Readonly<{
     node
       .append('circle')
       .attr('r', 18)
-      .attr('fill', '#12171e')
-      .attr('stroke', '#4a5668')
+      .attr('fill', colors.nodeFill)
+      .attr('stroke', colors.border)
       .attr('stroke-width', 1.5);
 
     node
@@ -335,7 +368,7 @@ export function WorkflowGraph(props: Readonly<{
       .attr('dominant-baseline', 'central')
       .style('font-size', '10px')
       .style('font-family', 'inherit')
-      .style('fill', '#e8eef5')
+      .style('fill', colors.text)
       .text((d) => d.label);
 
     node
@@ -538,6 +571,9 @@ export function WorkflowGraph(props: Readonly<{
 
     if (!svgEl || !linksG || !nodesG) return;
 
+    // Resolve design tokens for this render pass
+    const colors = getGraphColors();
+
     const svg = d3.select<SVGSVGElement, unknown>(svgEl);
     const nodes = nodesDataRef.current;
     const links = linksDataRef.current;
@@ -556,7 +592,7 @@ export function WorkflowGraph(props: Readonly<{
         .attr('stroke', (d) => {
           const from = getLinkEndpointId(d.source);
           const to = getLinkEndpointId(d.target);
-          return isSelectedEdge(from, to) ? '#63b3ed' : '#6b7a8f';
+          return isSelectedEdge(from, to) ? colors.accentBlue : colors.textMuted;
         })
         .attr('marker-end', (d) => {
           const from = getLinkEndpointId(d.source);
@@ -569,7 +605,7 @@ export function WorkflowGraph(props: Readonly<{
         .attr('stroke', (d) => {
           const from = getLinkEndpointId(d.source);
           const to = getLinkEndpointId(d.target);
-          return isSelectedEdge(from, to) ? '#63b3ed' : '#4a5668';
+          return isSelectedEdge(from, to) ? colors.accentBlue : colors.border;
         });
     };
 
@@ -593,7 +629,7 @@ export function WorkflowGraph(props: Readonly<{
         if (isSelectedEdge(from, to)) return;
         d3.select(this.parentNode as SVGGElement)
           .select<SVGPathElement>('path.wf-link-visual')
-          .attr('stroke', '#9fb3c8')
+          .attr('stroke', colors.text)
           .attr('stroke-width', 3);
       })
       .on('mouseleave', function () {
@@ -660,10 +696,10 @@ export function WorkflowGraph(props: Readonly<{
 
     nodeGroups
       .select('circle')
-      .attr('fill', (d) => (isSelectedNode(d.id) ? '#1a2028' : '#12171e'))
+      .attr('fill', (d) => (isSelectedNode(d.id) ? colors.nodeFillSelected : colors.nodeFill))
       .attr('stroke', (d) => {
-        if (props.currentPhaseId && d.id === props.currentPhaseId) return '#ecc94b';
-        return isSelectedNode(d.id) ? '#63b3ed' : '#4a5668';
+        if (props.currentPhaseId && d.id === props.currentPhaseId) return colors.accentAmber;
+        return isSelectedNode(d.id) ? colors.accentBlue : colors.border;
       })
       .attr('stroke-dasharray', (d) => (pinnedNodeIdsRef.current.has(d.id) ? '4 3' : null))
       .attr('stroke-width', (d) => {

@@ -8,13 +8,13 @@ type ViewMode = 'timeline' | 'events';
 type EventWithMeta = SdkEvent & { id: number; timestamp: number };
 
 const EVENT_COLORS: Record<string, string> = {
-  message: 'var(--sdk-cyan)',
-  error: 'var(--sdk-red)',
-  warning: 'var(--sdk-amber)',
-  complete: 'var(--sdk-green)',
-  start: 'var(--sdk-purple)',
-  tool: 'var(--sdk-blue)',
-  response: 'var(--sdk-teal)',
+  message: 'var(--color-accent-cyan)',
+  error: 'var(--color-accent-red)',
+  warning: 'var(--color-accent-amber)',
+  complete: 'var(--color-accent-green)',
+  start: 'var(--color-accent-purple)',
+  tool: 'var(--color-accent-blue)',
+  response: 'var(--color-accent-cyan)',
 };
 
 function getEventColor(eventName: string): string {
@@ -22,7 +22,7 @@ function getEventColor(eventName: string): string {
   for (const [key, color] of Object.entries(EVENT_COLORS)) {
     if (lower.includes(key)) return color;
   }
-  return 'var(--sdk-slate)';
+  return 'var(--color-text-muted)';
 }
 
 function formatTimestamp(ts: number): string {

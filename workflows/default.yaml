@@ -2,16 +2,23 @@ workflow:
   name: default
   version: 2
   start: design_draft
+  default_provider: codex
+  default_model: gpt-5.2
+  default_reasoning_effort: xhigh
 phases:
   code_fix:
     type: execute
+    provider: claude
     prompt: review.fix.md
     description: Apply fixes from code review
     transitions:
       - to: code_review
         auto: true
+    model: opus
+    thinking_budget: max
   code_review:
     type: evaluate
+    provider: codex
     prompt: review.evaluate.md
     description: Review code changes (read-only)
     transitions:
@@ -19,12 +26,15 @@ phases:
         when: status.reviewNeedsChanges == true
       - to: complete
         when: status.reviewClean == true
+    model: gpt-5.2
+    reasoning_effort: high
   complete:
     type: terminal
     description: Workflow complete
     transitions: []
   completeness_verification:
     type: evaluate
+    provider: codex
     prompt: verify.completeness.md
     description: Verify complete implementation against design
     transitions:
@@ -32,6 +42,8 @@ phases:
         when: status.missingWork == true
       - to: prepare_pr
         when: status.implementationComplete == true
+    model: gpt-5.2
+    reasoning_effort: high
   design_draft:
     type: execute
     provider: codex
@@ -41,6 +53,7 @@ phases:
       - to: design_review
         auto: true
     model: gpt-5.2
+    reasoning_effort: xhigh
   design_edit:
     type: execute
     provider: codex
@@ -50,8 +63,10 @@ phases:
       - to: design_review
         auto: true
     model: gpt-5.2
+    reasoning_effort: high
   design_review:
     type: evaluate
+    provider: codex
     prompt: design.review.md
     description: Review design document (read-only)
     transitions:
@@ -59,36 +74,50 @@ phases:
         when: status.designNeedsChanges == true
       - to: task_decomposition
         when: status.designApproved == true
+    model: gpt-5.2
+    reasoning_effort: high
   fix_ci:
     type: execute
+    provider: claude
     prompt: ci.fix.md
     description: Fix commit/push failures (lint, pre-push hooks, etc)
     transitions:
       - to: task_spec_check
         auto: true
+    model: opus
   implement_task:
     type: execute
+    provider: claude
     prompt: task.implement.md
     description: Implement current task
     transitions:
       - to: task_spec_check
         auto: true
+    model: opus
+    thinking_budget: max
   prepare_pr:
     type: execute
+    provider: claude
     prompt: pr.prepare.md
     description: Create pull request after all tasks complete
     transitions:
       - to: code_review
         when: status.prCreated == true
+    model: sonnet
+    thinking_budget: max
   task_decomposition:
     type: execute
+    provider: claude
     prompt: task.decompose.md
     description: Extract tasks from design document
     transitions:
       - to: implement_task
         when: status.taskDecompositionComplete == true
+    model: haiku
+    thinking_budget: max
   task_spec_check:
     type: evaluate
+    provider: codex
     prompt: task.spec_check.md
     description: Verify task meets acceptance criteria
     transitions:
@@ -107,3 +136,5 @@ phases:
       - to: completeness_verification
         when: status.allTasksComplete == true
         priority: 5
+    model: gpt-5.2
+    reasoning_effort: high

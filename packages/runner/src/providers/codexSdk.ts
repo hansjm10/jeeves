@@ -321,18 +321,27 @@ export function mapCodexEventToProviderEvents(
   return events;
 }
 
+// Codex supports passing model directly; no alias mapping needed.
+// JEEVES_MODEL takes precedence, then existing env vars.
+function getCodexModel(): string | undefined {
+  const jeevesModel = process.env.JEEVES_MODEL;
+  if (jeevesModel) return jeevesModel;
+  return process.env.CODEX_MODEL ?? process.env.OPENAI_MODEL ?? undefined;
+}
+
 export class CodexSdkProvider implements AgentProvider {
   readonly name = 'codex';
 
   async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
-    const model = process.env.CODEX_MODEL ?? process.env.OPENAI_MODEL ?? undefined;
+    const model = getCodexModel();
 
     const state: MapState = {
       toolStartMsById: new Map<string, number>(),
       emittedToolUseIds: new Set<string>(),
     };
 
-    yield { type: 'system', subtype: 'init', content: 'Starting Codex session', timestamp: nowIso() };
+    const modelInfo = model ? ` (model=${model})` : '';
+    yield { type: 'system', subtype: 'init', content: `Starting Codex session${modelInfo}`, timestamp: nowIso() };
 
     const require = createRequire(import.meta.url);
     const codexEntry = require.resolve('@openai/codex/bin/codex.js');

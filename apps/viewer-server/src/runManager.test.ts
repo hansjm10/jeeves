@@ -425,4 +425,312 @@ describe('RunManager', () => {
 
     expect(observedProvider).toBe('fake');
   });
+
+  it('uses phase.model over workflow.defaultModel via JEEVES_MODEL env', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-model';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '  default_model: haiku',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    model: opus',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 7;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/7', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedModel: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown, options: unknown) => {
+      void cmd;
+      void args;
+      const o = options as { env?: Record<string, string> } | undefined;
+      observedModel = o?.env?.JEEVES_MODEL;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // phase.model = 'opus' takes precedence over workflow.default_model = 'haiku'
+    expect(observedModel).toBe('opus');
+  });
+
+  it('uses workflow.defaultModel when phase.model is unset', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-model';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '  default_model: sonnet',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 8;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/8', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedModel: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown, options: unknown) => {
+      void cmd;
+      void args;
+      const o = options as { env?: Record<string, string> } | undefined;
+      observedModel = o?.env?.JEEVES_MODEL;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // workflow.default_model = 'sonnet' is used when phase.model is unset
+    expect(observedModel).toBe('sonnet');
+  });
+
+  it('does not set JEEVES_MODEL when no model is specified (provider default)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-model';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 9;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/9', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let observedModel: string | undefined;
+    const spawn = ((cmd: unknown, args: unknown, options: unknown) => {
+      void cmd;
+      void args;
+      const o = options as { env?: Record<string, string> } | undefined;
+      observedModel = o?.env?.JEEVES_MODEL;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // No model specified, so JEEVES_MODEL should be undefined (provider uses its default)
+    expect(observedModel).toBeUndefined();
+  });
+
+  it('fails loudly with invalid model (no silent fallback)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-model-invalid';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    model: invalid-model-xyz',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 10;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/10', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let spawnCalls = 0;
+    const spawn = (() => {
+      spawnCalls += 1;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // Runner should NOT be spawned because validation should fail first
+    expect(spawnCalls).toBe(0);
+    // An error should be recorded - core validates model at parse time
+    expect(rm.getStatus().last_error).toContain('invalid model');
+    expect(rm.getStatus().last_error).toContain('invalid-model-xyz');
+  });
 });

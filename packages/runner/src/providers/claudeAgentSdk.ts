@@ -81,10 +81,36 @@ function extractResultContent(result: SDKResultMessage): string {
   return result.errors.join('\n');
 }
 
+const CLAUDE_MODEL_ALIASES: Record<string, string> = {
+  sonnet: 'claude-sonnet-4-5-20250929',
+  opus: 'claude-opus-4-20250514',
+  haiku: 'claude-haiku-3-5-20241022',
+};
+
+function resolveClaudeModel(modelAlias: string | undefined): string | undefined {
+  if (!modelAlias) return undefined;
+  const normalized = modelAlias.trim().toLowerCase();
+  return CLAUDE_MODEL_ALIASES[normalized] ?? modelAlias;
+}
+
+function validateModel(modelAlias: string | undefined): void {
+  if (!modelAlias) return;
+  const normalized = modelAlias.trim().toLowerCase();
+  // Allow known aliases or full model IDs starting with 'claude-'
+  if (CLAUDE_MODEL_ALIASES[normalized]) return;
+  if (normalized.startsWith('claude-')) return;
+  throw new Error(`Invalid model for Claude provider: '${modelAlias}'. Supported aliases: ${Object.keys(CLAUDE_MODEL_ALIASES).join(', ')}`);
+}
+
 export class ClaudeAgentProvider implements AgentProvider {
   readonly name = 'claude-agent-sdk';
 
   async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+    // Get model from environment variable (set by viewer-server)
+    const envModel = process.env.JEEVES_MODEL;
+    validateModel(envModel);
+    const resolvedModel = resolveClaudeModel(envModel);
+
     const pendingEvents: ProviderEvent[] = [];
     const toolStartMsById = new Map<string, number>();
 
@@ -157,11 +183,13 @@ export class ClaudeAgentProvider implements AgentProvider {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       hooks: hooks as Options['hooks'],
+      ...(resolvedModel ? { model: resolvedModel } : {}),
     };
+    const modelInfo = resolvedModel ? ` (model=${resolvedModel})` : '';
     yield {
       type: 'system',
       subtype: 'init',
-      content: 'Starting Claude Agent SDK session',
+      content: `Starting Claude Agent SDK session${modelInfo}`,
       timestamp: nowIso(),
     };
 

@@ -4,6 +4,10 @@ export type PhaseType = (typeof phaseTypes)[number];
 export const validModels = ['sonnet', 'opus', 'haiku'] as const;
 export type ModelId = (typeof validModels)[number];
 
+export function isValidModel(model: unknown): model is ModelId {
+  return typeof model === 'string' && validModels.includes(model as ModelId);
+}
+
 export class WorkflowValidationError extends Error {
   override name = 'WorkflowValidationError';
 }

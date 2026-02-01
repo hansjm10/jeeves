@@ -203,4 +203,4 @@ rg '#[0-9a-fA-F]{3,8}\b' apps/viewer/src --glob '!**/tokens.css'
 | T7 | Passed | Finished Workflows tokenization + typography |
 | T8 | Passed | Finished SDK tokenization + typography |
 | T9 | Passed | Tokenized WorkflowGraph colors |
-| T10 | In Progress | Updated this audit doc + styling docs |
+| T10 | Passed | Updated this audit doc + styling docs |

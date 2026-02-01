@@ -1,0 +1,61 @@
+/**
+ * Design Tokens for Jeeves Viewer
+ * Single source of truth for colors, typography, radii, and spacing.
+ *
+ * Usage: Import this file in styles.css. All viewer CSS should reference
+ * these tokens rather than defining ad-hoc palette variables.
+ */
+
+:root {
+  /* ========== Colors ========== */
+
+  /* Backgrounds */
+  --color-bg: #0d1117;
+  --color-surface-1: #161b22;
+  --color-surface-2: #21262d;
+  --color-surface-inset: #0b1118;
+
+  /* Borders */
+  --color-border: #30363d;
+  --color-border-subtle: rgba(48, 54, 61, 0.65);
+
+  /* Text */
+  --color-text: #e6edf3;
+  --color-text-muted: #8b949e;
+  --color-text-dim: rgba(139, 148, 158, 0.75);
+
+  /* Accent colors (also used as event semantic colors) */
+  --color-accent-blue: #58a6ff;
+  --color-accent-green: #3fb950;
+  --color-accent-amber: #ecc94b;
+  --color-accent-red: #f85149;
+  --color-accent-purple: #a371f7;
+  --color-accent-cyan: #4fd1c5;
+
+  /* ========== Typography ========== */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-size-body: 14px;
+  --font-size-ui-sm: 12px;
+  --font-size-ui-xs: 11px;
+
+  /* ========== Shape (Radii) ========== */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* ========== Spacing ========== */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+
+  /* ========== Focus ========== */
+  --focus-ring-color: rgba(88, 166, 255, 0.35);
+}

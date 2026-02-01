@@ -1,16 +1,22 @@
+@import url('./styles/tokens.css');
+
 :root {
   color-scheme: dark;
-  --bg: #0d1117;
-  --panel: #161b22;
-  --panel2: #21262d;
-  --border: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --green: #3fb950;
-  --blue: #58a6ff;
-  --red: #f85149;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+
+  /* ========== Legacy aliases (temporary, do not add new callers) ========== */
+  /* These map old variable names to the shared tokens for backward compatibility.
+     New code should use --color-*, --font-*, --radius-*, --space-* tokens directly. */
+  --bg: var(--color-bg);
+  --panel: var(--color-surface-1);
+  --panel2: var(--color-surface-2);
+  --border: var(--color-border);
+  --text: var(--color-text);
+  --muted: var(--color-text-muted);
+  --green: var(--color-accent-green);
+  --blue: var(--color-accent-blue);
+  --red: var(--color-accent-red);
+  --mono: var(--font-mono);
+  --sans: var(--font-sans);
 }
 
 * {

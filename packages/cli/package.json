@@ -6,6 +6,6 @@
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "bin": {
-    "jeeves": "./dist/cli.js"
+    "jeeves": "./dist/bin.js"
   }
 }

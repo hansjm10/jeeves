@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { parseArgs } from 'node:util';
 
 const DEFAULT_SERVER = 'http://127.0.0.1:8081';
@@ -110,12 +108,3 @@ export async function main(argv: string[]): Promise<void> {
 
   await runCommand(options);
 }
-
-main(process.argv.slice(2)).catch((err) => {
-  if (err instanceof Error && !err.message.startsWith('Network error:') && !err.message.startsWith('Server returned error:') && err.message !== 'Invalid command') {
-    console.error(`Error: ${err.message}`);
-  } else if (err instanceof Error && (err.message.startsWith('Network error:') || err.message.startsWith('Server returned error:'))) {
-    console.error(`Error: ${err.message}`);
-  }
-  process.exitCode = 1;
-});

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import {
@@ -11,6 +11,12 @@ import {
 import { WorkflowGraph, type WorkflowGraphSelection } from '../features/workflows/WorkflowGraph.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { useUnsavedChanges } from '../ui/unsaved/UnsavedChangesProvider.js';
+
+/** Add Phase dialog state */
+type AddPhaseDialogState = { open: false } | { open: true };
+
+/** Add Transition dialog state */
+type AddTransitionDialogState = { open: false } | { open: true; from: string };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -43,6 +49,10 @@ export function WorkflowsPage() {
   const [createFromSelected, setCreateFromSelected] = useState(true);
   const [resetPhaseOnSelect, setResetPhaseOnSelect] = useState(true);
   const lastLoadedNameRef = useRef<string | null>(null);
+  const [addPhaseDialog, setAddPhaseDialog] = useState<AddPhaseDialogState>({ open: false });
+  const [newPhaseId, setNewPhaseId] = useState('');
+  const [addTransitionDialog, setAddTransitionDialog] = useState<AddTransitionDialogState>({ open: false });
+  const [newTransitionTo, setNewTransitionTo] = useState('');
 
   useEffect(() => {
     if (!issueWorkflow) return;
@@ -148,6 +158,74 @@ export function WorkflowsPage() {
     });
   };
 
+  /** Add a new phase with safe defaults */
+  const addPhase = useCallback((phaseId: string) => {
+    if (!phaseId.trim()) return;
+    updateDraft((draft) => {
+      const phases = isRecord(draft.phases) ? draft.phases : {};
+      draft.phases = phases;
+      if (phases[phaseId]) return; // already exists
+      // Safe defaults: execute type with empty prompt (user must fill)
+      phases[phaseId] = { type: 'execute', prompt: '', transitions: [] };
+    });
+    setSelection({ kind: 'node', id: phaseId });
+  }, [updateDraft, setSelection]);
+
+  /** Remove a phase by id */
+  const removePhase = useCallback((phaseId: string) => {
+    updateDraft((draft) => {
+      const phases = isRecord(draft.phases) ? draft.phases : {};
+      draft.phases = phases;
+      delete phases[phaseId];
+      // Also remove any transitions that point to this phase
+      for (const [, phaseVal] of Object.entries(phases)) {
+        if (!isRecord(phaseVal)) continue;
+        const transitions = phaseVal.transitions;
+        if (!Array.isArray(transitions)) continue;
+        phaseVal.transitions = transitions.filter((t) => !(isRecord(t) && t.to === phaseId));
+      }
+      // Update workflow.start if it was this phase
+      const wf = isRecord(draft.workflow) ? draft.workflow : {};
+      if (wf.start === phaseId) delete wf.start;
+    });
+    if (selection?.kind === 'node' && selection.id === phaseId) {
+      setSelection(null);
+    }
+  }, [updateDraft, selection, setSelection]);
+
+  /** Add a transition from one phase to another */
+  const addTransition = useCallback((from: string, to: string) => {
+    if (!from.trim() || !to.trim()) return;
+    updateDraft((draft) => {
+      const phases = isRecord(draft.phases) ? draft.phases : {};
+      draft.phases = phases;
+      const phase = isRecord(phases[from]) ? (phases[from] as Record<string, unknown>) : null;
+      if (!phase) return;
+      const transitions = Array.isArray(phase.transitions) ? (phase.transitions as unknown[]).slice() : [];
+      // Check if transition already exists
+      if (transitions.some((t) => isRecord(t) && t.to === to)) return;
+      transitions.push({ to, auto: false });
+      phase.transitions = transitions;
+    });
+    setSelection({ kind: 'edge', from, to });
+  }, [updateDraft, setSelection]);
+
+  /** Remove a transition */
+  const removeTransition = useCallback((from: string, to: string) => {
+    updateDraft((draft) => {
+      const phases = isRecord(draft.phases) ? draft.phases : {};
+      draft.phases = phases;
+      const phase = isRecord(phases[from]) ? (phases[from] as Record<string, unknown>) : null;
+      if (!phase) return;
+      const transitions = phase.transitions;
+      if (!Array.isArray(transitions)) return;
+      phase.transitions = transitions.filter((t) => !(isRecord(t) && t.to === to));
+    });
+    if (selection?.kind === 'edge' && selection.from === from && selection.to === to) {
+      setSelection(null);
+    }
+  }, [updateDraft, selection, setSelection]);
+
   const onSave = async () => {
     if (!selectedName) return;
     if (!draftWorkflow) return;
@@ -204,6 +282,12 @@ export function WorkflowsPage() {
     draftWorkflow && isRecord(draftWorkflow.workflow) ? (draftWorkflow.workflow as Record<string, unknown>) : null;
 
   const phasesSection = draftWorkflow && isRecord(draftWorkflow.phases) ? (draftWorkflow.phases as Record<string, unknown>) : null;
+
+  /** Get list of phase IDs from draft */
+  const phaseIds = useMemo(() => {
+    if (!phasesSection) return [];
+    return Object.keys(phasesSection).sort();
+  }, [phasesSection]);
 
   const selectedPhase =
     selection?.kind === 'node' && phasesSection && isRecord(phasesSection[selection.id])
@@ -311,7 +395,7 @@ export function WorkflowsPage() {
         <h2 style={{ margin: 0, fontSize: 14 }}>Graph</h2>
         <div style={{ marginTop: 8, height: 520 }}>
           <WorkflowGraph
-            workflow={selectedRawWorkflow}
+            workflow={draftWorkflow ?? selectedRawWorkflow}
             currentPhaseId={currentIssuePhase}
             selection={selection}
             onSelectionChange={setSelection}
@@ -415,12 +499,79 @@ export function WorkflowsPage() {
                     style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                   />
                 </label>
+                <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                  <span style={{ opacity: 0.85 }}>default_model</span>
+                  <input
+                    value={
+                      workflowSection && typeof workflowSection.default_model === 'string'
+                        ? workflowSection.default_model
+                        : ''
+                    }
+                    onChange={(e) => setWorkflowField('default_model', e.target.value)}
+                    placeholder="(optional)"
+                    style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+                  />
+                </label>
               </div>
+            </div>
+
+            {/* Add Phase section */}
+            <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
+              <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Phases</div>
+              {!addPhaseDialog.open ? (
+                <button
+                  onClick={() => {
+                    setNewPhaseId('');
+                    setAddPhaseDialog({ open: true });
+                  }}
+                  style={{ fontSize: 12 }}
+                >
+                  + Add Phase
+                </button>
+              ) : (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    value={newPhaseId}
+                    onChange={(e) => setNewPhaseId(e.target.value)}
+                    placeholder="phase_id"
+                    style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+                  />
+                  <button
+                    onClick={() => {
+                      addPhase(newPhaseId);
+                      setAddPhaseDialog({ open: false });
+                      setNewPhaseId('');
+                    }}
+                    disabled={!newPhaseId.trim() || phaseIds.includes(newPhaseId.trim())}
+                    style={{ fontSize: 12 }}
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => setAddPhaseDialog({ open: false })}
+                    style={{ fontSize: 12 }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
 
             {selection?.kind === 'node' ? (
               <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-                <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Phase: {selection.id}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>Phase: {selection.id}</span>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Remove phase "${selection.id}"?`)) {
+                        removePhase(selection.id);
+                      }
+                    }}
+                    style={{ fontSize: 11, color: '#b00', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Remove
+                  </button>
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     <span style={{ opacity: 0.85 }}>prompt</span>
@@ -443,6 +594,15 @@ export function WorkflowsPage() {
                     <input
                       value={selectedPhase && typeof selectedPhase.provider === 'string' ? selectedPhase.provider : ''}
                       onChange={(e) => setPhaseField(selection.id, 'provider', e.target.value)}
+                      placeholder="(optional)"
+                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                    <span style={{ opacity: 0.85 }}>model</span>
+                    <input
+                      value={selectedPhase && typeof selectedPhase.model === 'string' ? selectedPhase.model : ''}
+                      onChange={(e) => setPhaseField(selection.id, 'model', e.target.value)}
                       placeholder="(optional)"
                       style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
                     />
@@ -490,15 +650,121 @@ export function WorkflowsPage() {
                     />
                   </label>
                 </div>
+
+                {/* Add Transition section */}
+                <div style={{ marginTop: 10, borderTop: '1px solid #eee', paddingTop: 10 }}>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Transitions from {selection.id}</div>
+                  {addTransitionDialog.open && addTransitionDialog.from === selection.id ? (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+                      <select
+                        value={newTransitionTo}
+                        onChange={(e) => setNewTransitionTo(e.target.value)}
+                        style={{ flex: 1, fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+                      >
+                        <option value="">Select target phase...</option>
+                        {phaseIds
+                          .filter((id) => id !== selection.id)
+                          .filter((id) => {
+                            // Exclude phases that already have a transition
+                            const phase = phasesSection?.[selection.id];
+                            if (!isRecord(phase)) return true;
+                            const transitions = phase.transitions;
+                            if (!Array.isArray(transitions)) return true;
+                            return !transitions.some((t) => isRecord(t) && t.to === id);
+                          })
+                          .map((id) => (
+                            <option key={id} value={id}>
+                              {id}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        onClick={() => {
+                          addTransition(selection.id, newTransitionTo);
+                          setAddTransitionDialog({ open: false });
+                          setNewTransitionTo('');
+                        }}
+                        disabled={!newTransitionTo}
+                        style={{ fontSize: 12 }}
+                      >
+                        Add
+                      </button>
+                      <button
+                        onClick={() => {
+                          setAddTransitionDialog({ open: false });
+                          setNewTransitionTo('');
+                        }}
+                        style={{ fontSize: 12 }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setNewTransitionTo('');
+                        setAddTransitionDialog({ open: true, from: selection.id });
+                      }}
+                      style={{ fontSize: 12, marginBottom: 8 }}
+                    >
+                      + Add Transition
+                    </button>
+                  )}
+                </div>
               </div>
             ) : null}
 
             {selection?.kind === 'edge' ? (
               <div style={{ borderTop: '1px solid #eee', paddingTop: 10 }}>
-                <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
-                  Transition: {selection.from} → {selection.to}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    Transition: {selection.from} → {selection.to}
+                  </span>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Remove transition "${selection.from} → ${selection.to}"?`)) {
+                        removeTransition(selection.from, selection.to);
+                      }
+                    }}
+                    style={{ fontSize: 11, color: '#b00', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Remove
+                  </button>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                    <span style={{ opacity: 0.85 }}>to</span>
+                    <select
+                      value={selection.to}
+                      onChange={(e) => {
+                        const oldTo = selection.to;
+                        const newTo = e.target.value;
+                        if (oldTo === newTo) return;
+                        // Update the transition's "to" field
+                        updateDraft((draft) => {
+                          const phases = isRecord(draft.phases) ? draft.phases : {};
+                          const phase = isRecord(phases[selection.from]) ? (phases[selection.from] as Record<string, unknown>) : null;
+                          if (!phase) return;
+                          const transitions = phase.transitions;
+                          if (!Array.isArray(transitions)) return;
+                          const idx = transitions.findIndex((t) => isRecord(t) && t.to === oldTo);
+                          if (idx < 0) return;
+                          const updated = { ...(transitions[idx] as Record<string, unknown>), to: newTo };
+                          const nextTransitions = transitions.slice();
+                          nextTransitions[idx] = updated;
+                          phase.transitions = nextTransitions;
+                        });
+                        setSelection({ kind: 'edge', from: selection.from, to: newTo });
+                      }}
+                      style={{ fontSize: 12, padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+                    >
+                      {phaseIds.map((id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                     <input
                       type="checkbox"

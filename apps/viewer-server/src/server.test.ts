@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
 
-import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
+import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
 import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
@@ -192,6 +192,422 @@ describe('viewer-server', () => {
     });
     expect(res.statusCode).not.toBe(403);
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('lists yaml workflows directly under workflowsDir', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflows-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflows-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    await fs.writeFile(path.join(workflowsDir, 'b.yaml'), 'workflow: {}\nphases: {}\n', 'utf-8');
+    await fs.writeFile(path.join(workflowsDir, 'a.yaml'), 'workflow: {}\nphases: {}\n', 'utf-8');
+    await fs.writeFile(path.join(workflowsDir, 'ignore.txt'), 'nope\n', 'utf-8');
+    await fs.mkdir(path.join(workflowsDir, 'nested'), { recursive: true });
+    await fs.writeFile(path.join(workflowsDir, 'nested', 'c.yaml'), 'nope\n', 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      workflows: [{ name: 'a' }, { name: 'b' }],
+      workflows_dir: path.resolve(workflowsDir),
+    });
+
+    await app.close();
+  });
+
+  it('gets workflow yaml and a structured workflow payload', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-get-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-get-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: a',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'a.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/a' });
+    expect(res.statusCode).toBe(200);
+    const expected = toRawWorkflowJson(parseWorkflowYaml(yaml, { sourceName: 'a' }));
+    expect(res.json()).toEqual({ ok: true, name: 'a', yaml, workflow: expected });
+
+    await app.close();
+  });
+
+  it('GET /api/workflows/:name includes provider fields in workflow payload', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-get-provider-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-get-provider-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: provider-workflow',
+      '  version: 1',
+      '  start: start',
+      '  default_provider: openai',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    provider: anthropic',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'provider-workflow.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/provider-workflow' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(body.ok).toBe(true);
+    expect(body.workflow.workflow.default_provider).toBe('openai');
+    expect(body.workflow.phases.start.provider).toBe('anthropic');
+    expect(body.workflow.phases.complete.provider).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/workflows/:name round-trips provider fields through save', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-put-provider-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-put-provider-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    // Create an initial workflow without provider fields
+    const initialYaml = [
+      'workflow:',
+      '  name: roundtrip',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "initial"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'roundtrip.yaml'), initialYaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    // PUT a workflow with provider fields
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/workflows/roundtrip',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        workflow: {
+          workflow: {
+            name: 'roundtrip',
+            version: 1,
+            start: 'start',
+            default_provider: 'openai',
+          },
+          phases: {
+            start: {
+              type: 'execute',
+              provider: 'anthropic',
+              prompt: 'updated',
+              transitions: [{ to: 'complete' }],
+            },
+            complete: {
+              type: 'terminal',
+              transitions: [],
+            },
+          },
+        },
+      },
+    });
+    expect(putRes.statusCode).toBe(200);
+    const putBody = putRes.json() as { ok: boolean; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.workflow.workflow.default_provider).toBe('openai');
+    expect(putBody.workflow.phases.start.provider).toBe('anthropic');
+
+    // GET the workflow again to verify providers are persisted
+    const getRes = await app.inject({ method: 'GET', url: '/api/workflows/roundtrip' });
+    expect(getRes.statusCode).toBe(200);
+    const getBody = getRes.json() as { ok: boolean; yaml: string; workflow: { workflow: Record<string, unknown>; phases: Record<string, Record<string, unknown>> } };
+    expect(getBody.ok).toBe(true);
+    expect(getBody.workflow.workflow.default_provider).toBe('openai');
+    expect(getBody.workflow.phases.start.provider).toBe('anthropic');
+
+    // Verify the YAML on disk includes provider fields
+    const yamlOnDisk = await fs.readFile(path.join(workflowsDir, 'roundtrip.yaml'), 'utf-8');
+    expect(yamlOnDisk).toContain('default_provider: openai');
+    expect(yamlOnDisk).toContain('provider: anthropic');
+
+    await app.close();
+  });
+
+  it('returns 404 for unknown workflows', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-missing-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-missing-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/does-not-exist' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'workflow not found' });
+
+    await app.close();
+  });
+
+  it('validates workflow name to prevent traversal', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/a..b' });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('rejects workflow creation from non-local clients by default', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-remote-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-remote-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '8.8.8.8',
+      payload: { name: 'new' },
+    });
+    expect(res.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('validates workflow names on create', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'a.b' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('returns 409 when creating an existing workflow', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-exists-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-exists-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: exists',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '    transitions: []',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'exists.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'exists' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'workflow already exists' });
+
+    const after = await fs.readFile(path.join(workflowsDir, 'exists.yaml'), 'utf-8');
+    expect(after).toBe(yaml);
+
+    await app.close();
+  });
+
+  it('creates a minimal valid workflow when `from` is omitted', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-default-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-default-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'new' },
+    });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json.ok).toBe(true);
+    expect(json.name).toBe('new');
+    expect(typeof json.yaml).toBe('string');
+
+    const persisted = await fs.readFile(path.join(workflowsDir, 'new.yaml'), 'utf-8');
+    const parsed = parseWorkflowYaml(persisted, { sourceName: 'new' });
+    expect(parsed.name).toBe('new');
+    expect(parsed.start).toBe('start');
+    expect(Object.keys(parsed.phases).sort()).toEqual(['complete', 'start']);
+    expect(parsed.phases.complete.type).toBe('terminal');
+    expect(parsed.phases.start.transitions[0]?.to).toBe('complete');
+
+    await app.close();
+  });
+
+  it('clones a workflow when `from` is provided and sets workflow.name', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-clone-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-clone-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const sourceYaml = [
+      'workflow:',
+      '  name: source',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '    transitions: []',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'source.yaml'), sourceYaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'clone', from: 'source' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const persisted = await fs.readFile(path.join(workflowsDir, 'clone.yaml'), 'utf-8');
+    const parsed = parseWorkflowYaml(persisted, { sourceName: 'clone' });
+    expect(parsed.name).toBe('clone');
+    expect(parsed.start).toBe('start');
+    expect(parsed.phases.start.prompt).toBe('do it');
+
     await app.close();
   });
 
@@ -898,6 +1314,162 @@ describe('viewer-server', () => {
     expect(body.init?.ok).toBe(false);
     expect(body.init?.error).toBe('Only github.com issue URLs are supported in v1.');
     expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('POST /api/issue/workflow requires a selected issue', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-no-issue-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/workflow',
+      remoteAddress: '127.0.0.1',
+      payload: { workflow: 'default' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'No issue selected.' });
+
+    await app.close();
+  });
+
+  it('POST /api/issue/workflow validates and updates issue.json (with optional phase reset) and broadcasts state', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-update-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-workflow-update-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: next',
+      '  version: 1',
+      '  start: begin',
+      'phases:',
+      '  begin:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'next.yaml'), yaml, 'utf-8');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      workflowsDir,
+      initialIssue: issueRef,
+    });
+
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const httpUrl = new URL(address);
+    const wsUrl = new URL('/api/ws', address);
+    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    const stateSnapshots: { issue_json?: unknown }[] = [];
+    const ws = new WebSocket(wsUrl.toString(), { origin: httpUrl.origin });
+    ws.on('message', (data) => {
+      const raw = decodeWsData(data);
+      try {
+        const msg = JSON.parse(raw) as { event?: unknown; data?: unknown };
+        if (msg.event === 'state' && msg.data && typeof msg.data === 'object') {
+          stateSnapshots.push(msg.data as { issue_json?: unknown });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    await waitFor(() => stateSnapshots.length > 0);
+
+    const postRes = await fetch(new URL('/api/issue/workflow', address), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workflow: 'next', reset_phase: true }),
+    });
+    expect(postRes.status).toBe(200);
+
+    await waitFor(() => {
+      return stateSnapshots.some((s) => {
+        const issueJson = s.issue_json as Record<string, unknown> | null | undefined;
+        return Boolean(issueJson && issueJson.workflow === 'next' && issueJson.phase === 'begin');
+      });
+    });
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.workflow).toBe('next');
+    expect(updated?.phase).toBe('begin');
+
+    ws.close();
+    await app.close();
+  });
+
+  it('POST /api/issue/workflow rejects invalid workflows without updating issue.json', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-workflow-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.writeFile(path.join(workflowsDir, 'bad.yaml'), 'workflow: [\n', 'utf-8');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      workflowsDir,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/workflow',
+      remoteAddress: '127.0.0.1',
+      payload: { workflow: 'bad' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    const after = await readIssueJson(stateDir);
+    expect(after?.workflow).toBe('default');
+    expect(after?.phase).toBe('design_draft');
 
     await app.close();
   });

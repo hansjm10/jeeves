@@ -22,10 +22,18 @@ export {
 
 export {
   getEffectiveModel,
+  claudeThinkingBudgets,
+  codexModelsWithReasoningEffort,
+  codexReasoningEfforts,
+  isValidClaudeThinkingBudget,
+  isValidCodexReasoningEffort,
+  supportsCodexReasoningEffort,
   phaseTypes,
   validModels,
   WorkflowValidationError,
+  type ClaudeThinkingBudgetId,
   type ModelId,
+  type CodexReasoningEffortId,
   type Phase,
   type PhaseType,
   type Transition,
@@ -35,7 +43,9 @@ export {
 export {
   loadWorkflowByName,
   loadWorkflowFromFile,
+  parseWorkflowObject,
   parseWorkflowYaml,
+  toWorkflowYaml,
   toRawWorkflowJson,
 } from './workflowLoader.js';
 

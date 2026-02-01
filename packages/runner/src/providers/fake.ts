@@ -9,10 +9,12 @@ export class FakeProvider implements AgentProvider {
 
   async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
     void options;
+    const model = process.env.JEEVES_MODEL;
+    const modelInfo = model ? ` (model=${model})` : '';
     yield {
       type: 'system',
       subtype: 'init',
-      content: 'Fake provider init',
+      content: `Fake provider init${modelInfo}`,
       sessionId: 'fake-session',
       timestamp: nowIso(),
     };

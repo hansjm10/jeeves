@@ -6,8 +6,12 @@ import websocket from '@fastify/websocket';
 import {
   listIssueStates,
   loadWorkflowByName,
+  parseWorkflowObject,
+  parseWorkflowYaml,
   parseRepoSpec,
   resolveDataDir,
+  toRawWorkflowJson,
+  toWorkflowYaml,
 } from '@jeeves/core';
 import Fastify from 'fastify';
 
@@ -19,7 +23,7 @@ import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
-import { writeTextAtomic } from './textAtomic.js';
+import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
@@ -181,6 +185,25 @@ function errorToHttp(err: unknown): { status: number; message: string } {
 
 function normalizePromptId(promptId: string): string {
   return promptId.split('\\').join('/');
+}
+
+function getWorkflowNameParamInfo(raw: string): { name: string; fileName: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('\0')) return null;
+  // Prevent path traversal or directory separators.
+  if (trimmed.includes('..') || trimmed.includes('/') || trimmed.includes('\\')) return null;
+
+  if (trimmed.endsWith('.yaml')) {
+    const name = trimmed.slice(0, -'.yaml'.length);
+    if (!name) return null;
+    return { name, fileName: trimmed };
+  }
+  return { name: trimmed, fileName: `${trimmed}.yaml` };
+}
+
+function isValidWorkflowName(name: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name);
 }
 
 function isSafePromptId(promptId: string): boolean {
@@ -535,10 +558,10 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.get('/api/run', async () => ({ run: runManager.getStatus() }));
 
-  app.get('/api/issues', async () => {
-    const issues = await listIssueStates(dataDir);
-    return {
-      ok: true,
+	  app.get('/api/issues', async () => {
+	    const issues = await listIssueStates(dataDir);
+	    return {
+	      ok: true,
       issues: issues.map((i) => ({
         owner: i.owner,
         repo: i.repo,
@@ -550,14 +573,170 @@ export async function buildServer(config: ViewerServerConfig) {
       })),
       data_dir: dataDir,
       count: issues.length,
-      current_issue: runManager.getIssue().issueRef,
-    };
-  });
+	      current_issue: runManager.getIssue().issueRef,
+	    };
+	  });
 
-  app.get('/api/prompts', async () => {
-    const ids = await listPromptIds(promptsDir);
-    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
-  });
+	  app.get('/api/workflows', async (_req, reply) => {
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    try {
+	      const entries = await fs.readdir(absWorkflowsDir, { withFileTypes: true });
+	      const workflows = entries
+	        .filter((ent) => ent.isFile() && !ent.isSymbolicLink() && ent.name.endsWith('.yaml'))
+	        .map((ent) => ({ name: path.basename(ent.name, '.yaml') }))
+	        .sort((a, b) => a.name.localeCompare(b.name));
+	      return reply.send({ ok: true, workflows, workflows_dir: absWorkflowsDir });
+	    } catch (err) {
+	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+	        return reply.send({ ok: true, workflows: [], workflows_dir: absWorkflowsDir });
+	      }
+	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+	  });
+
+		  app.post('/api/workflows', async (req, reply) => {
+		    const gate = await requireMutatingAllowed(req);
+		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+		    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflows while Jeeves is running.' });
+
+		    const body = getBody(req);
+		    const nameRaw = parseOptionalString(body.name);
+		    if (!nameRaw) return reply.code(400).send({ ok: false, error: 'name is required' });
+
+		    const info = getWorkflowNameParamInfo(nameRaw);
+		    if (!info || !isValidWorkflowName(info.name)) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+		    const fromProvided = body.from !== undefined;
+		    const fromRaw = parseOptionalString(body.from);
+		    if (fromProvided && !fromRaw) return reply.code(400).send({ ok: false, error: 'from must be a string' });
+
+		    const absWorkflowsDir = path.resolve(workflowsDir);
+		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+		    const rel = path.relative(absWorkflowsDir, resolved);
+		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		    }
+
+		    const existing = await fs.stat(resolved).catch(() => null);
+		    if (existing) return reply.code(409).send({ ok: false, error: 'workflow already exists' });
+
+		    try {
+		      const workflow =
+		        fromRaw
+		          ? (() => {
+		              const fromInfo = getWorkflowNameParamInfo(fromRaw);
+		              if (!fromInfo || !isValidWorkflowName(fromInfo.name)) throw new Error('invalid workflow name');
+		              return loadWorkflowByName(fromInfo.name, { workflowsDir }).then((src) => ({ ...src, name: info.name }));
+		            })()
+		          : Promise.resolve(
+		              parseWorkflowObject(
+		                {
+		                  workflow: { name: info.name, version: 1, start: 'start' },
+		                  phases: {
+		                    start: { type: 'execute', prompt: 'Start', transitions: [{ to: 'complete' }] },
+		                    complete: { type: 'terminal', transitions: [] },
+		                  },
+		                },
+		                { sourceName: info.name },
+		              ),
+		            );
+
+		      const resolvedWorkflow = await workflow;
+		      const yaml = toWorkflowYaml(resolvedWorkflow);
+		      await writeTextAtomicNew(resolved, yaml);
+		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(resolvedWorkflow) });
+		    } catch (err) {
+		      if (err && typeof err === 'object' && 'code' in err && err.code === 'EEXIST') {
+		        return reply.code(409).send({ ok: false, error: 'workflow already exists' });
+		      }
+		      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT' && fromRaw) {
+		        return reply.code(404).send({ ok: false, error: 'workflow not found' });
+		      }
+		      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
+
+		  app.get('/api/workflows/:name', async (req, reply) => {
+		    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
+		    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
+		    const info = getWorkflowNameParamInfo(raw);
+		    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+	    const rel = path.relative(absWorkflowsDir, resolved);
+	    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+	      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+	    }
+
+	    // Check for symlink before reading (security: prevent reading arbitrary files via symlink)
+	    const stat = await fs.lstat(resolved).catch(() => null);
+	    if (!stat || stat.isSymbolicLink()) {
+	      return reply.code(404).send({ ok: false, error: 'workflow not found' });
+	    }
+
+	    let yaml: string;
+	    try {
+	      yaml = await fs.readFile(resolved, 'utf-8');
+	    } catch (err) {
+	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+	        return reply.code(404).send({ ok: false, error: 'workflow not found' });
+	      }
+	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+
+	    try {
+	      const workflow = parseWorkflowYaml(yaml, { sourceName: info.name });
+	      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
+	    } catch (err) {
+	      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
+
+		  app.put('/api/workflows/:name', async (req, reply) => {
+		    const gate = await requireMutatingAllowed(req);
+		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+		    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflows while Jeeves is running.' });
+
+		    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
+		    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
+		    const info = getWorkflowNameParamInfo(raw);
+		    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+		    const body = getBody(req);
+		    const rawWorkflow = body.workflow;
+		    if (rawWorkflow === undefined) return reply.code(400).send({ ok: false, error: 'workflow is required' });
+
+		    const absWorkflowsDir = path.resolve(workflowsDir);
+		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+		    const rel = path.relative(absWorkflowsDir, resolved);
+		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		    }
+
+		    // Check for symlink before writing (security: prevent writing to arbitrary files via symlink)
+		    const stat = await fs.lstat(resolved).catch(() => null);
+		    if (stat?.isSymbolicLink()) {
+		      return reply.code(409).send({ ok: false, error: 'Refusing to write to a symlink.' });
+		    }
+
+		    try {
+		      const workflow = parseWorkflowObject(rawWorkflow, { sourceName: info.name });
+		      const yaml = toWorkflowYaml(workflow);
+		      await writeTextAtomic(resolved, yaml);
+		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
+		    } catch (err) {
+		      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
+
+		  app.get('/api/prompts', async () => {
+		    const ids = await listPromptIds(promptsDir);
+		    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
+		  });
 
   app.get('/api/prompts/*', async (req, reply) => {
     const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);
@@ -900,6 +1079,45 @@ export async function buildServer(config: ViewerServerConfig) {
 	    const force = parseOptionalBool(body.force) ?? false;
 	    await runManager.stop({ force });
 	    return reply.send({ ok: true, run: runManager.getStatus() });
+	  });
+
+	  app.post('/api/issue/workflow', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflow while Jeeves is running.' });
+
+	    const issue = runManager.getIssue();
+	    if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
+	    const issueJson = await readIssueJson(issue.stateDir);
+	    if (!issueJson) return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
+
+	    const body = getBody(req);
+	    const workflowRaw = parseOptionalString(body.workflow);
+	    if (!workflowRaw) return reply.code(400).send({ ok: false, error: 'workflow is required' });
+
+	    const info = getWorkflowNameParamInfo(workflowRaw);
+	    if (!info || !isValidWorkflowName(info.name)) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    const workflowPath = path.join(absWorkflowsDir, `${info.name}.yaml`);
+	    const exists = await fs.stat(workflowPath).catch(() => null);
+	    if (!exists?.isFile()) return reply.code(404).send({ ok: false, error: 'workflow not found' });
+
+	    let workflowStart: string;
+	    try {
+	      const workflow = await loadWorkflowByName(info.name, { workflowsDir: absWorkflowsDir });
+	      workflowStart = workflow.start;
+	    } catch (err) {
+	      return reply.code(400).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+
+	    const resetPhase = parseOptionalBool(body.reset_phase) ?? false;
+	    issueJson.workflow = info.name;
+	    if (resetPhase) issueJson.phase = workflowStart;
+
+	    await writeIssueJson(issue.stateDir, issueJson);
+	    hub.broadcast('state', await getStateSnapshot());
+	    return reply.send({ ok: true, workflow: info.name, ...(resetPhase ? { phase: workflowStart } : {}) });
 	  });
 
   app.post('/api/issue/status', async (req, reply) => {

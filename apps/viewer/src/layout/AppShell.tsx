@@ -44,6 +44,7 @@ export function AppShell() {
         <section className="main">
           <div className="tabs">
             <TabLink to="/sdk" label="sdk" />
+            <TabLink to="/workflows" label="workflows" />
             <TabLink to="/create-issue" label="create-issue" />
             <TabLink to="/logs" label="logs" />
             <TabLink to="/viewer-logs" label="viewer-logs" />

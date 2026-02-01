@@ -2,7 +2,11 @@ import { spawn as spawnDefault, type ChildProcessWithoutNullStreams } from 'node
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { WorkflowEngine, getIssueStateDir, getWorktreePath, loadWorkflowByName, parseIssueRef } from '@jeeves/core';
+import { WorkflowEngine, getIssueStateDir, getWorktreePath, loadWorkflowByName, parseIssueRef, getEffectiveModel, validModels, type ModelId } from '@jeeves/core';
+
+function isValidModel(model: unknown): model is ModelId {
+  return typeof model === 'string' && validModels.includes(model as ModelId);
+}
 
 import type { RunStatus } from './types.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
@@ -33,7 +37,7 @@ function mapProvider(value: unknown): 'claude' | 'fake' | 'codex' {
   if (v === 'fake') return 'fake';
   if (v === 'claude' || v === 'claude-agent-sdk' || v === 'claude_agent_sdk') return 'claude';
   if (v === 'codex' || v === 'codex-sdk' || v === 'codex_sdk' || v === 'openai' || v === 'openai-codex') return 'codex';
-  return 'claude';
+  throw new Error(`Invalid provider '${value}'. Valid providers: claude, codex, fake`);
 }
 
 export class RunManager {
@@ -185,7 +189,7 @@ export class RunManager {
     await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
   }
 
-  private async spawnRunner(args: string[], viewerLogPath: string): Promise<number> {
+  private async spawnRunner(args: string[], viewerLogPath: string, options?: { model?: string }): Promise<number> {
     const runnerBin = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');
     if (!(await pathExists(runnerBin))) {
       throw new Error(`Runner binary not found at ${runnerBin}. Run: pnpm --filter @jeeves/runner build`);
@@ -197,8 +201,14 @@ export class RunManager {
     this.broadcast('run', { run: this.status });
 
     await this.appendViewerLog(viewerLogPath, `[RUNNER] ${this.status.command}`);
+    if (options?.model) {
+      await this.appendViewerLog(viewerLogPath, `[RUNNER] model=${options.model}`);
+    }
 
-    const env = { ...process.env, JEEVES_DATA_DIR: this.dataDir };
+    const env: Record<string, string | undefined> = { ...process.env, JEEVES_DATA_DIR: this.dataDir };
+    if (options?.model) {
+      env.JEEVES_MODEL = options.model;
+    }
     const proc = this.spawnImpl(cmd, fullArgs, {
       cwd: this.repoRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -284,6 +294,18 @@ export class RunManager {
 
         const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
         const engine = new WorkflowEngine(workflow);
+        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
+
+        // Compute effective model: phase.model ?? workflow.defaultModel ?? (provider default = undefined)
+        const effectiveModel = getEffectiveModel(workflow, currentPhase);
+
+        // Validate model if specified - fail loudly for invalid models (no silent fallback)
+        if (effectiveModel !== undefined && !isValidModel(effectiveModel)) {
+          const errorMsg = `Invalid model '${effectiveModel}' for phase '${currentPhase}'. Valid models: ${validModels.join(', ')}`;
+          await this.appendViewerLog(viewerLogPath, `[ERROR] ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
+
         if (engine.isTerminal(currentPhase)) {
           await this.appendViewerLog(viewerLogPath, `[COMPLETE] Already in terminal phase: ${currentPhase}`);
           this.status = {
@@ -308,7 +330,7 @@ export class RunManager {
             '--phase',
             currentPhase,
             '--provider',
-            params.provider,
+            effectiveProvider,
             '--workflows-dir',
             this.workflowsDir,
             '--prompts-dir',
@@ -317,6 +339,7 @@ export class RunManager {
             this.issueRef!,
           ],
           viewerLogPath,
+          { model: effectiveModel },
         );
 
         const exitCode = await (async () => {

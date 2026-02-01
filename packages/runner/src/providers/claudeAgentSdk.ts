@@ -83,8 +83,8 @@ function extractResultContent(result: SDKResultMessage): string {
 
 const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   sonnet: 'claude-sonnet-4-5-20250929',
-  opus: 'claude-opus-4-20250514',
-  haiku: 'claude-haiku-3-5-20241022',
+  opus: 'claude-opus-4-5-20251101',
+  haiku: 'claude-haiku-4-5-20251001',
 };
 
 function resolveClaudeModel(modelAlias: string | undefined): string | undefined {

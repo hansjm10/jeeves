@@ -5,31 +5,76 @@
 
 Jeeves is a proof-of-concept, SDK-only agent runner with a real-time viewer. The viewer is the primary interface for init, run control, and prompt editing.
 
-## Repository Structure
-
-```
-jeeves/
-├── apps/
-│   ├── viewer/              # React UI (Vite)
-│   └── viewer-server/       # Node viewer server (Fastify)
-├── packages/
-│   ├── core/                # State model + workflows
-│   ├── runner/              # Runner CLI + SDK integration
-│   └── shared/              # Shared utilities
-├── prompts/                 # Prompt templates (issue.*.md)
-├── scripts/                 # Helper scripts
-├── docs/                    # Documentation
-└── examples/                # Example configurations
-```
-
-## Commands
+## Quickstart
 
 ```bash
+# Install dependencies
+pnpm install
+
 # Start the UI + viewer-server (recommended)
 pnpm dev
 
 # Start only the viewer-server API (no UI)
 pnpm dev:viewer-server
+```
+
+## Quality Commands
+
+Run these before every commit:
+
+```bash
+pnpm lint       # ESLint check across all packages
+pnpm typecheck  # TypeScript type checking
+pnpm test       # Run all tests
+```
+
+## Repository Map
+
+```
+jeeves/
+├── apps/
+│   ├── viewer/              # React UI for run control, logs, SDK events (see apps/viewer/CLAUDE.md for styling)
+│   └── viewer-server/       # Fastify backend: REST API, SSE/WS streaming (see apps/viewer-server/CLAUDE.md)
+├── packages/
+│   ├── core/                # Workflows, issue state, path resolution (see packages/core/CLAUDE.md)
+│   ├── runner/              # SDK integration, provider abstraction (see packages/runner/CLAUDE.md)
+│   └── shared/              # Shared utilities (logging, types)
+├── prompts/                 # Prompt templates (issue.*.md) - edited via viewer
+├── scripts/                 # Helper scripts (setup, dev utilities)
+├── docs/                    # API docs, design docs, audit reports
+└── examples/                # Example workflows and configurations
+```
+
+## Making Changes
+
+### Workflow
+
+1. **Small diffs**: Keep changes focused and reviewable
+2. **Run quality checks**: `pnpm lint && pnpm typecheck && pnpm test`
+3. **Viewer changes**: Run `pnpm dev` and verify key routes (`/sdk`, `/workflows`, `/create-issue`, `/logs`, `/prompts`)
+4. **Commit**: Use conventional commit format (`feat:`, `fix:`, `refactor:`, `docs:`)
+
+### Styling Conventions
+
+For viewer UI changes, follow the design token system documented in **[`apps/viewer/CLAUDE.md`](apps/viewer/CLAUDE.md)**:
+- Use CSS tokens from `apps/viewer/src/styles/tokens.css`
+- No raw hex/rgb values; no `color-mix()`
+- Prefer shared classes from `apps/viewer/src/styles.css`
+
+## Commands Reference
+
+```bash
+# Development
+pnpm dev                # Start UI + viewer-server
+pnpm dev:viewer-server  # Start only the API server
+
+# Quality
+pnpm lint               # ESLint
+pnpm typecheck          # TypeScript
+pnpm test               # All tests
+
+# Build
+pnpm build              # Build all packages
 ```
 
 ## Viewer

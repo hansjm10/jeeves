@@ -1,0 +1,11 @@
+{
+  "name": "@jeeves/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "bin": {
+    "jeeves": "./dist/bin.js"
+  }
+}

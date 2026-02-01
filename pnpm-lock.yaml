@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: ^9.39.2
         version: 9.39.2
+      '@jeeves/cli':
+        specifier: workspace:*
+        version: link:packages/cli
       '@jeeves/runner':
         specifier: workspace:*
         version: link:packages/runner
@@ -97,6 +100,8 @@ importers:
       ws:
         specifier: ^8.18.3
         version: 8.19.0
+
+  packages/cli: {}
 
   packages/core:
     dependencies:

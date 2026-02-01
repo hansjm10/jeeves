@@ -11,10 +11,27 @@ import { useToast } from '../ui/toast/ToastProvider.js';
 const PROVIDERS = ['claude', 'codex', 'fake'] as const;
 type Provider = (typeof PROVIDERS)[number];
 const PROVIDER_STORAGE_KEY = 'jeeves.provider';
+export const ITERATIONS_STORAGE_KEY = 'jeeves.iterations';
 
 function normalizeProvider(value: unknown): Provider {
   if (value === 'claude' || value === 'codex' || value === 'fake') return value;
   return 'claude';
+}
+
+/**
+ * Validates iterations input and returns the parsed value or null if invalid.
+ * Valid: positive integers (1, 2, 3, ...)
+ * Invalid: 0, negative, non-integer (2.5), non-numeric ('abc'), blank/empty
+ * Returns: { value: number } for valid, { error: string } for invalid, null for blank
+ */
+export function validateIterations(input: string): { value: number } | { error: string } | null {
+  const trimmed = input.trim();
+  if (trimmed === '') return null; // blank is valid (omit from request)
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) return { error: 'Must be a number' };
+  if (!Number.isInteger(num)) return { error: 'Must be a whole number' };
+  if (num <= 0) return { error: 'Must be a positive integer' };
+  return { value: num };
 }
 
 export function Sidebar() {
@@ -37,6 +54,12 @@ export function Sidebar() {
   const currentGroup = groupForPhase(currentPhase);
 
   const [provider, setProvider] = useState<Provider>(() => normalizeProvider(localStorage.getItem(PROVIDER_STORAGE_KEY)));
+  const [iterationsInput, setIterationsInput] = useState<string>(() => localStorage.getItem(ITERATIONS_STORAGE_KEY) ?? '');
+
+  // Validate iterations input
+  const iterationsValidation = validateIterations(iterationsInput);
+  const iterationsError = iterationsValidation !== null && 'error' in iterationsValidation ? iterationsValidation.error : null;
+  const validIterations = iterationsValidation !== null && 'value' in iterationsValidation ? iterationsValidation.value : undefined;
 
   const issues = issuesQuery.data?.issues ?? [];
   const issueListEmpty = issuesQuery.isSuccess && issues.length === 0;
@@ -49,6 +72,23 @@ export function Sidebar() {
     setProvider(next);
     try {
       localStorage.setItem(PROVIDER_STORAGE_KEY, next);
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleSetIterations(value: string) {
+    setIterationsInput(value);
+    const validation = validateIterations(value);
+    try {
+      if (validation !== null && 'value' in validation) {
+        // Valid positive integer: store it
+        localStorage.setItem(ITERATIONS_STORAGE_KEY, value.trim());
+      } else if (value.trim() === '') {
+        // Blank: remove from storage
+        localStorage.removeItem(ITERATIONS_STORAGE_KEY);
+      }
+      // Invalid: don't update storage (keep last valid or absent)
     } catch {
       // ignore
     }
@@ -146,11 +186,25 @@ export function Sidebar() {
               </button>
             ))}
           </div>
+          <div className="muted">Iterations (optional)</div>
+          <div className="fieldRow" style={{ marginBottom: 10 }}>
+            <input
+              className={`input ${iterationsError ? 'inputError' : ''}`}
+              type="text"
+              inputMode="numeric"
+              placeholder="default: 10"
+              value={iterationsInput}
+              onChange={(e) => handleSetIterations(e.target.value)}
+              disabled={run?.running ?? false}
+              style={{ flex: 1 }}
+            />
+          </div>
+          {iterationsError ? <div className="errorText" style={{ marginBottom: 10 }}>{iterationsError}</div> : null}
           <div className="row">
             <button
               className="btn primary"
-              onClick={() => void startRun.mutateAsync({ provider }).catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
-              disabled={!activeIssue || (run?.running ?? false) || startRun.isPending}
+              onClick={() => void startRun.mutateAsync({ provider, max_iterations: validIterations }).catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
+              disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || iterationsError !== null}
             >
               {startRun.isPending ? 'Starting…' : 'Start'}
             </button>
@@ -180,6 +234,11 @@ export function Sidebar() {
           <div className="muted" style={{ marginTop: 10 }}>
             current: <span className="mono">{currentPhase ?? '(unknown)'}</span>
           </div>
+          {run ? (
+            <div className="muted" style={{ marginTop: 10 }}>
+              iterations: <span className="mono">{run.current_iteration}/{run.max_iterations}</span>
+            </div>
+          ) : null}
           {run?.last_error ? (
             <div className="errorBox" style={{ marginTop: 10 }}>
               {run.last_error}

@@ -45,7 +45,7 @@ JSON endpoints:
 - `POST /api/github/issues/create`: create a GitHub issue via `gh` (optional init/select/auto-run).
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
-- `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`.
+- `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`. See [`POST /api/run`](#post-apirun) below.
 - `POST /api/run/stop`: stop the current run. Body: `{ "force"?: boolean }`.
 - `POST /api/issue/status`: update current issue phase. Body: `{ "phase": "design_draft" }`.
 - `GET /api/workflow`: returns workflow metadata (phases, current phase, ordering).
@@ -138,6 +138,46 @@ Common `gh` error status mapping:
 
 GitHub host limitation (v1):
 - If issue creation succeeds but `gh` returns an `issue_url` that is not a `github.com/.../issues/<n>` URL, the endpoint returns `200` with `ok: true` and `init: { ok: false, error: "Only github.com issue URLs are supported in v1." }` (when init was requested).
+
+### `POST /api/run`
+
+Start a new run. Optionally select an issue first.
+
+Request body:
+```jsonc
+{
+  "issue_ref": "owner/repo#123",  // optional; select issue before starting
+  "provider": "claude",           // optional; "claude" | "codex" | "fake"
+  "workflow": "default",          // optional; workflow name
+  "max_iterations": 10,           // optional; default 10
+  "inactivity_timeout_sec": 600,  // optional
+  "iteration_timeout_sec": 3600   // optional
+}
+```
+
+**`max_iterations` behavior:**
+- **Default**: 10 iterations when omitted or not a finite number
+- **Minimum**: Values ≤ 0 are clamped to 1
+- **Float handling**: Truncated to integer (e.g., `2.5` → 2 effective iterations)
+
+For UI and CLI usage examples, see [README.md](README.md#overriding-max-iterations).
+
+Success response:
+```jsonc
+{
+  "ok": true,
+  "run": { /* RunStatus */ }
+}
+```
+
+Error response:
+```jsonc
+{
+  "ok": false,
+  "error": "Human-readable error message.",
+  "run": { /* RunStatus */ }
+}
+```
 
 ## Streaming formats
 

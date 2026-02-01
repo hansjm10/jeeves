@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@jeeves/cli": "workspace:*",
     "@jeeves/runner": "workspace:*",
     "@types/node": "^25.1.0",
     "concurrently": "^9.2.1",

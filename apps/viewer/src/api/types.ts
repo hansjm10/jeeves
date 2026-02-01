@@ -72,6 +72,16 @@ export type RunStatus = Readonly<{
 
 export type CreateIssueRunProvider = 'claude' | 'codex' | 'fake';
 
+/**
+ * Input for starting a run via POST /api/run.
+ * - provider: Required provider type
+ * - max_iterations: Optional positive integer; omit to use server default (10)
+ */
+export type StartRunInput = Readonly<{
+  provider: CreateIssueRunProvider;
+  max_iterations?: number;
+}>;
+
 export type CreateIssueInitParams = Readonly<{
   branch?: string;
   workflow?: string;

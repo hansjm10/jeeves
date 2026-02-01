@@ -7,12 +7,14 @@ export type WorkflowGraphSelection =
   | null;
 
 type GraphNode = d3.SimulationNodeDatum & Readonly<{ id: string; label: string }>;
-type GraphLink = d3.SimulationLinkDatum<GraphNode> &
-  Readonly<{
-    id: string;
-    source: string | GraphNode;
-    target: string | GraphNode;
-  }>;
+type GraphLink = d3.SimulationLinkDatum<GraphNode> & {
+  readonly id: string;
+  source: string | GraphNode;
+  target: string | GraphNode;
+  // Added for bidirectional edge rendering
+  isBidirectional?: boolean;
+  curveDirection?: number;
+};
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -63,9 +65,39 @@ export function WorkflowGraph(props: Readonly<{
   const nodesDataRef = useRef<GraphNode[]>([]);
   const linksDataRef = useRef<GraphLink[]>([]);
 
+  // Ref to store the previous graph for structural comparison
+  const prevGraphRef = useRef<{ nodes: GraphNode[]; links: GraphLink[] } | null>(null);
+
   const graph = useMemo(() => {
-    if (!props.workflow) return null;
-    return parseWorkflowGraph(props.workflow);
+    if (!props.workflow) {
+      prevGraphRef.current = null;
+      return null;
+    }
+    const newGraph = parseWorkflowGraph(props.workflow);
+    if (!newGraph) {
+      prevGraphRef.current = null;
+      return null;
+    }
+
+    // Compare with previous graph - only update if structure changed
+    const prev = prevGraphRef.current;
+    if (prev) {
+      // Compare node IDs
+      const prevNodeIds = prev.nodes.map((n) => n.id).join(',');
+      const newNodeIds = newGraph.nodes.map((n) => n.id).join(',');
+      // Compare link signatures
+      const prevLinkSigs = prev.links.map((l) => l.id).join(',');
+      const newLinkSigs = newGraph.links.map((l) => l.id).join(',');
+
+      if (prevNodeIds === newNodeIds && prevLinkSigs === newLinkSigs) {
+        // Structure unchanged, return previous reference to avoid simulation reset
+        return prev;
+      }
+    }
+
+    // Structure changed, update ref and return new graph
+    prevGraphRef.current = newGraph;
+    return newGraph;
   }, [props.workflow]);
 
   // Memoize selection check functions to avoid recreating on every render
@@ -97,21 +129,21 @@ export function WorkflowGraph(props: Readonly<{
       .append('marker')
       .attr('id', 'wf-arrow')
       .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 14)
+      .attr('refX', 10)
       .attr('refY', 0)
       .attr('markerWidth', 8)
       .attr('markerHeight', 8)
       .attr('orient', 'auto')
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
-      .attr('fill', '#4a5668');
+      .attr('fill', '#8b9bb4');
 
     // Arrow marker for selected edges
     defs
       .append('marker')
       .attr('id', 'wf-arrow-selected')
       .attr('viewBox', '0 -5 10 10')
-      .attr('refX', 14)
+      .attr('refX', 10)
       .attr('refY', 0)
       .attr('markerWidth', 8)
       .attr('markerHeight', 8)
@@ -150,24 +182,35 @@ export function WorkflowGraph(props: Readonly<{
       return saved ? { ...n, x: saved.x, y: saved.y } : { ...n };
     });
 
-    const links: GraphLink[] = graph.links.map((l) => ({ ...l }));
+    // Build a set of edges to detect bidirectional pairs
+    const edgeSet = new Set(graph.links.map((l) => `${l.source}→${l.target}`));
+
+    const links: GraphLink[] = graph.links.map((l) => {
+      const from = typeof l.source === 'string' ? l.source : l.source.id;
+      const to = typeof l.target === 'string' ? l.target : l.target.id;
+      const isBidirectional = edgeSet.has(`${to}→${from}`);
+      // Curve direction based on alphabetical order so A→B curves one way, B→A curves the other
+      const curveDirection = from < to ? 1 : -1;
+      return { ...l, isBidirectional, curveDirection };
+    });
 
     // Store data refs for visual update effect
     nodesDataRef.current = nodes;
     linksDataRef.current = links;
 
-    const linksG = viewport.append('g').attr('stroke', '#4a5668').attr('stroke-opacity', 0.85);
+    const linksG = viewport.append('g').attr('stroke', '#6b7a8f').attr('stroke-opacity', 0.85);
     const nodesG = viewport.append('g');
 
     linksGRef.current = linksG;
     nodesGRef.current = nodesG;
 
     const link = linksG
-      .selectAll('line')
+      .selectAll('path')
       .data(links)
-      .join('line')
-      .attr('stroke-width', 1.5)
-      .attr('stroke', '#4a5668')
+      .join('path')
+      .attr('fill', 'none')
+      .attr('stroke-width', 2)
+      .attr('stroke', '#6b7a8f')
       .attr('marker-end', 'url(#wf-arrow)')
       .style('cursor', 'pointer');
 
@@ -200,21 +243,62 @@ export function WorkflowGraph(props: Readonly<{
 
     const simulation = d3
       .forceSimulation<GraphNode>(nodes)
-      .force('link', d3.forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(120))
-      .force('charge', d3.forceManyBody().strength(-400))
+      .force('link', d3.forceLink<GraphNode, GraphLink>(links).id((d) => d.id).distance(180))
+      .force('charge', d3.forceManyBody().strength(-600))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide(34))
+      .force('collide', d3.forceCollide(50))
       .alphaDecay(0.05)
       .velocityDecay(0.4);
 
     simulationRef.current = simulation;
 
+    const nodeRadius = 18;
+
     simulation.on('tick', () => {
-      link
-        .attr('x1', (d) => (typeof d.source === 'string' ? 0 : (d.source.x ?? 0)))
-        .attr('y1', (d) => (typeof d.source === 'string' ? 0 : (d.source.y ?? 0)))
-        .attr('x2', (d) => (typeof d.target === 'string' ? 0 : (d.target.x ?? 0)))
-        .attr('y2', (d) => (typeof d.target === 'string' ? 0 : (d.target.y ?? 0)));
+      link.attr('d', (d) => {
+        const sourceNode = typeof d.source === 'string' ? null : d.source;
+        const targetNode = typeof d.target === 'string' ? null : d.target;
+        if (!sourceNode || !targetNode) return '';
+
+        const sx = sourceNode.x ?? 0;
+        const sy = sourceNode.y ?? 0;
+        const tx = targetNode.x ?? 0;
+        const ty = targetNode.y ?? 0;
+
+        const dx = tx - sx;
+        const dy = ty - sy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist === 0) return '';
+
+        // Unit vector along the edge
+        const ux = dx / dist;
+        const uy = dy / dist;
+        // Perpendicular unit vector
+        const px = -uy;
+        const py = ux;
+
+        if (d.isBidirectional) {
+          // Offset start/end points perpendicular to edge direction
+          const offset = 8 * (d.curveDirection ?? 1);
+          // Start point: on the edge of source node, offset perpendicular
+          const x1 = sx + ux * nodeRadius + px * offset;
+          const y1 = sy + uy * nodeRadius + py * offset;
+          // End point: on the edge of target node, offset perpendicular
+          const x2 = tx - ux * nodeRadius + px * offset;
+          const y2 = ty - uy * nodeRadius + py * offset;
+          // Add slight curve for visual clarity
+          const mx = (x1 + x2) / 2 + px * offset * 0.5;
+          const my = (y1 + y2) / 2 + py * offset * 0.5;
+          return `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
+        } else {
+          // Straight line from edge of source to edge of target
+          const x1 = sx + ux * nodeRadius;
+          const y1 = sy + uy * nodeRadius;
+          const x2 = tx - ux * nodeRadius;
+          const y2 = ty - uy * nodeRadius;
+          return `M${x1},${y1} L${x2},${y2}`;
+        }
+      });
 
       node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
 
@@ -248,17 +332,17 @@ export function WorkflowGraph(props: Readonly<{
 
     // Update link styles
     linksG
-      .selectAll<SVGLineElement, GraphLink>('line')
+      .selectAll<SVGPathElement, GraphLink>('path')
       .data(links)
       .attr('stroke-width', (d) => {
         const from = getLinkEndpointId(d.source);
         const to = getLinkEndpointId(d.target);
-        return isSelectedEdge(from, to) ? 3 : 1.5;
+        return isSelectedEdge(from, to) ? 3.5 : 2;
       })
       .attr('stroke', (d) => {
         const from = getLinkEndpointId(d.source);
         const to = getLinkEndpointId(d.target);
-        return isSelectedEdge(from, to) ? '#63b3ed' : '#4a5668';
+        return isSelectedEdge(from, to) ? '#63b3ed' : '#6b7a8f';
       })
       .attr('marker-end', (d) => {
         const from = getLinkEndpointId(d.source);

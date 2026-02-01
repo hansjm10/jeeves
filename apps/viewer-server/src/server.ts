@@ -6,10 +6,12 @@ import websocket from '@fastify/websocket';
 import {
   listIssueStates,
   loadWorkflowByName,
+  parseWorkflowObject,
   parseWorkflowYaml,
   parseRepoSpec,
   resolveDataDir,
   toRawWorkflowJson,
+  toWorkflowYaml,
 } from '@jeeves/core';
 import Fastify from 'fastify';
 
@@ -588,11 +590,11 @@ export async function buildServer(config: ViewerServerConfig) {
 	    }
 	  });
 
-	  app.get('/api/workflows/:name', async (req, reply) => {
-	    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
-	    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
-	    const info = getWorkflowNameParamInfo(raw);
-	    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		  app.get('/api/workflows/:name', async (req, reply) => {
+		    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
+		    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
+		    const info = getWorkflowNameParamInfo(raw);
+		    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
 
 	    const absWorkflowsDir = path.resolve(workflowsDir);
 	    const resolved = path.resolve(absWorkflowsDir, info.fileName);
@@ -616,14 +618,46 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
 	    } catch (err) {
 	      const mapped = errorToHttp(err);
-	      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
-	    }
-	  });
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
 
-	  app.get('/api/prompts', async () => {
-	    const ids = await listPromptIds(promptsDir);
-	    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
-	  });
+		  app.put('/api/workflows/:name', async (req, reply) => {
+		    const gate = await requireMutatingAllowed(req);
+		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+		    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflows while Jeeves is running.' });
+
+		    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
+		    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
+		    const info = getWorkflowNameParamInfo(raw);
+		    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+		    const body = getBody(req);
+		    const rawWorkflow = body.workflow;
+		    if (rawWorkflow === undefined) return reply.code(400).send({ ok: false, error: 'workflow is required' });
+
+		    const absWorkflowsDir = path.resolve(workflowsDir);
+		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+		    const rel = path.relative(absWorkflowsDir, resolved);
+		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		    }
+
+		    try {
+		      const workflow = parseWorkflowObject(rawWorkflow, { sourceName: info.name });
+		      const yaml = toWorkflowYaml(workflow);
+		      await writeTextAtomic(resolved, yaml);
+		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
+		    } catch (err) {
+		      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
+
+		  app.get('/api/prompts', async () => {
+		    const ids = await listPromptIds(promptsDir);
+		    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
+		  });
 
   app.get('/api/prompts/*', async (req, reply) => {
     const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);

@@ -413,6 +413,127 @@
   text-align: center;
 }
 
+/* Segmented Select for Provider/Model */
+.wf-seg-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wf-seg-option {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--wf-surface-2);
+  border: 1px solid var(--wf-border);
+  border-radius: 8px;
+  color: var(--wf-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+  text-transform: lowercase;
+}
+
+.wf-seg-option:hover:not(:disabled) {
+  background: var(--wf-border);
+  color: var(--wf-text);
+}
+
+.wf-seg-option.selected {
+  background: linear-gradient(135deg, rgba(99, 179, 237, 0.2), rgba(183, 148, 244, 0.2));
+  border-color: rgba(99, 179, 237, 0.6);
+  color: var(--wf-blue);
+}
+
+.wf-seg-option.effective:not(.selected) {
+  border-style: dashed;
+  border-color: var(--wf-text-dim);
+}
+
+.wf-seg-clear {
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid var(--wf-border-subtle);
+  border-radius: 6px;
+  color: var(--wf-text-dim);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.wf-seg-clear:hover:not(:disabled) {
+  border-color: var(--wf-red);
+  color: var(--wf-red);
+}
+
+/* Model tier dots */
+.wf-seg-option[data-tier="fast"]::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wf-green);
+  margin-left: 6px;
+  display: inline-block;
+}
+
+.wf-seg-option[data-tier="balanced"]::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wf-blue);
+  margin-left: 6px;
+  display: inline-block;
+}
+
+.wf-seg-option[data-tier="powerful"]::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wf-purple);
+  margin-left: 6px;
+  display: inline-block;
+}
+
+/* Effective value indicator */
+.wf-effective-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--wf-bg);
+  border: 1px solid var(--wf-border-subtle);
+  border-radius: 6px;
+  font-size: 10px;
+  margin-top: 8px;
+}
+
+.wf-effective-label {
+  color: var(--wf-text-dim);
+}
+
+.wf-effective-value {
+  color: var(--wf-cyan);
+  font-weight: 500;
+}
+
+.wf-effective-inherited {
+  color: var(--wf-text-dim);
+  font-style: italic;
+}
+
+/* Field hint text */
+.wf-field-hint {
+  font-size: 11px;
+  color: var(--wf-text-dim);
+  font-style: italic;
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
   .wf-container {

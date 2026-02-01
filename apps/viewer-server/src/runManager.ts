@@ -17,9 +17,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function hasCompletionPromise(content: string): boolean {
-  return content
-    .split(/\r?\n/)
-    .some((line) => line.trim() === '<promise>COMPLETE</promise>');
+  return content.trim() === '<promise>COMPLETE</promise>';
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

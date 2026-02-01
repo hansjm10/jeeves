@@ -6,8 +6,10 @@ import websocket from '@fastify/websocket';
 import {
   listIssueStates,
   loadWorkflowByName,
+  parseWorkflowYaml,
   parseRepoSpec,
   resolveDataDir,
+  toRawWorkflowJson,
 } from '@jeeves/core';
 import Fastify from 'fastify';
 
@@ -181,6 +183,21 @@ function errorToHttp(err: unknown): { status: number; message: string } {
 
 function normalizePromptId(promptId: string): string {
   return promptId.split('\\').join('/');
+}
+
+function getWorkflowNameParamInfo(raw: string): { name: string; fileName: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('\0')) return null;
+  // Prevent path traversal or directory separators.
+  if (trimmed.includes('..') || trimmed.includes('/') || trimmed.includes('\\')) return null;
+
+  if (trimmed.endsWith('.yaml')) {
+    const name = trimmed.slice(0, -'.yaml'.length);
+    if (!name) return null;
+    return { name, fileName: trimmed };
+  }
+  return { name: trimmed, fileName: `${trimmed}.yaml` };
 }
 
 function isSafePromptId(promptId: string): boolean {
@@ -568,6 +585,38 @@ export async function buildServer(config: ViewerServerConfig) {
 	        return reply.send({ ok: true, workflows: [], workflows_dir: absWorkflowsDir });
 	      }
 	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+	  });
+
+	  app.get('/api/workflows/:name', async (req, reply) => {
+	    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);
+	    if (!raw) return reply.code(400).send({ ok: false, error: 'name is required' });
+	    const info = getWorkflowNameParamInfo(raw);
+	    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+	    const rel = path.relative(absWorkflowsDir, resolved);
+	    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+	      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+	    }
+
+	    let yaml: string;
+	    try {
+	      yaml = await fs.readFile(resolved, 'utf-8');
+	    } catch (err) {
+	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
+	        return reply.code(404).send({ ok: false, error: 'workflow not found' });
+	      }
+	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+
+	    try {
+	      const workflow = parseWorkflowYaml(yaml, { sourceName: info.name });
+	      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
+	    } catch (err) {
+	      const mapped = errorToHttp(err);
+	      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
 	    }
 	  });
 

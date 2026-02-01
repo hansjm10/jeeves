@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
 
-import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
+import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
 import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
@@ -222,6 +222,82 @@ describe('viewer-server', () => {
       workflows: [{ name: 'a' }, { name: 'b' }],
       workflows_dir: path.resolve(workflowsDir),
     });
+
+    await app.close();
+  });
+
+  it('gets workflow yaml and a structured workflow payload', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-get-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-get-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: a',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'a.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/a' });
+    expect(res.statusCode).toBe(200);
+    const expected = toRawWorkflowJson(parseWorkflowYaml(yaml, { sourceName: 'a' }));
+    expect(res.json()).toEqual({ ok: true, name: 'a', yaml, workflow: expected });
+
+    await app.close();
+  });
+
+  it('returns 404 for unknown workflows', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-missing-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-missing-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/does-not-exist' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'workflow not found' });
+
+    await app.close();
+  });
+
+  it('validates workflow name to prevent traversal', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/workflows/a..b' });
+    expect(res.statusCode).toBe(400);
 
     await app.close();
   });

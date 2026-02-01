@@ -6,7 +6,7 @@
   /* JSON syntax highlighting (page-specific) */
   --json-key: var(--color-accent-purple);
   --json-string: var(--color-accent-green);
-  --json-number: #f6ad55;
+  --json-number: var(--color-accent-amber);
   --json-bool: var(--color-accent-cyan);
   --json-null: var(--color-text-muted);
 
@@ -17,7 +17,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   overflow: hidden;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 /* Header */
@@ -373,6 +373,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-sm);
   line-height: 1.6;
   overflow-x: auto;
@@ -709,7 +710,7 @@
 .sdk-timeline-session-id {
   color: var(--color-text-dim);
   font-size: var(--font-size-ui-xs);
-  font-family: inherit;
+  font-family: var(--font-mono);
 }
 
 .sdk-timeline-session-time {
@@ -890,6 +891,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-xs);
   line-height: 1.6;
   overflow-x: auto;
@@ -918,6 +920,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
 }
 
 .sdk-bash-prompt {
@@ -955,6 +958,7 @@
 }
 
 .sdk-file-path code {
+  font-family: var(--font-mono);
   color: var(--color-accent-cyan);
   word-break: break-all;
 }
@@ -978,6 +982,7 @@
 
 .sdk-content-preview pre {
   margin: 0;
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-xs);
   color: var(--color-text-muted);
   white-space: pre-wrap;
@@ -993,6 +998,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
 }
 
 .sdk-glob-icon {
@@ -1024,6 +1030,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
 }
 
 .sdk-grep-options {
@@ -1096,6 +1103,7 @@
 .sdk-diff-old pre,
 .sdk-diff-new pre {
   margin: 0;
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-xs);
   color: var(--color-text-muted);
   white-space: pre-wrap;
@@ -1152,6 +1160,7 @@
 
 .sdk-task-prompt pre {
   margin: 0;
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-xs);
   color: var(--color-text-dim);
   white-space: pre-wrap;
@@ -1171,6 +1180,7 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: var(--font-size-ui-xs);
   line-height: 1.5;
   overflow-x: auto;

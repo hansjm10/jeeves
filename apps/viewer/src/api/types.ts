@@ -32,6 +32,27 @@ export type WorkflowResponse = Readonly<{
   phase_order: string[];
 }>;
 
+export type WorkflowListItem = Readonly<{ name: string }>;
+
+export type WorkflowListResponse = Readonly<{
+  ok: true;
+  workflows: WorkflowListItem[];
+  workflows_dir: string;
+}>;
+
+export type WorkflowGetResponse = Readonly<{
+  ok: true;
+  name: string;
+  yaml: string;
+  workflow: Record<string, unknown>;
+}>;
+
+export type WorkflowSaveRequest = Readonly<{ workflow: unknown }>;
+export type WorkflowCreateRequest = Readonly<{ name: string; from?: string }>;
+
+export type IssueWorkflowSelectRequest = Readonly<{ workflow: string; reset_phase?: boolean }>;
+export type IssueWorkflowSelectResponse = Readonly<{ ok: true; workflow: string; phase?: string }>;
+
 export type RunStatus = Readonly<{
   running: boolean;
   pid: number | null;

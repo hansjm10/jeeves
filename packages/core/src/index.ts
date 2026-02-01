@@ -22,10 +22,18 @@ export {
 
 export {
   getEffectiveModel,
+  claudeThinkingBudgets,
+  codexModelsWithReasoningEffort,
+  codexReasoningEfforts,
+  isValidClaudeThinkingBudget,
+  isValidCodexReasoningEffort,
+  supportsCodexReasoningEffort,
   phaseTypes,
   validModels,
   WorkflowValidationError,
+  type ClaudeThinkingBudgetId,
   type ModelId,
+  type CodexReasoningEffortId,
   type Phase,
   type PhaseType,
   type Transition,

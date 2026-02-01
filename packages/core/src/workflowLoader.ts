@@ -4,7 +4,21 @@ import path from 'node:path';
 import { z } from 'zod';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
-import { phaseTypes, validModels, type Phase, type PhaseType, type Transition, type Workflow, WorkflowValidationError } from './workflow.js';
+import {
+  claudeModels,
+  isValidClaudeThinkingBudget,
+  isValidCodexReasoningEffort,
+  phaseTypes,
+  supportsCodexReasoningEffort,
+  validModels,
+  type ClaudeThinkingBudgetId,
+  type CodexReasoningEffortId,
+  type Phase,
+  type PhaseType,
+  type Transition,
+  type Workflow,
+  WorkflowValidationError,
+} from './workflow.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -24,6 +38,26 @@ function validateModel(value: unknown, context: string): void {
   const lowered = value.toLowerCase();
   if ((validModels as readonly string[]).includes(lowered)) return;
   throw new WorkflowValidationError(`${context}: invalid model '${value}'. must be one of: ${validModels.join(', ')}`);
+}
+
+function parseCodexReasoningEffort(value: unknown, context: string): CodexReasoningEffortId | undefined {
+  if (value === undefined) return undefined;
+  if (!isValidCodexReasoningEffort(value)) {
+    throw new WorkflowValidationError(
+      `${context}: invalid reasoning_effort '${String(value)}'. must be one of: minimal, low, medium, high, xhigh`,
+    );
+  }
+  return value;
+}
+
+function parseClaudeThinkingBudget(value: unknown, context: string): ClaudeThinkingBudgetId | undefined {
+  if (value === undefined) return undefined;
+  if (!isValidClaudeThinkingBudget(value)) {
+    throw new WorkflowValidationError(
+      `${context}: invalid thinking_budget '${String(value)}'. must be one of: none, low, medium, high, max`,
+    );
+  }
+  return value;
 }
 
 const transitionSchema = z
@@ -53,6 +87,8 @@ const rawPhaseSchema = z
     status_mapping: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
     output_file: z.string().optional(),
     model: z.unknown().optional(),
+    reasoning_effort: z.unknown().optional(),
+    thinking_budget: z.unknown().optional(),
   })
   .passthrough();
 
@@ -65,6 +101,8 @@ const rawWorkflowSchema = z
         start: z.string().optional().default('design_draft'),
         default_provider: z.unknown().optional(),
         default_model: z.unknown().optional(),
+        default_reasoning_effort: z.unknown().optional(),
+        default_thinking_budget: z.unknown().optional(),
       })
       .passthrough()
       .optional()
@@ -75,11 +113,21 @@ const rawWorkflowSchema = z
 
 function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: string): Workflow {
   validateModel(raw.workflow.default_model, 'Workflow default_model');
+  const defaultReasoningEffort = parseCodexReasoningEffort(
+    raw.workflow.default_reasoning_effort,
+    'Workflow default_reasoning_effort',
+  );
+  const defaultThinkingBudget = parseClaudeThinkingBudget(
+    raw.workflow.default_thinking_budget,
+    'Workflow default_thinking_budget',
+  );
 
   const phases: Record<string, Phase> = {};
   for (const [phaseName, phaseRaw] of Object.entries(raw.phases)) {
     const phaseType = parsePhaseType(phaseRaw.type, `Phase '${phaseName}'`);
     validateModel(phaseRaw.model, `Phase '${phaseName}' model`);
+    const reasoningEffort = parseCodexReasoningEffort(phaseRaw.reasoning_effort, `Phase '${phaseName}' reasoning_effort`);
+    const thinkingBudget = parseClaudeThinkingBudget(phaseRaw.thinking_budget, `Phase '${phaseName}' thinking_budget`);
 
     const transitions = [...phaseRaw.transitions].sort((a, b) => a.priority - b.priority);
     phases[phaseName] = {
@@ -94,6 +142,8 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
       statusMapping: phaseRaw.status_mapping,
       outputFile: phaseRaw.output_file,
       model: typeof phaseRaw.model === 'string' ? phaseRaw.model : undefined,
+      reasoningEffort,
+      thinkingBudget,
     };
   }
 
@@ -105,6 +155,8 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
     phases,
     defaultProvider: typeof raw.workflow.default_provider === 'string' ? raw.workflow.default_provider : undefined,
     defaultModel: typeof raw.workflow.default_model === 'string' ? raw.workflow.default_model : undefined,
+    defaultReasoningEffort,
+    defaultThinkingBudget,
   };
 
   validateWorkflow(workflow);
@@ -112,6 +164,23 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
 }
 
 function validateWorkflow(workflow: Workflow): void {
+  const validateReasoningEffortSupport = (effort: CodexReasoningEffortId, model: string, context: string) => {
+    if (!supportsCodexReasoningEffort(model)) {
+      throw new WorkflowValidationError(
+        `${context}: reasoning_effort requires a Codex model that supports reasoning effort (got '${model}')`,
+      );
+    }
+    if (effort === 'xhigh' && model === 'gpt-5.1-codex-max') {
+      throw new WorkflowValidationError(`${context}: reasoning_effort 'xhigh' is not supported for model 'gpt-5.1-codex-max'`);
+    }
+  };
+
+  const validateThinkingBudgetSupport = (model: string, context: string) => {
+    if (!(claudeModels as readonly string[]).includes(model)) {
+      throw new WorkflowValidationError(`${context}: thinking_budget requires a Claude model (got '${model}')`);
+    }
+  };
+
   if (!workflow.phases[workflow.start]) {
     throw new WorkflowValidationError(`Start phase '${workflow.start}' not found in workflow phases`);
   }
@@ -132,6 +201,80 @@ function validateWorkflow(workflow: Workflow): void {
     }
     if (phase.type === 'script' && !phase.command) {
       throw new WorkflowValidationError(`Script phase '${phaseName}' requires a command`);
+    }
+  }
+
+  if (workflow.defaultReasoningEffort) {
+    const provider = workflow.defaultProvider;
+    if (!provider) {
+      throw new WorkflowValidationError('Workflow default_reasoning_effort requires workflow.default_provider to be set');
+    }
+    if (provider !== 'codex') {
+      throw new WorkflowValidationError(
+        `Workflow default_reasoning_effort requires workflow.default_provider='codex' (got '${provider}')`,
+      );
+    }
+    const model = workflow.defaultModel;
+    if (!model) {
+      throw new WorkflowValidationError('Workflow default_reasoning_effort requires workflow.default_model to be set');
+    }
+    validateReasoningEffortSupport(workflow.defaultReasoningEffort, model, 'Workflow default_reasoning_effort');
+  }
+
+  if (workflow.defaultThinkingBudget) {
+    const provider = workflow.defaultProvider;
+    if (!provider) {
+      throw new WorkflowValidationError('Workflow default_thinking_budget requires workflow.default_provider to be set');
+    }
+    if (provider !== 'claude') {
+      throw new WorkflowValidationError(
+        `Workflow default_thinking_budget requires workflow.default_provider='claude' (got '${provider}')`,
+      );
+    }
+    const model = workflow.defaultModel;
+    if (!model) {
+      throw new WorkflowValidationError('Workflow default_thinking_budget requires workflow.default_model to be set');
+    }
+    validateThinkingBudgetSupport(model, 'Workflow default_thinking_budget');
+  }
+
+  for (const [phaseName, phase] of Object.entries(workflow.phases)) {
+    if (phase.reasoningEffort) {
+      const provider = phase.provider ?? workflow.defaultProvider;
+      if (!provider) {
+        throw new WorkflowValidationError(
+          `Phase '${phaseName}' reasoning_effort requires an effective provider (phase.provider or workflow.default_provider)`,
+        );
+      }
+      if (provider !== 'codex') {
+        throw new WorkflowValidationError(`Phase '${phaseName}' reasoning_effort requires effective provider 'codex' (got '${provider}')`);
+      }
+      const model = phase.model ?? workflow.defaultModel;
+      if (!model) {
+        throw new WorkflowValidationError(
+          `Phase '${phaseName}' reasoning_effort requires an effective model (phase.model or workflow.default_model)`,
+        );
+      }
+      validateReasoningEffortSupport(phase.reasoningEffort, model, `Phase '${phaseName}' reasoning_effort`);
+    }
+
+    if (phase.thinkingBudget) {
+      const provider = phase.provider ?? workflow.defaultProvider;
+      if (!provider) {
+        throw new WorkflowValidationError(
+          `Phase '${phaseName}' thinking_budget requires an effective provider (phase.provider or workflow.default_provider)`,
+        );
+      }
+      if (provider !== 'claude') {
+        throw new WorkflowValidationError(`Phase '${phaseName}' thinking_budget requires effective provider 'claude' (got '${provider}')`);
+      }
+      const model = phase.model ?? workflow.defaultModel;
+      if (!model) {
+        throw new WorkflowValidationError(
+          `Phase '${phaseName}' thinking_budget requires an effective model (phase.model or workflow.default_model)`,
+        );
+      }
+      validateThinkingBudgetSupport(model, `Phase '${phaseName}' thinking_budget`);
     }
   }
 }
@@ -194,6 +337,8 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
       phaseJson.allowed_writes = [...phase.allowedWrites];
     }
     if (phase.model) phaseJson.model = phase.model;
+    if (phase.reasoningEffort) phaseJson.reasoning_effort = phase.reasoningEffort;
+    if (phase.thinkingBudget) phaseJson.thinking_budget = phase.thinkingBudget;
     if (phase.outputFile) phaseJson.output_file = phase.outputFile;
     if (phase.statusMapping) phaseJson.status_mapping = phase.statusMapping;
 
@@ -207,6 +352,8 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
   };
   if (workflow.defaultProvider) workflowJson.default_provider = workflow.defaultProvider;
   if (workflow.defaultModel) workflowJson.default_model = workflow.defaultModel;
+  if (workflow.defaultReasoningEffort) workflowJson.default_reasoning_effort = workflow.defaultReasoningEffort;
+  if (workflow.defaultThinkingBudget) workflowJson.default_thinking_budget = workflow.defaultThinkingBudget;
 
   return { workflow: workflowJson, phases };
 }
@@ -221,6 +368,8 @@ export function toWorkflowYaml(workflow: Workflow): string {
   };
   if (workflow.defaultProvider) workflowJson.default_provider = workflow.defaultProvider;
   if (workflow.defaultModel) workflowJson.default_model = workflow.defaultModel;
+  if (workflow.defaultReasoningEffort) workflowJson.default_reasoning_effort = workflow.defaultReasoningEffort;
+  if (workflow.defaultThinkingBudget) workflowJson.default_thinking_budget = workflow.defaultThinkingBudget;
 
   const phasesJson: Record<string, UnknownRecord> = {};
   const phaseNames = Object.keys(workflow.phases).sort((a, b) => a.localeCompare(b));
@@ -254,6 +403,8 @@ export function toWorkflowYaml(workflow: Workflow): string {
     if (phase.statusMapping) phaseJson.status_mapping = phase.statusMapping;
     if (phase.outputFile) phaseJson.output_file = phase.outputFile;
     if (phase.model) phaseJson.model = phase.model;
+    if (phase.reasoningEffort) phaseJson.reasoning_effort = phase.reasoningEffort;
+    if (phase.thinkingBudget) phaseJson.thinking_budget = phase.thinkingBudget;
 
     phasesJson[phaseName] = phaseJson;
   }

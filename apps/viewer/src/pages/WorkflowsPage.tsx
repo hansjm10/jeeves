@@ -492,6 +492,9 @@ export function WorkflowsPage() {
                           // Clear model if switching providers (model may not be valid for new provider)
                           if (workflowSection?.default_provider !== p) {
                             setWorkflowField('default_model', undefined);
+                            // Clear model-dependent fields when switching providers (avoids hidden invalid state)
+                            setWorkflowField('default_reasoning_effort', undefined);
+                            setWorkflowField('default_thinking_budget', undefined);
                           }
                         }}
                         title={PROVIDER_CONFIG[p].hint}
@@ -503,7 +506,12 @@ export function WorkflowsPage() {
                       <button
                         type="button"
                         className="wf-seg-clear"
-                        onClick={() => setWorkflowField('default_provider', undefined)}
+                        onClick={() => {
+                          setWorkflowField('default_provider', undefined);
+                          setWorkflowField('default_model', undefined);
+                          setWorkflowField('default_reasoning_effort', undefined);
+                          setWorkflowField('default_thinking_budget', undefined);
+                        }}
                         title="Clear"
                       >
                         ×
@@ -530,7 +538,24 @@ export function WorkflowsPage() {
                               key={m}
                               type="button"
                               className={`wf-seg-option ${workflowSection?.default_model === m ? 'selected' : ''}`}
-                              onClick={() => setWorkflowField('default_model', m)}
+                              onClick={() => {
+                                setWorkflowField('default_model', m);
+
+                                // Clear invalid model-dependent selections when switching models
+                                if (!info?.reasoningEfforts) {
+                                  setWorkflowField('default_reasoning_effort', undefined);
+                                } else if (typeof workflowSection?.default_reasoning_effort === 'string') {
+                                  const ok = info.reasoningEfforts.some((r) => r.id === workflowSection.default_reasoning_effort);
+                                  if (!ok) setWorkflowField('default_reasoning_effort', undefined);
+                                }
+
+                                if (!info?.thinkingBudgets) {
+                                  setWorkflowField('default_thinking_budget', undefined);
+                                } else if (typeof workflowSection?.default_thinking_budget === 'string') {
+                                  const ok = info.thinkingBudgets.some((t) => t.id === workflowSection.default_thinking_budget);
+                                  if (!ok) setWorkflowField('default_thinking_budget', undefined);
+                                }
+                              }}
                               title={info?.hint}
                               data-tier={info?.tier}
                             >
@@ -542,7 +567,11 @@ export function WorkflowsPage() {
                           <button
                             type="button"
                             className="wf-seg-clear"
-                            onClick={() => setWorkflowField('default_model', undefined)}
+                            onClick={() => {
+                              setWorkflowField('default_model', undefined);
+                              setWorkflowField('default_reasoning_effort', undefined);
+                              setWorkflowField('default_thinking_budget', undefined);
+                            }}
                             title="Clear"
                           >
                             ×
@@ -719,10 +748,18 @@ export function WorkflowsPage() {
                             type="button"
                             className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
                             onClick={() => {
+                              const prevEffectiveProvider = typeof selectedPhase?.provider === 'string'
+                                ? selectedPhase.provider
+                                : typeof workflowSection?.default_provider === 'string'
+                                  ? workflowSection.default_provider
+                                  : undefined;
                               setPhaseField(selection.id, 'provider', p);
                               // Clear model if switching providers (model may not be valid for new provider)
-                              if (selectedPhase?.provider !== p) {
+                              if (prevEffectiveProvider !== p) {
                                 setPhaseField(selection.id, 'model', undefined);
+                                // Clear model-dependent fields when switching providers (avoids hidden invalid state)
+                                setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                setPhaseField(selection.id, 'thinking_budget', undefined);
                               }
                             }}
                             title={PROVIDER_CONFIG[p].hint}
@@ -774,7 +811,24 @@ export function WorkflowsPage() {
                                   key={m}
                                   type="button"
                                   className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
-                                  onClick={() => setPhaseField(selection.id, 'model', m)}
+                                  onClick={() => {
+                                    setPhaseField(selection.id, 'model', m);
+
+                                    // Clear invalid model-dependent selections when switching models
+                                    if (!info?.reasoningEfforts) {
+                                      setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                    } else if (typeof selectedPhase?.reasoning_effort === 'string') {
+                                      const ok = info.reasoningEfforts.some((r) => r.id === selectedPhase.reasoning_effort);
+                                      if (!ok) setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                    }
+
+                                    if (!info?.thinkingBudgets) {
+                                      setPhaseField(selection.id, 'thinking_budget', undefined);
+                                    } else if (typeof selectedPhase?.thinking_budget === 'string') {
+                                      const ok = info.thinkingBudgets.some((t) => t.id === selectedPhase.thinking_budget);
+                                      if (!ok) setPhaseField(selection.id, 'thinking_budget', undefined);
+                                    }
+                                  }}
                                   title={info?.hint}
                                   data-tier={info?.tier}
                                 >

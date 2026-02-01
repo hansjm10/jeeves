@@ -170,6 +170,7 @@ describe('CLI: jeeves run', () => {
       expect(output).toContain('--iterations');
       expect(output).toContain('--server');
       expect(output).toContain('--help');
+      expect(output).toContain('--version');
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -179,6 +180,29 @@ describe('CLI: jeeves run', () => {
       expect(consoleLogSpy).toHaveBeenCalled();
       const output = consoleLogSpy.mock.calls[0]?.[0] as string;
       expect(output).toContain('Usage:');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('--version flag', () => {
+    it('prints version and exits successfully', async () => {
+      await main(['--version']);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith('jeeves 0.0.0');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('-v short flag prints version', async () => {
+      await main(['-v']);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith('jeeves 0.0.0');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('--version takes precedence over other arguments', async () => {
+      await main(['run', '--version', '--iterations', '5']);
+
+      expect(consoleLogSpy).toHaveBeenCalledWith('jeeves 0.0.0');
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });

@@ -3,6 +3,7 @@
 import { parseArgs } from 'node:util';
 
 const DEFAULT_SERVER = 'http://127.0.0.1:8081';
+const VERSION = '0.0.0';
 
 interface RunOptions {
   server: string;
@@ -21,6 +22,7 @@ function usage(): string {
     '  --iterations <n>   Maximum iterations for the run (positive integer)',
     '  --server <url>     Viewer-server URL (default: http://127.0.0.1:8081)',
     '  --help             Show this help message',
+    '  --version, -v      Show version number',
     '',
   ].join('\n');
 }
@@ -71,9 +73,15 @@ export async function main(argv: string[]): Promise<void> {
       iterations: { type: 'string' },
       server: { type: 'string' },
       help: { type: 'boolean' },
+      version: { type: 'boolean', short: 'v' },
     },
     allowPositionals: true,
   });
+
+  if (values.version) {
+    console.log(`jeeves ${VERSION}`);
+    return;
+  }
 
   if (values.help) {
     console.log(usage());

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useWorkflowByNameQuery, useWorkflowsQuery } from '../api/workflows.js';
+import { WorkflowGraph, type WorkflowGraphSelection } from '../features/workflows/WorkflowGraph.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 
 export function WorkflowsPage() {
@@ -16,7 +17,11 @@ export function WorkflowsPage() {
       ? stream.state.issue_json.workflow
       : null;
 
+  const currentIssuePhase =
+    stream.state?.issue_json && typeof stream.state.issue_json.phase === 'string' ? stream.state.issue_json.phase : null;
+
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selection, setSelection] = useState<WorkflowGraphSelection>(null);
 
   useEffect(() => {
     if (!issueWorkflow) return;
@@ -30,6 +35,11 @@ export function WorkflowsPage() {
   }, [selectedName, workflows]);
 
   const selectedWorkflowQuery = useWorkflowByNameQuery(baseUrl, selectedName);
+  const selectedRawWorkflow = selectedWorkflowQuery.data?.workflow ?? null;
+
+  useEffect(() => {
+    setSelection(null);
+  }, [selectedName]);
 
   return (
     <div
@@ -91,7 +101,14 @@ export function WorkflowsPage() {
         style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, minHeight: 240 }}
       >
         <h2 style={{ margin: 0, fontSize: 14 }}>Graph</h2>
-        <div style={{ marginTop: 8, height: 360, border: '1px dashed #bbb', borderRadius: 6 }} />
+        <div style={{ marginTop: 8, height: 520 }}>
+          <WorkflowGraph
+            workflow={selectedRawWorkflow}
+            currentPhaseId={currentIssuePhase}
+            selection={selection}
+            onSelectionChange={setSelection}
+          />
+        </div>
       </section>
       <section
         aria-label="workflow inspector"
@@ -100,6 +117,14 @@ export function WorkflowsPage() {
         <h2 style={{ margin: 0, fontSize: 14 }}>Inspector</h2>
         <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
           Selected: {selectedName ? selectedName : '(none)'}
+        </div>
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+          Selection:{' '}
+          {selection?.kind === 'node'
+            ? `phase ${selection.id}`
+            : selection?.kind === 'edge'
+              ? `transition ${selection.from} → ${selection.to}`
+              : '(none)'}
         </div>
         {selectedWorkflowQuery.isLoading ? (
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>Loading…</div>

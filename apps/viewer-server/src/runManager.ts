@@ -33,7 +33,7 @@ function mapProvider(value: unknown): 'claude' | 'fake' | 'codex' {
   if (v === 'fake') return 'fake';
   if (v === 'claude' || v === 'claude-agent-sdk' || v === 'claude_agent_sdk') return 'claude';
   if (v === 'codex' || v === 'codex-sdk' || v === 'codex_sdk' || v === 'openai' || v === 'openai-codex') return 'codex';
-  return 'claude';
+  throw new Error(`Invalid provider '${value}'. Valid providers: claude, codex, fake`);
 }
 
 export class RunManager {

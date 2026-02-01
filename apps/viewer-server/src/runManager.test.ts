@@ -657,6 +657,83 @@ describe('RunManager', () => {
     expect(observedModel).toBeUndefined();
   });
 
+  it('fails loudly with invalid provider (no silent fallback)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-provider-invalid';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    provider: unknown-provider-xyz',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        auto: true',
+        '',
+        '  complete:',
+        '    type: terminal',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 11;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/11', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let spawnCalls = 0;
+    const spawn = (() => {
+      spawnCalls += 1;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // Runner should NOT be spawned because provider validation should fail first
+    expect(spawnCalls).toBe(0);
+    // An error should be recorded
+    expect(rm.getStatus().last_error).toContain('Invalid provider');
+    expect(rm.getStatus().last_error).toContain('unknown-provider-xyz');
+  });
+
   it('fails loudly with invalid model (no silent fallback)', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');

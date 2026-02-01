@@ -741,79 +741,90 @@ describe('RunManager', () => {
   });
 
   it('does not set JEEVES_MODEL when no model is specified (provider default)', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-data-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-');
-    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
-    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+    // Isolate this test from host environment by saving and removing JEEVES_MODEL
+    const savedJeevesModel = process.env.JEEVES_MODEL;
+    delete process.env.JEEVES_MODEL;
 
-    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
-    const promptsDir = path.join(process.cwd(), 'prompts');
+    try {
+      const dataDir = await makeTempDir('jeeves-vs-data-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-');
+      await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+      await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
 
-    const workflowName = 'fixture-model';
-    await writeWorkflowYaml(
-      workflowsDir,
-      workflowName,
-      [
-        'workflow:',
-        `  name: ${workflowName}`,
-        '  version: 2',
-        '  start: hello',
-        '',
-        'phases:',
-        '  hello:',
-        '    type: execute',
-        '    prompt: fixtures/trivial.md',
-        '    transitions:',
-        '      - to: complete',
-        '        auto: true',
-        '',
-        '  complete:',
-        '    type: terminal',
-        '',
-      ].join('\n'),
-    );
+      const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+      const promptsDir = path.join(process.cwd(), 'prompts');
 
-    const owner = 'o';
-    const repo = 'r';
-    const issueNumber = 9;
-    const issueRef = `${owner}/${repo}#${issueNumber}`;
+      const workflowName = 'fixture-model';
+      await writeWorkflowYaml(
+        workflowsDir,
+        workflowName,
+        [
+          'workflow:',
+          `  name: ${workflowName}`,
+          '  version: 2',
+          '  start: hello',
+          '',
+          'phases:',
+          '  hello:',
+          '    type: execute',
+          '    prompt: fixtures/trivial.md',
+          '    transitions:',
+          '      - to: complete',
+          '        auto: true',
+          '',
+          '  complete:',
+          '    type: terminal',
+          '',
+        ].join('\n'),
+      );
 
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/9', notes: '' }, null, 2) +
-        '\n',
-      'utf-8',
-    );
+      const owner = 'o';
+      const repo = 'r';
+      const issueNumber = 9;
+      const issueRef = `${owner}/${repo}#${issueNumber}`;
 
-    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(workDir, { recursive: true });
+      const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: 'issue/9', notes: '' }, null, 2) +
+          '\n',
+        'utf-8',
+      );
 
-    let observedModel: string | undefined;
-    const spawn = ((cmd: unknown, args: unknown, options: unknown) => {
-      void cmd;
-      void args;
-      const o = options as { env?: Record<string, string> } | undefined;
-      observedModel = o?.env?.JEEVES_MODEL;
-      return makeFakeChild(0);
-    }) as unknown as typeof import('node:child_process').spawn;
+      const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(workDir, { recursive: true });
 
-    const rm = new RunManager({
-      promptsDir,
-      workflowsDir,
-      repoRoot,
-      dataDir,
-      spawn,
-      broadcast: () => void 0,
-    });
+      let observedModel: string | undefined;
+      const spawn = ((cmd: unknown, args: unknown, options: unknown) => {
+        void cmd;
+        void args;
+        const o = options as { env?: Record<string, string> } | undefined;
+        observedModel = o?.env?.JEEVES_MODEL;
+        return makeFakeChild(0);
+      }) as unknown as typeof import('node:child_process').spawn;
 
-    await rm.setIssue(issueRef);
-    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
-    await waitFor(() => rm.getStatus().running === false);
+      const rm = new RunManager({
+        promptsDir,
+        workflowsDir,
+        repoRoot,
+        dataDir,
+        spawn,
+        broadcast: () => void 0,
+      });
 
-    // No model specified, so JEEVES_MODEL should be undefined (provider uses its default)
-    expect(observedModel).toBeUndefined();
+      await rm.setIssue(issueRef);
+      await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+      await waitFor(() => rm.getStatus().running === false);
+
+      // No model specified, so JEEVES_MODEL should be undefined (provider uses its default)
+      expect(observedModel).toBeUndefined();
+    } finally {
+      // Restore the original env value
+      if (savedJeevesModel !== undefined) {
+        process.env.JEEVES_MODEL = savedJeevesModel;
+      }
+    }
   });
 
   it('fails loudly with invalid provider (no silent fallback)', async () => {
@@ -1017,6 +1028,72 @@ describe('RunManager max_iterations handling', () => {
     return { rm, getSpawnCallCount: () => spawnCallCount };
   }
 
+  // Helper for testing multi-iteration scenarios (no auto-transition)
+  // This workflow stays in 'hello' phase (no transitions), so the loop runs until max_iterations
+  async function setupMultiIterationTestRun(issueNumber: number) {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-no-auto-transition';
+    // This workflow has no transitions, so phase never changes and loop runs until max_iterations
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: hello',
+        '',
+        'phases:',
+        '  hello:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    # No transitions - stays in this phase until max_iterations reached',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: workflowName, branch: `issue/${issueNumber}`, notes: '' }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let spawnCallCount = 0;
+    const spawn = (() => {
+      spawnCallCount += 1;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    return { rm, getSpawnCallCount: () => spawnCallCount };
+  }
+
   it('defaults max_iterations to 10 when omitted', async () => {
     const { rm } = await setupTestRun(100);
 
@@ -1089,7 +1166,7 @@ describe('RunManager max_iterations handling', () => {
   });
 
   it('uses floor for float max_iterations (2.5 becomes 2 effective iterations)', async () => {
-    const { rm, getSpawnCallCount } = await setupTestRun(107);
+    const { rm, getSpawnCallCount } = await setupMultiIterationTestRun(107);
 
     // With max_iterations=2.5, the loop condition `iteration <= 2.5` allows iterations 1 and 2
     // (iteration 3 > 2.5, so it stops). The status shows the raw value passed.
@@ -1098,20 +1175,21 @@ describe('RunManager max_iterations handling', () => {
 
     // The status stores the raw value (after Math.max(1, ...))
     expect(rm.getStatus().max_iterations).toBe(2.5);
-    // The loop ran 2 iterations (1 <= 2.5, 2 <= 2.5, 3 > 2.5 stops) but the fixture-trivial
-    // workflow transitions to terminal after 1 iteration, so only 1 spawn
-    // This verifies the float is accepted and used correctly
-    expect(getSpawnCallCount()).toBeGreaterThanOrEqual(1);
+    // The loop ran 2 iterations (1 <= 2.5, 2 <= 2.5, 3 > 2.5 stops)
+    // Using workflow with no transitions, so loop runs until max_iterations reached
+    expect(getSpawnCallCount()).toBe(2); // floor(2.5) = 2 effective iterations
   });
 
   it('uses floor for float max_iterations (3.9 becomes 3 effective iterations)', async () => {
-    const { rm } = await setupTestRun(108);
+    const { rm, getSpawnCallCount } = await setupMultiIterationTestRun(108);
 
     await rm.start({ provider: 'fake', max_iterations: 3.9, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
     await waitFor(() => rm.getStatus().running === false);
 
     // The status stores the raw value
     expect(rm.getStatus().max_iterations).toBe(3.9);
+    // The loop ran 3 iterations (1 <= 3.9, 2 <= 3.9, 3 <= 3.9, 4 > 3.9 stops)
+    expect(getSpawnCallCount()).toBe(3); // floor(3.9) = 3 effective iterations
   });
 
   it('uses valid positive integer 1 as specified', async () => {

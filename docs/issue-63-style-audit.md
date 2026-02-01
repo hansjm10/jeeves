@@ -149,6 +149,20 @@ The following inline style patterns appear in TSX and are kept as-is:
 
 Per design guidelines: inline styles are acceptable when truly one-off and not encoding a reusable convention.
 
+### Inline RGBA Color Literals (TSX)
+
+The following RGBA color literals appear in TSX inline styles and are intentionally kept:
+
+| Literal | Location | Rationale |
+|---------|----------|-----------|
+| `'1px solid rgba(255,255,255,0.1)'` | `CreateIssuePage.tsx:138` | Markdown preview panel border; uses white semi-transparent overlay for subtle delineation. One-off preview container styling, not a reusable pattern. |
+| `'rgba(0,0,0,0.15)'` | `CreateIssuePage.tsx:141` | Markdown preview panel background; provides subtle darkening for visual distinction from the main form area. One-off preview container styling. |
+
+**Policy note:** These inline RGBA overlays conform to the design doc color-literal policy (explicit RGBA allowed; no hex outside tokens; no `color-mix()`). They are kept inline rather than extracted to CSS because:
+1. The preview panel is a single-use component not replicated elsewhere in the viewer
+2. The styling is tied to the component's specific layout structure (inline `style` prop on a `div`)
+3. Extracting would add a CSS class used only once with no reuse benefit
+
 ## 6. Token Migration Summary
 
 All viewer CSS now consistently references the shared token system:

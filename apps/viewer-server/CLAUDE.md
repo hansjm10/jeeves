@@ -21,6 +21,13 @@ Node.js backend for the Jeeves viewer. Built with Fastify and TypeScript.
 | `src/tailers.ts` | Log and SDK output file tailing |
 | `src/init.ts` | Issue initialization logic |
 
+## API Documentation
+
+For comprehensive API documentation including request/response schemas, streaming formats, and security model details, see:
+- **[`docs/viewer-server-api.md`](../../docs/viewer-server-api.md)** - Full HTTP and streaming API reference
+
+The route definitions are implemented in `src/server.ts`.
+
 ## API Endpoints
 
 ### State & Issues

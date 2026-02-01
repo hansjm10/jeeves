@@ -16,6 +16,12 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function hasCompletionPromise(content: string): boolean {
+  return content
+    .split(/\r?\n/)
+    .some((line) => line.trim() === '<promise>COMPLETE</promise>');
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   return fs
     .stat(filePath)
@@ -238,8 +244,10 @@ export class RunManager {
       const tail = messages.slice(Math.max(0, messages.length - 50));
       for (const m of tail) {
         if (!m || typeof m !== 'object') continue;
+        const msgType = (m as { type?: unknown }).type;
+        if (msgType !== 'assistant' && msgType !== 'result') continue;
         const content = (m as { content?: unknown }).content;
-        if (typeof content === 'string' && content.includes('<promise>COMPLETE</promise>')) return true;
+        if (typeof content === 'string' && hasCompletionPromise(content)) return true;
       }
     } catch {
       // ignore

@@ -1191,4 +1191,160 @@ describe('viewer-server', () => {
 
     await app.close();
   });
+
+  it('POST /api/issue/workflow requires a selected issue', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-no-issue-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/workflow',
+      remoteAddress: '127.0.0.1',
+      payload: { workflow: 'default' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'No issue selected.' });
+
+    await app.close();
+  });
+
+  it('POST /api/issue/workflow validates and updates issue.json (with optional phase reset) and broadcasts state', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-update-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-workflow-update-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: next',
+      '  version: 1',
+      '  start: begin',
+      'phases:',
+      '  begin:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'next.yaml'), yaml, 'utf-8');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      workflowsDir,
+      initialIssue: issueRef,
+    });
+
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const httpUrl = new URL(address);
+    const wsUrl = new URL('/api/ws', address);
+    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    const stateSnapshots: { issue_json?: unknown }[] = [];
+    const ws = new WebSocket(wsUrl.toString(), { origin: httpUrl.origin });
+    ws.on('message', (data) => {
+      const raw = decodeWsData(data);
+      try {
+        const msg = JSON.parse(raw) as { event?: unknown; data?: unknown };
+        if (msg.event === 'state' && msg.data && typeof msg.data === 'object') {
+          stateSnapshots.push(msg.data as { issue_json?: unknown });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    await waitFor(() => stateSnapshots.length > 0);
+
+    const postRes = await fetch(new URL('/api/issue/workflow', address), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workflow: 'next', reset_phase: true }),
+    });
+    expect(postRes.status).toBe(200);
+
+    await waitFor(() => {
+      return stateSnapshots.some((s) => {
+        const issueJson = s.issue_json as Record<string, unknown> | null | undefined;
+        return Boolean(issueJson && issueJson.workflow === 'next' && issueJson.phase === 'begin');
+      });
+    });
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.workflow).toBe('next');
+    expect(updated?.phase).toBe('begin');
+
+    ws.close();
+    await app.close();
+  });
+
+  it('POST /api/issue/workflow rejects invalid workflows without updating issue.json', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-workflow-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-workflow-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.writeFile(path.join(workflowsDir, 'bad.yaml'), 'workflow: [\n', 'utf-8');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      workflowsDir,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/workflow',
+      remoteAddress: '127.0.0.1',
+      payload: { workflow: 'bad' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    const after = await readIssueJson(stateDir);
+    expect(after?.workflow).toBe('default');
+    expect(after?.phase).toBe('design_draft');
+
+    await app.close();
+  });
 });

@@ -1069,6 +1069,45 @@ export async function buildServer(config: ViewerServerConfig) {
 	    return reply.send({ ok: true, run: runManager.getStatus() });
 	  });
 
+	  app.post('/api/issue/workflow', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflow while Jeeves is running.' });
+
+	    const issue = runManager.getIssue();
+	    if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
+	    const issueJson = await readIssueJson(issue.stateDir);
+	    if (!issueJson) return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
+
+	    const body = getBody(req);
+	    const workflowRaw = parseOptionalString(body.workflow);
+	    if (!workflowRaw) return reply.code(400).send({ ok: false, error: 'workflow is required' });
+
+	    const info = getWorkflowNameParamInfo(workflowRaw);
+	    if (!info || !isValidWorkflowName(info.name)) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+	    const absWorkflowsDir = path.resolve(workflowsDir);
+	    const workflowPath = path.join(absWorkflowsDir, `${info.name}.yaml`);
+	    const exists = await fs.stat(workflowPath).catch(() => null);
+	    if (!exists?.isFile()) return reply.code(404).send({ ok: false, error: 'workflow not found' });
+
+	    let workflowStart: string;
+	    try {
+	      const workflow = await loadWorkflowByName(info.name, { workflowsDir: absWorkflowsDir });
+	      workflowStart = workflow.start;
+	    } catch (err) {
+	      return reply.code(400).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+	    }
+
+	    const resetPhase = parseOptionalBool(body.reset_phase) ?? false;
+	    issueJson.workflow = info.name;
+	    if (resetPhase) issueJson.phase = workflowStart;
+
+	    await writeIssueJson(issue.stateDir, issueJson);
+	    hub.broadcast('state', await getStateSnapshot());
+	    return reply.send({ ok: true, workflow: info.name, ...(resetPhase ? { phase: workflowStart } : {}) });
+	  });
+
   app.post('/api/issue/status', async (req, reply) => {
     const gate = await requireMutatingAllowed(req);
     if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });

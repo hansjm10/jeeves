@@ -302,6 +302,189 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('rejects workflow creation from non-local clients by default', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-remote-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-remote-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '8.8.8.8',
+      payload: { name: 'new' },
+    });
+    expect(res.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('validates workflow names on create', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-invalid-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'a.b' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('returns 409 when creating an existing workflow', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-exists-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-exists-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const yaml = [
+      'workflow:',
+      '  name: exists',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '    transitions: []',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'exists.yaml'), yaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'exists' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'workflow already exists' });
+
+    const after = await fs.readFile(path.join(workflowsDir, 'exists.yaml'), 'utf-8');
+    expect(after).toBe(yaml);
+
+    await app.close();
+  });
+
+  it('creates a minimal valid workflow when `from` is omitted', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-default-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-default-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'new' },
+    });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json.ok).toBe(true);
+    expect(json.name).toBe('new');
+    expect(typeof json.yaml).toBe('string');
+
+    const persisted = await fs.readFile(path.join(workflowsDir, 'new.yaml'), 'utf-8');
+    const parsed = parseWorkflowYaml(persisted, { sourceName: 'new' });
+    expect(parsed.name).toBe('new');
+    expect(parsed.start).toBe('start');
+    expect(Object.keys(parsed.phases).sort()).toEqual(['complete', 'start']);
+    expect(parsed.phases.complete.type).toBe('terminal');
+    expect(parsed.phases.start.transitions[0]?.to).toBe('complete');
+
+    await app.close();
+  });
+
+  it('clones a workflow when `from` is provided and sets workflow.name', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-create-clone-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-create-clone-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const sourceYaml = [
+      'workflow:',
+      '  name: source',
+      '  version: 1',
+      '  start: start',
+      'phases:',
+      '  start:',
+      '    type: execute',
+      '    prompt: "do it"',
+      '    transitions:',
+      '      - to: complete',
+      '  complete:',
+      '    type: terminal',
+      '    transitions: []',
+      '',
+    ].join('\n');
+    await fs.writeFile(path.join(workflowsDir, 'source.yaml'), sourceYaml, 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'clone', from: 'source' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const persisted = await fs.readFile(path.join(workflowsDir, 'clone.yaml'), 'utf-8');
+    const parsed = parseWorkflowYaml(persisted, { sourceName: 'clone' });
+    expect(parsed.name).toBe('clone');
+    expect(parsed.start).toBe('start');
+    expect(parsed.phases.start.prompt).toBe('do it');
+
+    await app.close();
+  });
+
   it('SSE stream responds with event-stream and includes initial state event', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-sse-');
     const { app } = await buildServer({

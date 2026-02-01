@@ -23,7 +23,7 @@ import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
-import { writeTextAtomic } from './textAtomic.js';
+import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
@@ -200,6 +200,10 @@ function getWorkflowNameParamInfo(raw: string): { name: string; fileName: string
     return { name, fileName: trimmed };
   }
   return { name: trimmed, fileName: `${trimmed}.yaml` };
+}
+
+function isValidWorkflowName(name: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name);
 }
 
 function isSafePromptId(promptId: string): boolean {
@@ -589,6 +593,69 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
 	    }
 	  });
+
+		  app.post('/api/workflows', async (req, reply) => {
+		    const gate = await requireMutatingAllowed(req);
+		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+		    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit workflows while Jeeves is running.' });
+
+		    const body = getBody(req);
+		    const nameRaw = parseOptionalString(body.name);
+		    if (!nameRaw) return reply.code(400).send({ ok: false, error: 'name is required' });
+
+		    const info = getWorkflowNameParamInfo(nameRaw);
+		    if (!info || !isValidWorkflowName(info.name)) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+
+		    const fromProvided = body.from !== undefined;
+		    const fromRaw = parseOptionalString(body.from);
+		    if (fromProvided && !fromRaw) return reply.code(400).send({ ok: false, error: 'from must be a string' });
+
+		    const absWorkflowsDir = path.resolve(workflowsDir);
+		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
+		    const rel = path.relative(absWorkflowsDir, resolved);
+		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
+		    }
+
+		    const existing = await fs.stat(resolved).catch(() => null);
+		    if (existing) return reply.code(409).send({ ok: false, error: 'workflow already exists' });
+
+		    try {
+		      const workflow =
+		        fromRaw
+		          ? (() => {
+		              const fromInfo = getWorkflowNameParamInfo(fromRaw);
+		              if (!fromInfo || !isValidWorkflowName(fromInfo.name)) throw new Error('invalid workflow name');
+		              return loadWorkflowByName(fromInfo.name, { workflowsDir }).then((src) => ({ ...src, name: info.name }));
+		            })()
+		          : Promise.resolve(
+		              parseWorkflowObject(
+		                {
+		                  workflow: { name: info.name, version: 1, start: 'start' },
+		                  phases: {
+		                    start: { type: 'execute', prompt: 'Start', transitions: [{ to: 'complete' }] },
+		                    complete: { type: 'terminal', transitions: [] },
+		                  },
+		                },
+		                { sourceName: info.name },
+		              ),
+		            );
+
+		      const resolvedWorkflow = await workflow;
+		      const yaml = toWorkflowYaml(resolvedWorkflow);
+		      await writeTextAtomicNew(resolved, yaml);
+		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(resolvedWorkflow) });
+		    } catch (err) {
+		      if (err && typeof err === 'object' && 'code' in err && err.code === 'EEXIST') {
+		        return reply.code(409).send({ ok: false, error: 'workflow already exists' });
+		      }
+		      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT' && fromRaw) {
+		        return reply.code(404).send({ ok: false, error: 'workflow not found' });
+		      }
+		      const mapped = errorToHttp(err);
+		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+		    }
+		  });
 
 		  app.get('/api/workflows/:name', async (req, reply) => {
 		    const raw = parseOptionalString((req.params as { name?: unknown } | undefined)?.name);

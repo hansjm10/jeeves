@@ -56,7 +56,9 @@ function inferDesignDocPath(issueJson: Record<string, unknown> | null): string |
 function normalizeRepoRelativePath(input: string): string {
   // Treat as repo-relative path. Normalize separators and forbid escaping the repo.
   const withSlashes = input.replace(/\\/g, '/').trim();
+  if (!withSlashes) throw new Error('Refusing empty path');
   const normalized = path.posix.normalize(withSlashes);
+  if (normalized === '.') throw new Error(`Refusing path that resolves to repo root: ${input}`);
   if (path.posix.isAbsolute(normalized)) throw new Error(`Refusing absolute path: ${input}`);
   if (normalized === '..' || normalized.startsWith('../')) throw new Error(`Refusing path traversal: ${input}`);
   return normalized;

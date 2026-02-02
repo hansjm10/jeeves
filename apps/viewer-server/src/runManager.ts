@@ -690,7 +690,18 @@ export class RunManager {
 
     await this.execCapture(
       'git',
-      ['-c', 'user.name=Jeeves', '-c', 'user.email=jeeves@local', 'commit', '--no-verify', '-m', msg],
+      [
+        '-c',
+        'user.name=Jeeves',
+        '-c',
+        'user.email=jeeves@local',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--no-verify',
+        '-m',
+        msg,
+      ],
       this.workDir,
     );
 

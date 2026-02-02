@@ -657,9 +657,18 @@ export class RunManager {
     }
 
     const preStaged = (await this.execCapture('git', ['diff', '--cached', '--name-only'], this.workDir).catch(() => '')).trim();
-    if (preStaged) {
+    const stagedPaths = preStaged
+      ? preStaged
+          .split('\n')
+          .map((p) => normalizeRepoRelativePath(p.trim()))
+          .filter(Boolean)
+      : [];
+    const unexpectedStaged = stagedPaths.filter((p) => p !== designDocPath);
+    if (unexpectedStaged.length > 0) {
       throw new Error(
-        `Refusing to auto-commit design doc with pre-staged changes present:\n${preStaged}\n\nUnstage changes before retrying.`,
+        `Refusing to auto-commit design doc with other staged changes present:\n${unexpectedStaged.join(
+          '\n',
+        )}\n\nUnstage changes before retrying.`,
       );
     }
 

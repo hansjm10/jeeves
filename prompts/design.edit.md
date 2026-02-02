@@ -40,18 +40,9 @@ You are a senior software architect revising a design document based on review f
 6. If the feedback revealed issues with the task breakdown, update `.jeeves/issue.json.tasks` accordingly.
 
 7. Save the updated design document.
+   - The viewer-server will auto-commit the design doc checkpoint after a successful design phase.
 
-8. Commit the updated design document to git (REQUIRED):
-   - IMPORTANT: Commit **only** the design document file. Do NOT stage or commit `.jeeves/*`.
-   - If there are no changes to commit, skip this step.
-   - Commands:
-     ```bash
-     git status --porcelain=v1 -- <designDocPath>
-     git add -- <designDocPath>
-     git commit --no-verify -m "chore(design): checkpoint issue-<N> design doc (design_edit)"
-     ```
-
-9. Append a progress entry to `.jeeves/progress.txt`:
+8. Append a progress entry to `.jeeves/progress.txt`:
    ```
    ## [Date/Time] - Design Edit
 
@@ -64,7 +55,7 @@ You are a senior software architect revising a design document based on review f
    ---
    ```
 
-10. Update `.jeeves/issue.json` to clear the feedback flags.
+9. Update `.jeeves/issue.json` to clear the feedback flags.
 </instructions>
 
 <quality_criteria>

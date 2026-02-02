@@ -296,6 +296,7 @@ describe('RunManager', () => {
     await runGit(workDir, ['init']);
     await fs.mkdir(path.join(workDir, 'docs'), { recursive: true });
     await fs.writeFile(path.join(workDir, 'docs', `issue-${issueNumber}-design.md`), '# design\n', 'utf-8');
+    await runGit(workDir, ['add', '--', `docs/issue-${issueNumber}-design.md`]);
 
     const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
     const rm = new RunManager({

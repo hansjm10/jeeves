@@ -65,7 +65,10 @@ git ls-files --error-unmatch <designDocPath>
 - If the file exists but is not git-tracked → HARD FAIL
 - Log remediation: "Design doc must be added and committed before pre-check can pass"
 
-If this check fails, set `status.preCheckFailed = true` and stop immediately.
+If this check fails:
+1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+2. Append the required progress log entry (see Completion section) documenting the failure
+3. Then stop — the workflow will transition back to `task_decomposition`
 
 ## 3. Fetch GitHub issue requirements
 
@@ -82,7 +85,10 @@ gh issue view <number> --repo <repo> --json title,body
 2. If `gh issue view` fails (auth, network, etc.):
    - Check if `.jeeves/issue.md` exists
    - If cache exists, use it as the authoritative source
-   - If cache does not exist → HARD FAIL with message: "Cannot fetch GitHub issue and no cached `.jeeves/issue.md` exists"
+   - If cache does not exist → HARD FAIL:
+     1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+     2. Append the required progress log entry documenting the failure: "Cannot fetch GitHub issue and no cached `.jeeves/issue.md` exists"
+     3. Then stop — the workflow will transition back to `task_decomposition`
 
 ## 4. Verify task list structural validity (HARD FAIL)
 
@@ -100,6 +106,11 @@ Check `.jeeves/tasks.json`:
 - Missing required fields → HARD FAIL
 - Duplicate task IDs → HARD FAIL
 - Empty arrays or strings for required fields → HARD FAIL
+
+On any structural validation failure:
+1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+2. Append the required progress log entry documenting the specific structural issue
+3. Then stop — the workflow will transition back to `task_decomposition`
 
 **Non-gating warnings (log only, do not fail):**
 - Very low task count (< 3 tasks)
@@ -122,7 +133,10 @@ If found, extract ALL list items (bulleted `-`, `*`, numbered `1.`, or task-list
 If no explicit section is found, extract ALL markdown task-list items (`- [ ] ...` or `- [x] ...`) from the entire issue body.
 
 ### Step 5c: No requirements found
-If neither method yields any requirements → HARD FAIL with message: "Issue lacks explicit requirements list (no 'Acceptance Criteria'/'Requirements'/'Proposed Solution' section and no task-list items). Cannot pre-check deterministically."
+If neither method yields any requirements → HARD FAIL:
+1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+2. Append the required progress log entry documenting the failure: "Issue lacks explicit requirements list (no 'Acceptance Criteria'/'Requirements'/'Proposed Solution' section and no task-list items). Cannot pre-check deterministically."
+3. Then stop — the workflow will transition back to `task_decomposition`
 
 **Output:** A numbered list of must-have requirements extracted from the issue.
 
@@ -173,6 +187,12 @@ If any answer is "no" or uncertain → investigate further before deciding.
 </thinking_guidance>
 
 <completion>
+
+**CRITICAL**: Every exit path (PASS or FAIL) MUST:
+1. Write BOTH status flags explicitly (`preCheckPassed` and `preCheckFailed`)
+2. Append the required progress log entry
+
+This ensures no stale flags from prior runs can cause incorrect workflow transitions.
 
 ## If PASS
 

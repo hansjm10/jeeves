@@ -93,8 +93,8 @@ Create a new “evaluate/read-only” prompt that:
      - `designDocPath` exists and is a file.
      - `designDocPath` is git-tracked (enforced via `git ls-files --error-unmatch <designDocPath>`). If missing or untracked, set `status.preCheckFailed = true` and log remediation instructions (e.g., add/commit the doc, then rerun).
    - **Task list is structurally valid (hard fail)**:
-     - `.jeeves/tasks.json` exists and parses as a JSON array.
-     - Each task entry contains: `id` (string), `title` (string), `summary` (string), `acceptanceCriteria` (array of non-empty strings).
+     - `.jeeves/tasks.json` exists and parses as a JSON object containing a `tasks` array.
+     - Each task entry in the `tasks` array contains: `id` (string), `title` (string), `summary` (string), `acceptanceCriteria` (array of non-empty strings).
      - Task IDs are unique (duplicates are a hard fail because requirement→task mapping becomes ambiguous).
      - Non-gating warnings (log only): unusually low/high task count, very short summaries, or overly broad acceptance criteria.
    - **Deterministic requirements extraction + coverage (hard fail on gaps)**:
@@ -106,8 +106,9 @@ Create a new “evaluate/read-only” prompt that:
      - **Coverage rule**: each must-have requirement must map to ≥1 task ID. The pre-check must output a small mapping table in `.jeeves/progress.txt` (`Requirement → Task IDs`) with 1–2 sentence justifications per requirement.
      - **Pass threshold**: 100% of must-have requirements mapped. Any unmapped must-have requirement is a hard fail (set `status.preCheckFailed = true`).
 3. Writes status:
-   - On pass: set `.jeeves/issue.json.status.preCheckPassed = true` and `.jeeves/issue.json.status.preCheckFailed = false` (or omit false), and append a progress entry.
-   - On fail: set `.jeeves/issue.json.status.preCheckPassed = false` (or omit) and `.jeeves/issue.json.status.preCheckFailed = true`, append a progress entry listing uncovered requirements and suggested task additions.
+   - On pass: set `.jeeves/issue.json.status.preCheckPassed = true` and `.jeeves/issue.json.status.preCheckFailed = false`, and append a progress entry.
+   - On fail: set `.jeeves/issue.json.status.preCheckPassed = false` and `.jeeves/issue.json.status.preCheckFailed = true`, and append a progress entry listing uncovered requirements and suggested task additions.
+   - **IMPORTANT**: Always write BOTH flags explicitly on every exit path to prevent stale flags from prior runs causing incorrect workflow transitions.
 4. Write constraints:
    - Must not modify `.jeeves/tasks.json` (no auto-fixing or auto-appending tasks); on failure it must force a rerun of `task_decomposition` via the workflow transition.
    - May write `.jeeves/issue.md` as a cache of the fetched GitHub issue body/title (when `gh issue view` succeeds) so subsequent pre-check runs are deterministic even if `gh` is unavailable.

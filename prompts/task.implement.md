@@ -61,14 +61,14 @@ Delete .jeeves/task-feedback.md after reading, to clear retry state
 	git status --porcelain
 	```
 
-	If there are any modified or untracked files that do not match the task’s `filesAllowed` (and are not under `.jeeves/`):
+	If there are any modified or untracked files that do not match the task’s `filesAllowed` (and are not `.jeeves` / under `.jeeves/`):
 
 	- STOP and do not start implementation yet
 	- Make the worktree clean first, e.g.:
 	  - Prefer: `git stash --include-untracked` (safest default)
 	  - Or if you are certain the files are disposable: `git clean -f <path>`
 
-	Then re-run `git status --porcelain` and proceed only when the remaining changes are within `filesAllowed` (and/or `.jeeves/`).
+	Then re-run `git status --porcelain` and proceed only when the remaining changes are within `filesAllowed` (and/or `.jeeves` / `.jeeves/`).
 
 	If you cannot safely clean/stash the unexpected files → STOP and record the blocker in `.jeeves/progress.txt`.
 

@@ -104,6 +104,8 @@ ANY modified file not matching filesAllowed → FAIL
 
 Untracked or generated files count as modifications unless explicitly allowed
 
+Note: `filesAllowed` may include automatically expanded patterns for test files corresponding to allowed source files (e.g. `foo.test.ts`, `foo.test.tsx`, `__tests__/foo.ts`, `__tests__/foo.test.ts`). Treat these as valid matches like any other allowed pattern.
+
 Determine verdict
 
 PASS only if:

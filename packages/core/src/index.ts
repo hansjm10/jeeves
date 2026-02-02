@@ -52,3 +52,4 @@ export {
 export { evaluateGuard } from './guards.js';
 export { WorkflowEngine } from './workflowEngine.js';
 export { resolvePromptPath } from './promptResolution.js';
+export { expandFilesAllowedForTests } from './filesAllowedExpand.js';

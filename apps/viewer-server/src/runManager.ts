@@ -11,6 +11,7 @@ function isValidModel(model: unknown): model is ModelId {
 import type { RunStatus } from './types.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { expandTasksFilesAllowedForTests } from './tasksJson.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -387,6 +388,9 @@ export class RunManager {
           if (nextPhase) {
             updatedIssue.phase = nextPhase;
             await writeIssueJson(this.stateDir!, updatedIssue);
+            if (nextPhase === 'implement_task') {
+              await expandTasksFilesAllowedForTests(this.stateDir!);
+            }
             this.broadcast('state', await this.getStateSnapshot());
 
             if (engine.isTerminal(nextPhase)) {

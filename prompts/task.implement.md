@@ -61,6 +61,8 @@ Implement only what is required to satisfy the acceptance criteria
 
 Modify only files matching filesAllowed
 
+Note: `filesAllowed` is automatically expanded to include common test-file variants for allowed source files (e.g. `foo.test.ts`, `foo.test.tsx`, `__tests__/foo.ts`, `__tests__/foo.test.ts`). You may modify those tests if needed, but do not add unrelated test files.
+
 Write tests only if explicitly required
 
 Follow existing codebase conventions

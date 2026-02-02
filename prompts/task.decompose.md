@@ -84,6 +84,7 @@ Follow these guidelines when creating tasks:
    - Use `["src/module/file.ts"]` for single files
    - Use `["src/module/*.ts"]` for a directory
    - Always include `[".jeeves/*"]` implicitly
+   - You do NOT need to manually include colocated test file patterns; the system auto-expands `filesAllowed` to include common test variants (e.g. `foo.test.ts`, `foo.test.tsx`, `__tests__/foo.ts`, `__tests__/foo.test.ts`)
 
 5. **Dependencies**: Only list direct dependencies, not transitive ones:
    - If T3 depends on T2, and T2 depends on T1, T3 should list only `["T2"]`

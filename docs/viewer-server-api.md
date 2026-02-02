@@ -207,3 +207,98 @@ SDK stream (from `sdk-output.json` snapshots):
 
 Diagnostics:
 - `viewer-error`: `{ source: "poller", message: string, stack?: string }`
+
+### `POST /api/github/issues/expand`
+
+Generate an expanded issue title and body from a short summary using AI. This endpoint calls the `jeeves-runner expand-issue` subcommand internally.
+
+**Security**: This endpoint is gated by localhost-only access by default. Remote clients receive `403` unless `--allow-remote-run` is enabled.
+
+Request body:
+```jsonc
+{
+  "summary": "Add dark mode toggle to settings",  // required; 5-2000 characters
+  "issue_type": "feature",                        // optional; "feature" | "bug" | "refactor"
+  "provider": "claude",                           // optional; overrides workflow default
+  "model": "claude-3-opus"                        // optional; overrides workflow default
+}
+```
+
+**Field details:**
+- `summary` (required): A short description of the issue (5-2000 characters).
+- `issue_type` (optional): One of `feature`, `bug`, or `refactor`. Affects the generated content structure.
+- `provider` (optional): AI provider to use. If omitted, uses the `default_provider` from the `default` workflow configuration.
+- `model` (optional): Model to use. If omitted, uses the `default_model` from the `default` workflow configuration (if set).
+
+Success response:
+```jsonc
+{
+  "ok": true,
+  "title": "Add dark mode toggle to application settings",
+  "body": "## Summary\n...",
+  "provider": "claude",
+  "model": "claude-3-opus"  // omitted when unset
+}
+```
+
+**Note:** The `model` field is omitted from the response when no model is configured (either via request override or workflow default).
+
+Error responses:
+
+Validation errors (`400`):
+```jsonc
+{
+  "ok": false,
+  "error": "summary is required"
+}
+```
+```jsonc
+{
+  "ok": false,
+  "error": "summary must be at least 5 characters"
+}
+```
+```jsonc
+{
+  "ok": false,
+  "error": "summary must be at most 2000 characters"
+}
+```
+```jsonc
+{
+  "ok": false,
+  "error": "issue_type must be one of: feature, bug, refactor"
+}
+```
+
+Gating error (`403`):
+```jsonc
+{
+  "ok": false,
+  "error": "This endpoint is only allowed from localhost. Restart with --allow-remote-run to enable it."
+}
+```
+
+Execution error (`500`):
+```jsonc
+{
+  "ok": false,
+  "error": "Failed to parse runner output"
+}
+```
+
+Timeout error (`504`):
+```jsonc
+{
+  "ok": false,
+  "error": "Request timed out"
+}
+```
+
+**Error status summary:**
+| Status | Cause |
+|--------|-------|
+| `400` | Invalid or missing `summary`, invalid `issue_type` |
+| `403` | Request from non-localhost without `--allow-remote-run` |
+| `500` | Runner subprocess failed or returned invalid output |
+| `504` | Runner subprocess exceeded 60-second timeout |

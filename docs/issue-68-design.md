@@ -121,14 +121,37 @@ This ensures UI components reading `stream.state?.run` receive live updates whil
 
 ## 6. Run Context Strip
 
-Located at the top of the Watch page, displays:
+Located at the top of the Watch page, displays run status and context information derived from stream state (websocket `state` and `run` events). All fields update live as the stream state changes.
 
-| Field | Source | Display |
-|-------|--------|---------|
-| Issue | `stream.state?.issue_ref` | Always shown |
-| Workflow | `useWorkflowQuery()` | Always shown |
-| Phase | `useWorkflowQuery()` | Always shown |
-| Iteration | `stream.state?.run.current_iteration / max_iterations` | Only when running |
+### 6.1 Data Sources
+
+| Data | Source |
+|------|--------|
+| Issue | `stream.state?.issue_ref` |
+| Workflow | `extractWorkflowName(stream.state?.issue_json)` |
+| Phase | `extractCurrentPhase(stream.state?.issue_json)` |
+| Run status fields | `stream.state?.run` |
+
+### 6.2 Displayed Fields
+
+| Field | Source | Visibility | Format |
+|-------|--------|------------|--------|
+| State | `run.running` | Always | "Running" or "Idle" |
+| Issue | `issue_ref` | Always | Issue reference or "(none)" |
+| Workflow | `issue_json.workflow` | Always | Workflow name or "(none)" |
+| Phase | `issue_json.phase` | Always | Phase name or "(none)" |
+| PID | `run.pid` | When running or PID present | PID number or "–" |
+| Iteration | `run.current_iteration/max_iterations` | Only when running | "N/M" format |
+| Started | `run.started_at` | When present | HH:MM:SS local time |
+| Ended | `run.ended_at` | When present | HH:MM:SS local time |
+| Completed | `run.completion_reason` | When present | Reason string |
+| Error | `run.last_error` | When present | Truncated to 100 chars, full text in tooltip |
+
+### 6.3 Live Update Behavior
+
+- **Workflow/Phase**: Derived from `stream.state?.issue_json`, updated immediately when websocket `state` snapshots arrive
+- **Run status fields**: Updated from both `run` events (for live iteration updates) and `state` events
+- **No polling or refetch**: All updates are purely reactive to websocket events
 
 ---
 
@@ -140,20 +163,16 @@ Located at the top of the Watch page, displays:
 2. **Default view:** `combined` provides the primary monitoring experience
 3. **Panel preservation:** CSS grid sizing (0 vs 1fr) keeps panels mounted across view switches
 4. **No SDK sub-view persistence:** Switching views doesn't persist SDK's internal tree/timeline mode
+5. **Workflow/Phase source:** Derived from `stream.state?.issue_json` rather than a separate query, enabling immediate updates when websocket `state` events arrive
 
 ### 7.2 Deviations from Issue Text
 
 | Issue Text | Implementation | Rationale |
 |------------|----------------|-----------|
 | "Replace top-level tabs `sdk`, `logs`, `viewer-logs`" | Tabs removed; routes redirect to Watch | Full replacement as specified |
-| "Run context strip shows... `workflow` and `phase` (from `issue_json`)" | Uses `useWorkflowQuery()` instead of `issue_json` | Existing query provides workflow/phase; simpler integration |
 | "Parse structured signals from logs" | Not implemented | Listed as stretch goal in issue |
 | "Add timestamps for log lines" | Not implemented | Listed as stretch goal in issue |
 | "Virtualize log rendering" | Not implemented | Listed as stretch goal in issue |
-
-### 7.3 Partial Implementation Notes
-
-- **Workflow/phase updates:** Currently sourced from `useWorkflowQuery()` which may not auto-refresh on websocket `state` events. Task T7 addresses this gap.
 
 ---
 
@@ -161,17 +180,26 @@ Located at the top of the Watch page, displays:
 
 ### 8.1 Stream Reducer Tests (`streamReducer.test.ts`)
 
+**Run/State Ordering Tests:**
 | Test | Criterion |
 |------|-----------|
 | `stores run update in runOverride before first state snapshot` | Run events work without prior state |
 | `run -> state: snapshot clears runOverride (snapshot wins)` | State supersedes run |
 | `state -> run: run update sets runOverride and updates state.run` | Run updates work after state |
 | `multiple run updates: last run wins` | Latest run is authoritative |
-| `run -> state -> run: second run update re-establishes override` | Complex ordering handled |
+| `run -> state -> run: second run update re-establishes override and updates state.run` | Complex ordering handled |
+
+**Workflow/Phase Live Update Tests:**
+| Test | Criterion |
+|------|-----------|
+| `state event updates issue_json with workflow/phase` | Initial state populates workflow/phase |
+| `subsequent state event updates workflow/phase (simulating phase change)` | Phase changes reflected |
+| `subsequent state event updates workflow (simulating workflow change)` | Workflow changes reflected |
+| `state event with null issue_json clears workflow/phase` | Null handling |
 
 ### 8.2 LogPanel Tests (`LogPanel.test.ts`)
 
-**Search/Filter Tests:**
+**Search/Filter Tests (`filterLines`):**
 - `returns all lines when query is empty`
 - `returns all lines when query is whitespace-only`
 - `matches case-insensitive (lowercase query matches uppercase)`
@@ -181,20 +209,18 @@ Located at the top of the Watch page, displays:
 - `trims query before matching`
 - `handles special regex characters in query`
 
-**Copy Formatting Tests:**
+**Copy Formatting Tests (`formatCopyContent`):**
 - `returns empty string when lines array is empty`
 - `joins single line with trailing newline`
 - `joins multiple lines with \n and adds trailing \n`
 - `preserves empty lines in content`
 
-**Clipboard Failure Tests:**
+**Clipboard Failure Tests (`copyToClipboard`):**
 - `returns true on successful copy`
 - `returns false on clipboard failure without throwing`
 - `handles DOMException clipboard failures`
-- `copyToClipboard failure returns false, enabling error state display`
-- `copy selection uses same copyToClipboard as copy visible`
 
-**Follow-Tail Tests:**
+**Follow-Tail Behavior Tests:**
 - `initial followTail state should be true`
 - `scrolling up pauses follow-tail (threshold logic)`
 - `Resume restores follow-tail`
@@ -208,6 +234,10 @@ Located at the top of the Watch page, displays:
 - `copy is disabled when filtered lines is empty`
 - `copy is enabled when filtered lines has content`
 
+**Copy Selection Error State Tests:**
+- `copyToClipboard failure returns false, enabling error state display`
+- `copy selection uses same copyToClipboard as copy visible (shared failure handling)`
+
 ### 8.3 Router Tests (`router.test.ts`)
 
 **Route Matching:**
@@ -217,16 +247,52 @@ Located at the top of the Watch page, displays:
 - `/prompts route matches`
 - `/prompts/subpath route matches`
 
-**Redirects:**
+**Root Redirects:**
 - `/ route matches index route` (redirects to /watch)
-- `/sdk route matches (redirect)`
-- `/logs route matches (redirect)`
-- `/viewer-logs route matches (redirect)`
+
+**Legacy Route Redirects:**
+- `/sdk route matches (redirect)` → `/watch?view=sdk`
+- `/logs route matches (redirect)` → `/watch?view=logs`
+- `/viewer-logs route matches (redirect)` → `/watch?view=viewer-logs`
 - `unknown route matches catch-all`
 
-**Configuration:**
+**Configuration Verification:**
 - `route config has expected structure`
 - `watch route comes before legacy redirects`
+
+### 8.4 WatchPage Tests (`WatchPage.test.ts`)
+
+**Extract Functions Tests:**
+- `extractWorkflowName`: null/undefined handling, missing field, non-string values, valid strings
+- `extractCurrentPhase`: null/undefined handling, missing field, non-string values, valid strings
+- Workflow/phase live update semantics: state transitions, null-to-populated transitions
+
+**View Mode Tests:**
+- `isValidViewMode`: valid modes return true, invalid modes return false
+- `normalizeViewMode`: valid views preserved, invalid views normalize to `combined`
+
+**Run Status Formatter Tests:**
+- `formatRunState`: running/idle states, undefined/null handling
+- `formatPid`: present PID as string, null/undefined returns dash
+- `formatTimestamp`: valid ISO timestamps, null/undefined/invalid returns dash
+- `formatCompletionReason`: present reason returned, null/undefined/empty returns null
+- `formatLastError`: short errors preserved, long errors truncated to 100 chars + ellipsis
+
+**Run Status Integration Tests:**
+- Formatters work together for running state snapshot
+- Formatters handle completed run with error
+- Formatters handle successful completed run
+
+**computeRunContextFields Tests:**
+- Always-visible fields: State, Issue, Workflow, Phase
+- State field values: Running/Idle based on run.running
+- PID field visibility: visible when running or PID present
+- Iteration field visibility: visible only when running
+- Started/Ended field visibility: visible when timestamps present
+- Completed field visibility: visible when completion_reason present
+- Error field visibility, truncation, and fullValue preservation
+- Complete run scenarios: active running, completed with error, completed successfully
+- Fields update from stream state changes: state transitions verified
 
 ---
 
@@ -247,9 +313,10 @@ Located at the top of the Watch page, displays:
 
 | File | Coverage |
 |------|----------|
-| `apps/viewer/src/stream/streamReducer.test.ts` | Run/state ordering precedence |
+| `apps/viewer/src/stream/streamReducer.test.ts` | Run/state ordering precedence, workflow/phase live updates |
 | `apps/viewer/src/ui/LogPanel.test.ts` | Follow-tail, search, copy, clipboard failures |
 | `apps/viewer/src/app/router.test.ts` | Route matching, redirects, configuration |
+| `apps/viewer/src/pages/WatchPage.test.ts` | View mode utilities, run status formatters, computeRunContextFields |
 
 ---
 

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
-import type { AgentProvider, ProviderEvent, ProviderRunOptions } from './provider.js';
+import type { ProviderEvent, ProviderRunOptions } from './provider.js';
 import { FakeProvider } from './providers/fake.js';
 import { expandIssue } from './issueExpand.js';
 
@@ -14,35 +14,31 @@ function getRepoRoot(): string {
 }
 
 /**
- * Test provider that returns configurable output
+ * Extended FakeProvider that allows configuring the assistant output for testing.
+ * This still uses FakeProvider (no credentials required) but enables success-path testing.
  */
-class MockProvider implements AgentProvider {
-  readonly name = 'mock';
-  private output: string;
+class ConfigurableFakeProvider extends FakeProvider {
+  private customOutput: string;
 
   constructor(output: string) {
-    this.output = output;
+    super();
+    this.customOutput = output;
   }
 
-  async *run(_prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+  override async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
     void options;
+    const model = process.env.JEEVES_MODEL;
+    const modelInfo = model ? ` (model=${model})` : '';
     yield {
       type: 'system',
       subtype: 'init',
-      content: 'Mock provider init',
-      sessionId: 'mock-session',
+      content: `Fake provider init${modelInfo}`,
+      sessionId: 'fake-session',
       timestamp: new Date().toISOString(),
     };
-    yield {
-      type: 'assistant',
-      content: this.output,
-      timestamp: new Date().toISOString(),
-    };
-    yield {
-      type: 'result',
-      content: '<promise>COMPLETE</promise>',
-      timestamp: new Date().toISOString(),
-    };
+    yield { type: 'user', content: prompt.slice(0, 2000), timestamp: new Date().toISOString() };
+    yield { type: 'assistant', content: this.customOutput, timestamp: new Date().toISOString() };
+    yield { type: 'result', content: '<promise>COMPLETE</promise>', timestamp: new Date().toISOString() };
   }
 }
 
@@ -88,7 +84,7 @@ describe('expandIssue', () => {
       mockStdin({ summary: 'Add a test feature' });
 
       const result = await expandIssue({
-        provider: new MockProvider(validOutput),
+        provider: new ConfigurableFakeProvider(validOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });
@@ -113,7 +109,7 @@ describe('expandIssue', () => {
       });
 
       const result = await expandIssue({
-        provider: new MockProvider(validOutput),
+        provider: new ConfigurableFakeProvider(validOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });
@@ -226,7 +222,7 @@ describe('expandIssue', () => {
       mockStdin({ summary: 'Add a feature' });
 
       const result = await expandIssue({
-        provider: new MockProvider(invalidOutput),
+        provider: new ConfigurableFakeProvider(invalidOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });
@@ -245,7 +241,7 @@ describe('expandIssue', () => {
       mockStdin({ summary: 'Add a feature' });
 
       const result = await expandIssue({
-        provider: new MockProvider(invalidOutput),
+        provider: new ConfigurableFakeProvider(invalidOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });
@@ -265,7 +261,7 @@ describe('expandIssue', () => {
       mockStdin({ summary: 'Add a feature' });
 
       const result = await expandIssue({
-        provider: new MockProvider(invalidOutput),
+        provider: new ConfigurableFakeProvider(invalidOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });
@@ -285,7 +281,7 @@ describe('expandIssue', () => {
       mockStdin({ summary: 'Add a feature' });
 
       const result = await expandIssue({
-        provider: new MockProvider(invalidOutput),
+        provider: new ConfigurableFakeProvider(invalidOutput),
         promptsDir,
         promptId: 'issue.expand.md',
       });

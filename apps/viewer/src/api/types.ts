@@ -54,6 +54,8 @@ export type IssueWorkflowSelectRequest = Readonly<{ workflow: string; reset_phas
 export type IssueWorkflowSelectResponse = Readonly<{ ok: true; workflow: string; phase?: string }>;
 
 export type RunStatus = Readonly<{
+  run_id?: string | null;
+  run_dir?: string | null;
   running: boolean;
   pid: number | null;
   started_at: string | null;

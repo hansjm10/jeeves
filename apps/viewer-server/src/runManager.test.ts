@@ -20,7 +20,7 @@ async function writeWorkflowYaml(workflowsDir: string, name: string, yaml: strin
   await fs.writeFile(path.join(workflowsDir, `${name}.yaml`), yaml, 'utf-8');
 }
 
-function makeFakeChild(exitCode = 0, delayMs = 25) {
+function makeFakeChild(exitCode = 0, delayMs = 25, signal: NodeJS.Signals | null = null) {
   class FakeChild extends EventEmitter {
     pid = 12345;
     exitCode: number | null = null;
@@ -36,7 +36,7 @@ function makeFakeChild(exitCode = 0, delayMs = 25) {
   const proc = new FakeChild() as unknown as import('node:child_process').ChildProcessWithoutNullStreams;
   setTimeout(() => {
     (proc as unknown as FakeChild).exitCode = exitCode;
-    proc.emit('exit', exitCode, null);
+    proc.emit('exit', signal ? null : exitCode, signal);
   }, delayMs);
   return proc;
 }
@@ -305,6 +305,132 @@ describe('RunManager', () => {
     await waitFor(() => rm.getStatus().running === false);
 
     expect(observedEnv?.JEEVES_DATA_DIR).toBe(dataDir);
+  });
+
+  it('records non-zero exit code when runner is terminated by signal', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 222;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: 'fixture-trivial', branch: 'issue/222', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0, 25, 'SIGKILL')) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(rm.getStatus().returncode).toBe(137); // 128 + SIGKILL(9)
+    expect(rm.getStatus().last_error).toContain('137');
+  });
+
+  it('auto-expands task filesAllowed to include test variants before implement_task', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 999;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'task_decomposition',
+          workflow: 'default',
+          branch: 'issue/999',
+          notes: '',
+          status: { taskDecompositionComplete: true },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          decomposedFrom: 'docs/x.md',
+          tasks: [
+            {
+              id: 'T1',
+              title: 't',
+              summary: 's',
+              acceptanceCriteria: ['c'],
+              filesAllowed: ['packages/runner/src/issueExpand.ts'],
+              dependsOn: [],
+              status: 'pending',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.phase).toBe('implement_task');
+
+    const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+    const tasksJson = JSON.parse(tasksRaw) as { tasks: { filesAllowed: string[] }[] };
+    expect(tasksJson.tasks[0].filesAllowed).toContain('packages/runner/src/issueExpand.test.ts');
+    expect(tasksJson.tasks[0].filesAllowed).toContain('packages/runner/src/__tests__/issueExpand.ts');
   });
 
   it('does not spawn runner when issue phase is terminal', async () => {

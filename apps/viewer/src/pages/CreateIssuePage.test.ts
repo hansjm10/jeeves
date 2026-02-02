@@ -53,6 +53,17 @@ describe('buildExpandRequestFromState', () => {
       const result = buildExpandRequestFromState('Test', undefined, 'codex', undefined);
       expect(result.provider).toBe('codex');
     });
+
+    it('includes provider when set to claude (allows override to claude)', () => {
+      // This tests the scenario where workflow default is e.g. 'codex' and user selects 'claude'
+      const result = buildExpandRequestFromState('Test', undefined, 'claude', undefined);
+      expect(result.provider).toBe('claude');
+    });
+
+    it('omits provider when undefined', () => {
+      const result = buildExpandRequestFromState('Test', undefined, undefined, undefined);
+      expect('provider' in result).toBe(false);
+    });
   });
 
   describe('model handling', () => {

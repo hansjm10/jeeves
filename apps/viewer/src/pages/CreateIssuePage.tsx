@@ -238,7 +238,7 @@ export function CreateIssuePage() {
       if (issueType !== undefined) {
         (request as { issue_type?: IssueType }).issue_type = issueType;
       }
-      if (expandProvider && expandProvider !== "claude") {
+      if (expandProvider) {
         (request as { provider?: string }).provider = expandProvider;
       }
       if (expandModel && expandModel.trim()) {

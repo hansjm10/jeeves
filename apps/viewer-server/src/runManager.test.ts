@@ -366,17 +366,19 @@ describe('RunManager', () => {
 
     const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
     await fs.mkdir(stateDir, { recursive: true });
+    // Start at pre_implementation_check phase (the new phase inserted between task_decomposition and implement_task)
+    // with preCheckPassed: true to trigger transition to implement_task
     await fs.writeFile(
       path.join(stateDir, 'issue.json'),
       JSON.stringify(
         {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
-          phase: 'task_decomposition',
+          phase: 'pre_implementation_check',
           workflow: 'default',
           branch: 'issue/999',
           notes: '',
-          status: { taskDecompositionComplete: true },
+          status: { preCheckPassed: true },
         },
         null,
         2,

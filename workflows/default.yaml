@@ -105,13 +105,25 @@ phases:
         when: status.prCreated == true
     model: sonnet
     thinking_budget: max
+  pre_implementation_check:
+    type: evaluate
+    provider: codex
+    prompt: verify.pre_implementation.md
+    description: Verify task coverage before implementation
+    transitions:
+      - to: implement_task
+        when: status.preCheckPassed == true
+      - to: task_decomposition
+        when: status.preCheckFailed == true
+    model: gpt-5.2
+    reasoning_effort: high
   task_decomposition:
     type: execute
     provider: claude
     prompt: task.decompose.md
     description: Extract tasks from design document
     transitions:
-      - to: implement_task
+      - to: pre_implementation_check
         when: status.taskDecompositionComplete == true
     model: haiku
     thinking_budget: max

@@ -32,7 +32,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
 
   const writer = new SdkOutputWriterV1({ outputPath: params.outputPath });
   const logLine = async (line: string): Promise<void> => {
-    await logStream.appendFile(`${line}\n`, 'utf-8');
+    await logStream.appendFile(`${new Date().toISOString()} ${line}\n`, 'utf-8');
   };
 
   try {

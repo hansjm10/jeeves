@@ -17,6 +17,8 @@ export type ViewerPaths = Readonly<{
 }>;
 
 export type RunStatus = Readonly<{
+  run_id?: string | null;
+  run_dir?: string | null;
   running: boolean;
   pid: number | null;
   started_at: string | null;

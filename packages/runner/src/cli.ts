@@ -66,7 +66,7 @@ export async function main(argv: string[]): Promise<void> {
     const stateDir = path.resolve(String(values['state-dir'] ?? path.join(process.cwd(), '.jeeves-fixture')));
     const cwd = path.resolve(String(values['work-dir'] ?? process.cwd()));
 
-    await runWorkflowOnce({
+    const result = await runWorkflowOnce({
       provider,
       workflowName: String(values.workflow ?? 'fixture-trivial'),
       workflowsDir,
@@ -74,6 +74,9 @@ export async function main(argv: string[]): Promise<void> {
       stateDir,
       cwd,
     });
+    if (!result.success) {
+      throw new Error(`run-fixture failed (finalPhase=${result.finalPhase})`);
+    }
     return;
   }
 
@@ -111,7 +114,7 @@ export async function main(argv: string[]): Promise<void> {
     const phaseName = String(values.phase ?? '').trim();
     if (!phaseName) throw new Error(`--phase is required for run-phase\n\n${usage()}`);
 
-    await runSinglePhaseOnce({
+    const result = await runSinglePhaseOnce({
       provider,
       workflowName,
       phaseName,
@@ -120,10 +123,16 @@ export async function main(argv: string[]): Promise<void> {
       stateDir,
       cwd,
     });
+    if (!result.success) {
+      throw new Error(`run-phase failed (phase=${result.phase})`);
+    }
     return;
   }
 
-  await runWorkflowOnce({ provider, workflowName, workflowsDir, promptsDir, stateDir, cwd });
+  const result = await runWorkflowOnce({ provider, workflowName, workflowsDir, promptsDir, stateDir, cwd });
+  if (!result.success) {
+    throw new Error(`run-workflow failed (finalPhase=${result.finalPhase})`);
+  }
 }
 
 // Intentionally no side-effectful entrypoint here; see `src/bin.ts`.

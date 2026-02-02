@@ -1,5 +1,7 @@
-import { spawn as spawnDefault, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile as execFileCb, spawn as spawnDefault, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { WorkflowEngine, getIssueStateDir, getWorktreePath, loadWorkflowByName, parseIssueRef, getEffectiveModel, validModels, type ModelId } from '@jeeves/core';
@@ -17,12 +19,31 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function makeRunId(pid: number = process.pid): string {
+  // 20260202T033802Z-12345.ABC123
+  const iso = nowIso(); // 2026-02-02T03:38:02.153Z
+  const compact = iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z'); // 20260202T033802Z
+  const rand = randomBytes(6).toString('base64url'); // url-safe
+  return `${compact}-${pid}.${rand}`;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
 function hasCompletionPromise(content: string): boolean {
   return content.trim() === '<promise>COMPLETE</promise>';
+}
+
+function exitCodeFromExitEvent(code: number | null, signal: NodeJS.Signals | null): number {
+  if (typeof code === 'number') return code;
+  if (signal) {
+    const signals = os.constants.signals as unknown as Record<string, number | undefined>;
+    const n = signals[signal];
+    if (typeof n === 'number') return 128 + n;
+    return 1;
+  }
+  return 0;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -52,6 +73,10 @@ export class RunManager {
   private issueRef: string | null = null;
   private stateDir: string | null = null;
   private workDir: string | null = null;
+  private runId: string | null = null;
+  private runDir: string | null = null;
+  private stopReason: string | null = null;
+  private runArchiveMeta: Record<string, unknown> | null = null;
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
@@ -140,10 +165,19 @@ export class RunManager {
     await fs.writeFile(viewerLogPath, '', 'utf-8');
 
     this.stopRequested = false;
+    this.stopReason = null;
+    this.runArchiveMeta = null;
+    this.runId = makeRunId();
+    this.runDir = path.join(this.stateDir, '.runs', this.runId);
+    await fs.mkdir(path.join(this.runDir, 'iterations'), { recursive: true });
+
+    const startedAt = nowIso();
     this.status = {
+      run_id: this.runId,
+      run_dir: this.runDir,
       running: true,
       pid: null,
-      started_at: nowIso(),
+      started_at: startedAt,
       ended_at: null,
       returncode: null,
       command: null,
@@ -159,6 +193,19 @@ export class RunManager {
 
     const workflowOverride = isNonEmptyString(params.workflow) ? params.workflow.trim() : null;
 
+    await this.persistRunArchiveMeta({
+      run_id: this.runId,
+      issue_ref: this.issueRef,
+      state_dir: this.stateDir,
+      work_dir: this.workDir,
+      started_at: startedAt,
+      max_iterations: maxIterations,
+      provider,
+      workflow_override: workflowOverride,
+      inactivity_timeout_sec: inactivityTimeoutSec,
+      iteration_timeout_sec: iterationTimeoutSec,
+    });
+
     this.broadcast('run', { run: this.status });
     void this.runLoop({
       provider,
@@ -172,8 +219,9 @@ export class RunManager {
     return this.status;
   }
 
-  async stop(params?: { force?: boolean }): Promise<RunStatus> {
+  async stop(params?: { force?: boolean; reason?: string }): Promise<RunStatus> {
     const force = Boolean(params?.force ?? false);
+    if (isNonEmptyString(params?.reason)) this.stopReason = params?.reason.trim();
     this.stopRequested = true;
     const proc = this.proc;
     if (proc && proc.exitCode === null) {
@@ -228,7 +276,7 @@ export class RunManager {
     });
 
     const exitCode = await new Promise<number>((resolve) => {
-      proc.once('exit', (code) => resolve(code ?? 0));
+      proc.once('exit', (code, signal) => resolve(exitCodeFromExitEvent(code, signal)));
     });
     return exitCode;
   }
@@ -274,9 +322,11 @@ export class RunManager {
   }): Promise<void> {
     const { viewerLogPath } = params;
     try {
+      let completedNaturally = true;
       for (let iteration = 1; iteration <= params.maxIterations; iteration += 1) {
         if (this.stopRequested) {
           await this.appendViewerLog(viewerLogPath, `[ITERATION] Stop requested, ending at iteration ${iteration}`);
+          completedNaturally = false;
           break;
         }
 
@@ -322,6 +372,7 @@ export class RunManager {
         let lastSize = 0;
         let lastChangeAtMs = Date.now();
         const startAtMs = Date.now();
+        const iterStartedAt = nowIso();
 
         const exitPromise = this.spawnRunner(
           [
@@ -349,7 +400,8 @@ export class RunManager {
             const elapsedSec = (Date.now() - startAtMs) / 1000;
             if (elapsedSec > params.iterationTimeoutSec) {
               await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Iteration exceeded ${params.iterationTimeoutSec}s; stopping`);
-              await this.stop({ force: true });
+              await this.stop({ force: true, reason: `iteration_timeout (${params.iterationTimeoutSec}s)` });
+              completedNaturally = false;
               break;
             }
 
@@ -364,7 +416,8 @@ export class RunManager {
             const idleSec = (Date.now() - lastChangeAtMs) / 1000;
             if (idleSec > params.inactivityTimeoutSec) {
               await this.appendViewerLog(viewerLogPath, `[TIMEOUT] No log activity for ${params.inactivityTimeoutSec}s; stopping`);
-              await this.stop({ force: true });
+              await this.stop({ force: true, reason: `inactivity_timeout (${params.inactivityTimeoutSec}s)` });
+              completedNaturally = false;
               break;
             }
 
@@ -380,6 +433,26 @@ export class RunManager {
 
         this.status = { ...this.status, returncode: exitCode };
         this.broadcast('run', { run: this.status });
+
+        await this.archiveIteration({
+          iteration,
+          workflow: workflowName,
+          phase: currentPhase,
+          provider: effectiveProvider,
+          model: effectiveModel ?? null,
+          started_at: iterStartedAt,
+          ended_at: nowIso(),
+          exit_code: exitCode,
+        });
+
+        if (exitCode !== 0) {
+          await this.appendViewerLog(viewerLogPath, `[ITERATION] Iteration ${iteration} exited with code ${exitCode}`);
+          if (!this.status.last_error) {
+            this.status = { ...this.status, last_error: `runner exited with code ${exitCode} (phase=${currentPhase})` };
+            this.broadcast('run', { run: this.status });
+          }
+          continue;
+        }
 
         // Advance phase via workflow transitions (viewer-server owns orchestration)
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
@@ -401,6 +474,7 @@ export class RunManager {
                 completion_reason: `reached terminal phase: ${nextPhase}`,
               };
               this.broadcast('run', { run: this.status });
+              completedNaturally = false;
               break;
             }
             await this.appendViewerLog(viewerLogPath, `[TRANSITION] ${currentPhase} -> ${nextPhase}`);
@@ -415,12 +489,19 @@ export class RunManager {
             completion_reason: 'completion promise found in output',
           };
           this.broadcast('run', { run: this.status });
+          completedNaturally = false;
           break;
         }
+      }
 
-        if (exitCode !== 0) {
-          await this.appendViewerLog(viewerLogPath, `[ITERATION] Iteration ${iteration} exited with code ${exitCode}`);
-        }
+      if (
+        completedNaturally &&
+        !this.status.completed_via_promise &&
+        !this.status.completed_via_state &&
+        !this.status.completion_reason
+      ) {
+        this.status = { ...this.status, completion_reason: 'max_iterations' };
+        this.broadcast('run', { run: this.status });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.stack ?? err.message : String(err);
@@ -429,9 +510,13 @@ export class RunManager {
       if (this.status.viewer_log_file) await this.appendViewerLog(this.status.viewer_log_file, `[ERROR] ${msg}`);
     } finally {
       this.proc = null;
+      if (this.stopReason && !this.status.completion_reason && !this.status.completed_via_promise && !this.status.completed_via_state) {
+        this.status = { ...this.status, completion_reason: this.stopReason };
+      }
       this.status = { ...this.status, running: false, ended_at: nowIso(), pid: null };
       this.broadcast('run', { run: this.status });
       await this.persistLastRunStatus().catch(() => void 0);
+      await this.finalizeRunArchive().catch(() => void 0);
     }
   }
 
@@ -439,5 +524,86 @@ export class RunManager {
     if (!this.stateDir) return;
     const outPath = path.join(this.stateDir, 'viewer-run-status.json');
     await writeJsonAtomic(outPath, this.status);
+    if (this.runDir) {
+      await writeJsonAtomic(path.join(this.runDir, 'viewer-run-status.json'), this.status);
+    }
+  }
+
+  private async persistRunArchiveMeta(meta: Record<string, unknown>): Promise<void> {
+    if (!this.runDir) return;
+    this.runArchiveMeta = { ...(this.runArchiveMeta ?? {}), ...meta };
+    await writeJsonAtomic(path.join(this.runDir, 'run.json'), this.runArchiveMeta);
+  }
+
+  private async archiveIteration(params: {
+    iteration: number;
+    workflow: string;
+    phase: string;
+    provider: string;
+    model: string | null;
+    started_at: string;
+    ended_at: string;
+    exit_code: number;
+  }): Promise<void> {
+    if (!this.stateDir || !this.runDir) return;
+    const iterDir = path.join(this.runDir, 'iterations', String(params.iteration).padStart(3, '0'));
+    await fs.mkdir(iterDir, { recursive: true });
+    await writeJsonAtomic(path.join(iterDir, 'iteration.json'), params);
+
+    const copies: Promise<unknown>[] = [];
+    const copyIfExists = (src: string, dstName: string) => {
+      copies.push(fs.copyFile(src, path.join(iterDir, dstName)).catch(() => void 0));
+    };
+    copyIfExists(path.join(this.stateDir, 'last-run.log'), 'last-run.log');
+    copyIfExists(path.join(this.stateDir, 'sdk-output.json'), 'sdk-output.json');
+    copyIfExists(path.join(this.stateDir, 'issue.json'), 'issue.json');
+    copyIfExists(path.join(this.stateDir, 'tasks.json'), 'tasks.json');
+    copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
+    await Promise.allSettled(copies);
+
+    await this.captureGitDebug(iterDir).catch(() => void 0);
+  }
+
+  private async finalizeRunArchive(): Promise<void> {
+    if (!this.stateDir || !this.runDir || !this.runId) return;
+    await fs.copyFile(path.join(this.stateDir, 'viewer-run.log'), path.join(this.runDir, 'viewer-run.log')).catch(() => void 0);
+    await fs.copyFile(path.join(this.stateDir, 'issue.json'), path.join(this.runDir, 'final-issue.json')).catch(() => void 0);
+    await fs.copyFile(path.join(this.stateDir, 'tasks.json'), path.join(this.runDir, 'final-tasks.json')).catch(() => void 0);
+    await fs.copyFile(path.join(this.stateDir, 'progress.txt'), path.join(this.runDir, 'final-progress.txt')).catch(() => void 0);
+
+    await this.persistRunArchiveMeta({
+      run_id: this.runId,
+      issue_ref: this.issueRef,
+      state_dir: this.stateDir,
+      work_dir: this.workDir,
+      started_at: this.status.started_at,
+      ended_at: this.status.ended_at,
+      exit_code: this.status.returncode,
+      completion_reason: this.status.completion_reason,
+      completed_via_promise: this.status.completed_via_promise,
+      completed_via_state: this.status.completed_via_state,
+      last_error: this.status.last_error,
+      max_iterations: this.status.max_iterations,
+      current_iteration: this.status.current_iteration,
+      command: this.status.command,
+    });
+  }
+
+  private async captureGitDebug(iterDir: string): Promise<void> {
+    if (!this.workDir) return;
+    const status = await this.execCapture('git', ['status', '--porcelain=v1', '-b'], this.workDir).catch(() => null);
+    if (status !== null) await fs.writeFile(path.join(iterDir, 'git-status.txt'), status, 'utf-8').catch(() => void 0);
+    const stat = await this.execCapture('git', ['diff', '--stat'], this.workDir).catch(() => null);
+    if (stat !== null) await fs.writeFile(path.join(iterDir, 'git-diff-stat.txt'), stat, 'utf-8').catch(() => void 0);
+  }
+
+  private async execCapture(cmd: string, args: string[], cwd: string): Promise<string> {
+    return await new Promise<string>((resolve, reject) => {
+      execFileCb(cmd, args, { cwd, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) return reject(err);
+        const out = `${String(stdout)}${String(stderr)}`;
+        resolve(out);
+      });
+    });
   }
 }

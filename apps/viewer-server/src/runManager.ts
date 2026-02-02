@@ -35,6 +35,35 @@ function hasCompletionPromise(content: string): boolean {
   return content.trim() === '<promise>COMPLETE</promise>';
 }
 
+function getIssueNumber(issueJson: Record<string, unknown> | null): number | null {
+  if (!issueJson) return null;
+  const issue = issueJson.issue;
+  if (!issue || typeof issue !== 'object') return null;
+  const n = (issue as { number?: unknown }).number;
+  if (typeof n === 'number' && Number.isInteger(n) && n > 0) return n;
+  return null;
+}
+
+function inferDesignDocPath(issueJson: Record<string, unknown> | null): string | null {
+  if (!issueJson) return null;
+  const direct = issueJson.designDocPath ?? issueJson.designDoc;
+  if (isNonEmptyString(direct)) return direct.trim();
+  const issueNumber = getIssueNumber(issueJson);
+  if (issueNumber) return `docs/issue-${issueNumber}-design.md`;
+  return null;
+}
+
+function normalizeRepoRelativePath(input: string): string {
+  // Treat as repo-relative path. Normalize separators and forbid escaping the repo.
+  const withSlashes = input.replace(/\\/g, '/').trim();
+  if (!withSlashes) throw new Error('Refusing empty path');
+  const normalized = path.posix.normalize(withSlashes);
+  if (normalized === '.') throw new Error(`Refusing path that resolves to repo root: ${input}`);
+  if (path.posix.isAbsolute(normalized)) throw new Error(`Refusing absolute path: ${input}`);
+  if (normalized === '..' || normalized.startsWith('../')) throw new Error(`Refusing path traversal: ${input}`);
+  return normalized;
+}
+
 function exitCodeFromExitEvent(code: number | null, signal: NodeJS.Signals | null): number {
   if (typeof code === 'number') return code;
   if (signal) {
@@ -457,6 +486,7 @@ export class RunManager {
         // Advance phase via workflow transitions (viewer-server owns orchestration)
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
+          await this.commitDesignDocCheckpoint({ phase: currentPhase, issueJson: updatedIssue });
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {
             updatedIssue.phase = nextPhase;
@@ -605,5 +635,92 @@ export class RunManager {
         resolve(out);
       });
     });
+  }
+
+  private async commitDesignDocCheckpoint(params: { phase: string; issueJson: Record<string, unknown> }): Promise<void> {
+    if (!this.workDir) return;
+    if (params.phase !== 'design_draft' && params.phase !== 'design_edit') return;
+
+    const inferred = inferDesignDocPath(params.issueJson);
+    if (!inferred) return;
+    const designDocPath = normalizeRepoRelativePath(inferred);
+    const abs = path.resolve(this.workDir, designDocPath);
+    const workRoot = path.resolve(this.workDir);
+    if (!abs.startsWith(workRoot + path.sep) && abs !== workRoot) {
+      throw new Error(`Resolved design doc path escapes worktree: ${designDocPath}`);
+    }
+
+    const exists = await fs
+      .stat(abs)
+      .then((s) => s.isFile())
+      .catch(() => false);
+    if (!exists) {
+      throw new Error(`Design doc not found after ${params.phase}: ${designDocPath}`);
+    }
+
+    const preStaged = (await this.execCapture('git', ['diff', '--cached', '--name-only'], this.workDir).catch(() => '')).trim();
+    const stagedPaths = preStaged
+      ? preStaged
+          .split('\n')
+          .map((p) => normalizeRepoRelativePath(p.trim()))
+          .filter(Boolean)
+      : [];
+    const unexpectedStaged = stagedPaths.filter((p) => p !== designDocPath);
+    if (unexpectedStaged.length > 0) {
+      throw new Error(
+        `Refusing to auto-commit design doc with other staged changes present:\n${unexpectedStaged.join(
+          '\n',
+        )}\n\nUnstage changes before retrying.`,
+      );
+    }
+
+    const statusLine = (await this.execCapture('git', ['status', '--porcelain=v1', '--', designDocPath], this.workDir)).trim();
+    if (!statusLine) {
+      const tracked = await this.execCapture('git', ['ls-files', '--error-unmatch', '--', designDocPath], this.workDir)
+        .then(() => true)
+        .catch(() => false);
+      if (!tracked) {
+        throw new Error(
+          `Design doc is not tracked (possibly ignored): ${designDocPath}\n` +
+            `Add/commit the design doc or update .gitignore, then rerun.`,
+        );
+      }
+      return; // clean + tracked
+    }
+
+    await this.execCapture('git', ['add', '--', designDocPath], this.workDir);
+
+    const staged = (await this.execCapture('git', ['diff', '--cached', '--name-only'], this.workDir)).trim();
+    if (!staged) return;
+    if (staged.split('\n').some((p) => normalizeRepoRelativePath(p) !== designDocPath)) {
+      throw new Error(`Refusing to auto-commit: staging included files other than ${designDocPath}:\n${staged}`);
+    }
+
+    const issueNumber = getIssueNumber(params.issueJson);
+    const msg = issueNumber
+      ? `chore(design): checkpoint issue #${issueNumber} design doc (${params.phase})`
+      : `chore(design): checkpoint design doc (${params.phase})`;
+
+    await this.execCapture(
+      'git',
+      [
+        '-c',
+        'user.name=Jeeves',
+        '-c',
+        'user.email=jeeves@local',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--no-verify',
+        '-m',
+        msg,
+      ],
+      this.workDir,
+    );
+
+    await this.execCapture('git', ['ls-files', '--error-unmatch', '--', designDocPath], this.workDir);
+    if (this.status.viewer_log_file) {
+      await this.appendViewerLog(this.status.viewer_log_file, `[DESIGN] Committed design doc checkpoint: ${designDocPath}`);
+    }
   }
 }

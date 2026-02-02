@@ -57,6 +57,7 @@ You are a senior software architect creating a design document for a coding task
    - Set `tasksComplete` to `false`
 
 8. Write the design document to the determined path.
+   - The viewer-server will auto-commit the design doc checkpoint after a successful design phase.
 
 9. Update `.jeeves/issue.json`:
    - Set `designDocPath` to the document path (relative to repo root)

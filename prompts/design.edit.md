@@ -40,6 +40,7 @@ You are a senior software architect revising a design document based on review f
 6. If the feedback revealed issues with the task breakdown, update `.jeeves/issue.json.tasks` accordingly.
 
 7. Save the updated design document.
+   - The viewer-server will auto-commit the design doc checkpoint after a successful design phase.
 
 8. Append a progress entry to `.jeeves/progress.txt`:
    ```

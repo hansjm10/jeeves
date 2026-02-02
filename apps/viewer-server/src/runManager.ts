@@ -673,7 +673,18 @@ export class RunManager {
     }
 
     const statusLine = (await this.execCapture('git', ['status', '--porcelain=v1', '--', designDocPath], this.workDir)).trim();
-    if (!statusLine) return; // already clean + tracked
+    if (!statusLine) {
+      const tracked = await this.execCapture('git', ['ls-files', '--error-unmatch', '--', designDocPath], this.workDir)
+        .then(() => true)
+        .catch(() => false);
+      if (!tracked) {
+        throw new Error(
+          `Design doc is not tracked (possibly ignored): ${designDocPath}\n` +
+            `Add/commit the design doc or update .gitignore, then rerun.`,
+        );
+      }
+      return; // clean + tracked
+    }
 
     await this.execCapture('git', ['add', '--', designDocPath], this.workDir);
 

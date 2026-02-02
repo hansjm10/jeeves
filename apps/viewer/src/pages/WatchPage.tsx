@@ -178,9 +178,66 @@ export function extractCurrentPhase(issueJson: Record<string, unknown> | null | 
 }
 
 /**
- * Run context strip showing issue, workflow, phase, and iteration status.
+ * Formats a run state as a human-readable string.
+ * Returns 'Running' if running is true, 'Idle' otherwise.
+ */
+export function formatRunState(running: boolean | undefined | null): string {
+  return running ? 'Running' : 'Idle';
+}
+
+/**
+ * Formats a PID as a human-readable string.
+ * Returns the PID as a string if present, '–' otherwise.
+ */
+export function formatPid(pid: number | null | undefined): string {
+  return pid != null ? String(pid) : '–';
+}
+
+/**
+ * Formats an ISO timestamp as a human-readable local time string.
+ * Returns a formatted time string if valid, '–' if null/undefined/invalid.
+ */
+export function formatTimestamp(isoTimestamp: string | null | undefined): string {
+  if (!isoTimestamp) return '–';
+  try {
+    const date = new Date(isoTimestamp);
+    if (isNaN(date.getTime())) return '–';
+    // Format as HH:MM:SS local time
+    return date.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '–';
+  }
+}
+
+/**
+ * Formats a completion reason as a human-readable string.
+ * Returns the reason if present, null otherwise (to hide the field).
+ */
+export function formatCompletionReason(reason: string | null | undefined): string | null {
+  return reason || null;
+}
+
+/**
+ * Formats a last error as a human-readable string.
+ * Returns the error if present, null otherwise (to hide the field).
+ * Truncates long errors to prevent layout breakage.
+ */
+export function formatLastError(error: string | null | undefined): string | null {
+  if (!error) return null;
+  // Truncate long errors to prevent layout issues (max 100 chars)
+  return error.length > 100 ? `${error.slice(0, 100)}…` : error;
+}
+
+/**
+ * Run context strip showing issue, workflow, phase, iteration status,
+ * run state, PID, timestamps, completion reason, and last error.
  * Derives workflow/phase from stream state (issue_json) so updates are reflected
  * immediately when websocket `state` snapshots arrive.
+ * Fields update live based on websocket `run` and `state` events via stream state.
  */
 function RunContextStrip() {
   const stream = useViewerStream();
@@ -191,13 +248,33 @@ function RunContextStrip() {
   const currentPhase = extractCurrentPhase(stream.state?.issue_json);
   const run = stream.state?.run ?? null;
 
+  // Run status fields
+  const isRunning = run?.running ?? false;
+  const runState = formatRunState(run?.running);
+  const pidDisplay = formatPid(run?.pid);
+  const startedAt = formatTimestamp(run?.started_at);
+  const endedAt = formatTimestamp(run?.ended_at);
+  const completionReason = formatCompletionReason(run?.completion_reason);
+  const lastError = formatLastError(run?.last_error);
+
   // Show iterations only when running
-  const showIterations = run?.running ?? false;
   const currentIteration = run?.current_iteration ?? 0;
   const maxIterations = run?.max_iterations ?? 0;
 
   return (
     <div style={styles.contextStrip}>
+      {/* Run state indicator */}
+      <div style={styles.contextItem}>
+        <span style={styles.contextLabel}>State</span>
+        <span
+          style={{
+            ...styles.contextValue,
+            color: isRunning ? 'var(--color-accent-green)' : 'var(--color-text-muted)',
+          }}
+        >
+          {runState}
+        </span>
+      </div>
       <div style={styles.contextItem}>
         <span style={styles.contextLabel}>Issue</span>
         <span style={styles.contextValue} className="mono">{issueRef ?? '(none)'}</span>
@@ -210,11 +287,57 @@ function RunContextStrip() {
         <span style={styles.contextLabel}>Phase</span>
         <span style={styles.contextValue} className="mono">{currentPhase ?? '(none)'}</span>
       </div>
-      {showIterations && (
+      {/* Show PID when running or when PID is present */}
+      {(isRunning || run?.pid != null) && (
+        <div style={styles.contextItem}>
+          <span style={styles.contextLabel}>PID</span>
+          <span style={styles.contextValue} className="mono">{pidDisplay}</span>
+        </div>
+      )}
+      {/* Show iterations only when running */}
+      {isRunning && (
         <div style={{ ...styles.contextItem, ...styles.contextIterations }}>
           <span style={styles.contextLabel}>Iteration</span>
           <span style={styles.contextValue} className="mono">
             {currentIteration}/{maxIterations}
+          </span>
+        </div>
+      )}
+      {/* Show timestamps when present */}
+      {run?.started_at && (
+        <div style={styles.contextItem}>
+          <span style={styles.contextLabel}>Started</span>
+          <span style={styles.contextValue} className="mono">{startedAt}</span>
+        </div>
+      )}
+      {run?.ended_at && (
+        <div style={styles.contextItem}>
+          <span style={styles.contextLabel}>Ended</span>
+          <span style={styles.contextValue} className="mono">{endedAt}</span>
+        </div>
+      )}
+      {/* Show completion reason when present (run ended) */}
+      {completionReason && (
+        <div style={styles.contextItem}>
+          <span style={styles.contextLabel}>Completed</span>
+          <span style={styles.contextValue}>{completionReason}</span>
+        </div>
+      )}
+      {/* Show last error when present (without breaking layout) */}
+      {lastError && (
+        <div style={{ ...styles.contextItem, maxWidth: '300px' }}>
+          <span style={styles.contextLabel}>Error</span>
+          <span
+            style={{
+              ...styles.contextValue,
+              color: 'var(--color-accent-red)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={run?.last_error ?? undefined}
+          >
+            {lastError}
           </span>
         </div>
       )}

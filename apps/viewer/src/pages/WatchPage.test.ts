@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractCurrentPhase, extractWorkflowName, isValidViewMode, normalizeViewMode } from './WatchPage.js';
+import {
+  extractCurrentPhase,
+  extractWorkflowName,
+  formatCompletionReason,
+  formatLastError,
+  formatPid,
+  formatRunState,
+  formatTimestamp,
+  isValidViewMode,
+  normalizeViewMode,
+} from './WatchPage.js';
 
 describe('extractWorkflowName', () => {
   it('returns null for null issue_json', () => {
@@ -118,5 +128,176 @@ describe('normalizeViewMode', () => {
     expect(normalizeViewMode('invalid')).toBe('combined');
     expect(normalizeViewMode('')).toBe('combined');
     expect(normalizeViewMode(null)).toBe('combined');
+  });
+});
+
+describe('formatRunState', () => {
+  it('returns Running when running is true', () => {
+    expect(formatRunState(true)).toBe('Running');
+  });
+
+  it('returns Idle when running is false', () => {
+    expect(formatRunState(false)).toBe('Idle');
+  });
+
+  it('returns Idle when running is undefined', () => {
+    expect(formatRunState(undefined)).toBe('Idle');
+  });
+
+  it('returns Idle when running is null', () => {
+    expect(formatRunState(null)).toBe('Idle');
+  });
+});
+
+describe('formatPid', () => {
+  it('returns PID as string when present', () => {
+    expect(formatPid(12345)).toBe('12345');
+    expect(formatPid(1)).toBe('1');
+    expect(formatPid(0)).toBe('0');
+  });
+
+  it('returns dash when PID is null', () => {
+    expect(formatPid(null)).toBe('–');
+  });
+
+  it('returns dash when PID is undefined', () => {
+    expect(formatPid(undefined)).toBe('–');
+  });
+});
+
+describe('formatTimestamp', () => {
+  it('returns formatted time for valid ISO timestamp', () => {
+    // Use a fixed timestamp that will produce predictable output
+    const timestamp = '2024-01-15T14:30:45.123Z';
+    const result = formatTimestamp(timestamp);
+    // Should produce a time string (exact format depends on locale)
+    expect(result).not.toBe('–');
+    expect(result).toMatch(/\d/); // Contains at least one digit
+  });
+
+  it('returns dash for null timestamp', () => {
+    expect(formatTimestamp(null)).toBe('–');
+  });
+
+  it('returns dash for undefined timestamp', () => {
+    expect(formatTimestamp(undefined)).toBe('–');
+  });
+
+  it('returns dash for empty string timestamp', () => {
+    expect(formatTimestamp('')).toBe('–');
+  });
+
+  it('returns dash for invalid timestamp', () => {
+    expect(formatTimestamp('not-a-date')).toBe('–');
+  });
+});
+
+describe('formatCompletionReason', () => {
+  it('returns reason when present', () => {
+    expect(formatCompletionReason('success')).toBe('success');
+    expect(formatCompletionReason('max_iterations')).toBe('max_iterations');
+    expect(formatCompletionReason('user_cancelled')).toBe('user_cancelled');
+  });
+
+  it('returns null for null reason', () => {
+    expect(formatCompletionReason(null)).toBeNull();
+  });
+
+  it('returns null for undefined reason', () => {
+    expect(formatCompletionReason(undefined)).toBeNull();
+  });
+
+  it('returns null for empty string reason', () => {
+    expect(formatCompletionReason('')).toBeNull();
+  });
+});
+
+describe('formatLastError', () => {
+  it('returns error when present and short', () => {
+    expect(formatLastError('Connection failed')).toBe('Connection failed');
+    expect(formatLastError('Error')).toBe('Error');
+  });
+
+  it('truncates long errors to 100 characters with ellipsis', () => {
+    const longError = 'a'.repeat(150);
+    const result = formatLastError(longError);
+    expect(result).toHaveLength(101); // 100 chars + ellipsis
+    expect(result).toBe('a'.repeat(100) + '…');
+  });
+
+  it('does not truncate errors at exactly 100 characters', () => {
+    const exactError = 'a'.repeat(100);
+    expect(formatLastError(exactError)).toBe(exactError);
+  });
+
+  it('returns null for null error', () => {
+    expect(formatLastError(null)).toBeNull();
+  });
+
+  it('returns null for undefined error', () => {
+    expect(formatLastError(undefined)).toBeNull();
+  });
+
+  it('returns null for empty string error', () => {
+    expect(formatLastError('')).toBeNull();
+  });
+});
+
+describe('run status fields update from stream state', () => {
+  it('formatters work together to display run status from state snapshot', () => {
+    // Simulate a run state snapshot from websocket
+    const runStatus = {
+      running: true,
+      pid: 12345,
+      started_at: '2024-01-15T10:00:00Z',
+      ended_at: null,
+      completion_reason: null,
+      last_error: null,
+    };
+
+    expect(formatRunState(runStatus.running)).toBe('Running');
+    expect(formatPid(runStatus.pid)).toBe('12345');
+    expect(formatTimestamp(runStatus.started_at)).not.toBe('–');
+    expect(formatTimestamp(runStatus.ended_at)).toBe('–');
+    expect(formatCompletionReason(runStatus.completion_reason)).toBeNull();
+    expect(formatLastError(runStatus.last_error)).toBeNull();
+  });
+
+  it('formatters handle completed run with error', () => {
+    // Simulate a completed run with error
+    const runStatus = {
+      running: false,
+      pid: 12345,
+      started_at: '2024-01-15T10:00:00Z',
+      ended_at: '2024-01-15T10:05:00Z',
+      completion_reason: 'error',
+      last_error: 'Process crashed unexpectedly',
+    };
+
+    expect(formatRunState(runStatus.running)).toBe('Idle');
+    expect(formatPid(runStatus.pid)).toBe('12345');
+    expect(formatTimestamp(runStatus.started_at)).not.toBe('–');
+    expect(formatTimestamp(runStatus.ended_at)).not.toBe('–');
+    expect(formatCompletionReason(runStatus.completion_reason)).toBe('error');
+    expect(formatLastError(runStatus.last_error)).toBe('Process crashed unexpectedly');
+  });
+
+  it('formatters handle successful completed run', () => {
+    // Simulate a successful completed run
+    const runStatus = {
+      running: false,
+      pid: null, // PID may be null after process ends
+      started_at: '2024-01-15T10:00:00Z',
+      ended_at: '2024-01-15T10:30:00Z',
+      completion_reason: 'max_iterations',
+      last_error: null,
+    };
+
+    expect(formatRunState(runStatus.running)).toBe('Idle');
+    expect(formatPid(runStatus.pid)).toBe('–');
+    expect(formatTimestamp(runStatus.started_at)).not.toBe('–');
+    expect(formatTimestamp(runStatus.ended_at)).not.toBe('–');
+    expect(formatCompletionReason(runStatus.completion_reason)).toBe('max_iterations');
+    expect(formatLastError(runStatus.last_error)).toBeNull();
   });
 });

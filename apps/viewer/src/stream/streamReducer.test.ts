@@ -194,3 +194,80 @@ describe('streamReducer run/state ordering', () => {
   });
 });
 
+describe('streamReducer workflow/phase live updates via state events', () => {
+  it('state event updates issue_json with workflow/phase', () => {
+    const s1 = makeState();
+
+    // First state snapshot with workflow/phase
+    const snapshot1 = makeStateSnapshot({
+      issue_json: { workflow: 'default', phase: 'design_draft' },
+    });
+    const s2 = streamReducer(s1, { type: 'state', data: snapshot1 });
+
+    expect(s2.state?.issue_json).toEqual({ workflow: 'default', phase: 'design_draft' });
+  });
+
+  it('subsequent state event updates workflow/phase (simulating phase change)', () => {
+    const s1 = makeState();
+
+    // First state snapshot: design_draft phase
+    const snapshot1 = makeStateSnapshot({
+      issue_json: { workflow: 'default', phase: 'design_draft' },
+    });
+    const s2 = streamReducer(s1, { type: 'state', data: snapshot1 });
+    expect(s2.state?.issue_json?.workflow).toBe('default');
+    expect(s2.state?.issue_json?.phase).toBe('design_draft');
+
+    // Second state snapshot: phase changed to implement_task
+    const snapshot2 = makeStateSnapshot({
+      issue_json: { workflow: 'default', phase: 'implement_task' },
+    });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot2 });
+
+    // Assert workflow/phase updated via state event
+    expect(s3.state?.issue_json?.workflow).toBe('default');
+    expect(s3.state?.issue_json?.phase).toBe('implement_task');
+  });
+
+  it('subsequent state event updates workflow (simulating workflow change)', () => {
+    const s1 = makeState();
+
+    // First state snapshot: default workflow
+    const snapshot1 = makeStateSnapshot({
+      issue_json: { workflow: 'default', phase: 'design_review' },
+    });
+    const s2 = streamReducer(s1, { type: 'state', data: snapshot1 });
+    expect(s2.state?.issue_json?.workflow).toBe('default');
+
+    // Second state snapshot: workflow changed to custom-flow
+    const snapshot2 = makeStateSnapshot({
+      issue_json: { workflow: 'custom-flow', phase: 'task_decomposition' },
+    });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot2 });
+
+    // Assert workflow updated via state event
+    expect(s3.state?.issue_json?.workflow).toBe('custom-flow');
+    expect(s3.state?.issue_json?.phase).toBe('task_decomposition');
+  });
+
+  it('state event with null issue_json clears workflow/phase', () => {
+    const s1 = makeState();
+
+    // First state snapshot with workflow/phase
+    const snapshot1 = makeStateSnapshot({
+      issue_json: { workflow: 'default', phase: 'design_draft' },
+    });
+    const s2 = streamReducer(s1, { type: 'state', data: snapshot1 });
+    expect(s2.state?.issue_json?.workflow).toBe('default');
+
+    // Second state snapshot with null issue_json
+    const snapshot2 = makeStateSnapshot({
+      issue_json: null,
+    });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot2 });
+
+    // Assert issue_json is now null
+    expect(s3.state?.issue_json).toBeNull();
+  });
+});
+

@@ -1,8 +1,6 @@
 import { useCallback, useEffect, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { useWorkflowQuery } from '../features/workflow/queries.js';
-import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
 import { SdkPage } from './SdkPage.js';
@@ -162,16 +160,35 @@ function getGridTemplate(view: WatchViewMode): string {
 }
 
 /**
+ * Extracts workflow name from issue_json.
+ * Returns the workflow field if it's a string, otherwise null.
+ */
+export function extractWorkflowName(issueJson: Record<string, unknown> | null | undefined): string | null {
+  if (!issueJson) return null;
+  return typeof issueJson.workflow === 'string' ? issueJson.workflow : null;
+}
+
+/**
+ * Extracts current phase from issue_json.
+ * Returns the phase field if it's a string, otherwise null.
+ */
+export function extractCurrentPhase(issueJson: Record<string, unknown> | null | undefined): string | null {
+  if (!issueJson) return null;
+  return typeof issueJson.phase === 'string' ? issueJson.phase : null;
+}
+
+/**
  * Run context strip showing issue, workflow, phase, and iteration status.
+ * Derives workflow/phase from stream state (issue_json) so updates are reflected
+ * immediately when websocket `state` snapshots arrive.
  */
 function RunContextStrip() {
-  const baseUrl = useViewerServerBaseUrl();
   const stream = useViewerStream();
-  const workflowQuery = useWorkflowQuery(baseUrl);
 
   const issueRef = stream.state?.issue_ref ?? null;
-  const workflowName = workflowQuery.data?.workflow_name ?? null;
-  const currentPhase = workflowQuery.data?.current_phase ?? null;
+  // Derive workflow/phase from stream state for live updates
+  const workflowName = extractWorkflowName(stream.state?.issue_json);
+  const currentPhase = extractCurrentPhase(stream.state?.issue_json);
   const run = stream.state?.run ?? null;
 
   // Show iterations only when running

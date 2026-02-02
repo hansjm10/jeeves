@@ -2,10 +2,8 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import { AppShell } from '../layout/AppShell.js';
 import { CreateIssuePage } from '../pages/CreateIssuePage.js';
-import { LogsPage } from '../pages/LogsPage.js';
 import { PromptsPage } from '../pages/PromptsPage.js';
-import { SdkPage } from '../pages/SdkPage.js';
-import { ViewerLogsPage } from '../pages/ViewerLogsPage.js';
+import { WatchPage } from '../pages/WatchPage.js';
 import { WorkflowsPage } from '../pages/WorkflowsPage.js';
 
 export function makeRouter(): ReturnType<typeof createBrowserRouter> {
@@ -14,14 +12,16 @@ export function makeRouter(): ReturnType<typeof createBrowserRouter> {
       path: '/',
       element: <AppShell />,
       children: [
-        { index: true, element: <Navigate to="/sdk" replace /> },
-        { path: 'sdk', element: <SdkPage /> },
+        { index: true, element: <Navigate to="/watch" replace /> },
+        { path: 'watch', element: <WatchPage /> },
+        // Legacy routes redirect to Watch with explicit view mapping
+        { path: 'sdk', element: <Navigate to="/watch?view=sdk" replace /> },
+        { path: 'logs', element: <Navigate to="/watch?view=logs" replace /> },
+        { path: 'viewer-logs', element: <Navigate to="/watch?view=viewer-logs" replace /> },
         { path: 'workflows', element: <WorkflowsPage /> },
         { path: 'create-issue', element: <CreateIssuePage /> },
-        { path: 'logs', element: <LogsPage /> },
-        { path: 'viewer-logs', element: <ViewerLogsPage /> },
         { path: 'prompts/*', element: <PromptsPage /> },
-        { path: '*', element: <Navigate to="/sdk" replace /> },
+        { path: '*', element: <Navigate to="/watch" replace /> },
       ],
     },
   ]);

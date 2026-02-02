@@ -2,11 +2,11 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useReducer, useRef } from 'react';
 
 import { wsUrlFromBaseUrl } from '../api/paths.js';
-import type { IssueStateSnapshot, LogEvent } from '../api/types.js';
+import type { IssueStateSnapshot, LogEvent, RunStatus } from '../api/types.js';
+import type { ExtendedStreamState } from './streamReducer.js';
 import { streamReducer } from './streamReducer.js';
-import type { StreamState } from './streamTypes.js';
 
-const ViewerStreamContext = createContext<StreamState | null>(null);
+const ViewerStreamContext = createContext<ExtendedStreamState | null>(null);
 
 const RECONNECT_MS = 600;
 
@@ -18,6 +18,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     logs: [],
     viewerLogs: [],
     sdkEvents: [],
+    runOverride: null,
+    effectiveRun: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -48,6 +50,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
           const event = typeof parsed.event === 'string' ? parsed.event : null;
           if (!event) return;
           if (event === 'state') dispatch({ type: 'state', data: parsed.data as IssueStateSnapshot });
+          else if (event === 'run')
+            dispatch({ type: 'run', data: parsed.data as { run: RunStatus } });
           else if (event === 'logs') dispatch({ type: 'logs', data: parsed.data as LogEvent });
           else if (event === 'viewer-logs') dispatch({ type: 'viewer-logs', data: parsed.data as LogEvent });
           else dispatch({ type: 'sdk', event, data: parsed.data });
@@ -91,7 +95,7 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
   return <ViewerStreamContext.Provider value={state}>{props.children}</ViewerStreamContext.Provider>;
 }
 
-export function useViewerStream(): StreamState {
+export function useViewerStream(): ExtendedStreamState {
   const value = useContext(ViewerStreamContext);
   if (!value) throw new Error('useViewerStream must be used within ViewerStreamProvider');
   return value;

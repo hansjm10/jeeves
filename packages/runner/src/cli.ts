@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 
 import { parseIssueRef, getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
+import { runExpandIssue } from './issueExpand.js';
 import { ClaudeAgentProvider } from './providers/claudeAgentSdk.js';
 import { CodexSdkProvider } from './providers/codexSdk.js';
 import { FakeProvider } from './providers/fake.js';
@@ -14,10 +15,12 @@ function usage(): string {
     '  jeeves-runner run-workflow --workflow <name> [--provider claude|codex|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
     '  jeeves-runner run-phase --workflow <name> --phase <phaseName> [--provider claude|codex|fake] [--workflows-dir <dir>] [--prompts-dir <dir>] [--state-dir <dir>] [--work-dir <dir>] [--issue <owner/repo#N>]',
     '  jeeves-runner run-fixture [--state-dir <dir>]',
+    '  jeeves-runner expand-issue [--provider claude|codex|fake] [--prompts-dir <dir>]',
     '',
     'Notes:',
     '  - run-fixture defaults to workflow=fixture-trivial and provider=fake so it runs without credentials.',
     '  - If --issue is provided, state/work dirs default to the XDG layout (override with JEEVES_DATA_DIR).',
+    '  - expand-issue reads JSON from stdin with { summary, issue_type?, repo? } and outputs JSON to stdout.',
   ].join('\n');
 }
 
@@ -70,6 +73,18 @@ export async function main(argv: string[]): Promise<void> {
       promptsDir,
       stateDir,
       cwd,
+    });
+    return;
+  }
+
+  if (cmd === 'expand-issue') {
+    const { provider } = resolveProvider(String(values.provider ?? 'claude'));
+    const promptsDir = path.resolve(String(values['prompts-dir'] ?? path.join(process.cwd(), 'prompts')));
+
+    await runExpandIssue({
+      provider,
+      promptsDir,
+      promptId: 'issue.expand.md',
     });
     return;
   }

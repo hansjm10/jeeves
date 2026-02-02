@@ -58,11 +58,21 @@ You are a senior software architect creating a design document for a coding task
 
 8. Write the design document to the determined path.
 
-9. Update `.jeeves/issue.json`:
+9. Commit the design document to git (REQUIRED):
+   - IMPORTANT: Commit **only** the design document file. Do NOT stage or commit `.jeeves/*`.
+   - If there are no changes to commit, skip this step.
+   - Commands:
+     ```bash
+     git status --porcelain=v1 -- <designDocPath>
+     git add -- <designDocPath>
+     git commit --no-verify -m "chore(design): checkpoint issue-<N> design doc (design_draft)"
+     ```
+
+10. Update `.jeeves/issue.json`:
    - Set `designDocPath` to the document path (relative to repo root)
    - Set `status.designDraftComplete` to `true`
 
-10. Append a progress entry to `.jeeves/progress.txt` following this format:
+11. Append a progress entry to `.jeeves/progress.txt` following this format:
     ```
     ## [Date/Time] - Design Draft
     - Created design document at: <path>

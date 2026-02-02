@@ -1,8 +1,10 @@
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +13,8 @@ import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
 import { RunManager } from './runManager.js';
 import { readIssueJson } from './issueJson.js';
 
+const execFileAsync = promisify(execFile);
+
 async function makeTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
@@ -18,6 +22,11 @@ async function makeTempDir(prefix: string): Promise<string> {
 async function writeWorkflowYaml(workflowsDir: string, name: string, yaml: string): Promise<void> {
   await fs.mkdir(workflowsDir, { recursive: true });
   await fs.writeFile(path.join(workflowsDir, `${name}.yaml`), yaml, 'utf-8');
+}
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout, stderr } = await execFileAsync('git', args, { cwd, maxBuffer: 5 * 1024 * 1024 });
+  return `${String(stdout ?? '')}${String(stderr ?? '')}`;
 }
 
 function makeFakeChild(exitCode = 0, delayMs = 25, signal: NodeJS.Signals | null = null) {
@@ -254,6 +263,62 @@ describe('RunManager', () => {
     const updated = await readIssueJson(stateDir);
     expect(updated?.phase).toBe('complete');
     expect(broadcastEvents.includes('run')).toBe(true);
+  });
+
+  it('commits a design doc checkpoint after design_draft success', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await runGit(workDir, ['init']);
+    await fs.mkdir(path.join(workDir, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(workDir, 'docs', `issue-${issueNumber}-design.md`), '# design\n', 'utf-8');
+
+    const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    await expect(runGit(workDir, ['ls-files', '--error-unmatch', '--', `docs/issue-${issueNumber}-design.md`])).resolves.toContain(
+      `docs/issue-${issueNumber}-design.md`,
+    );
+    const subject = (await runGit(workDir, ['log', '-1', '--pretty=%s'])).trim();
+    expect(subject).toContain(`checkpoint issue #${issueNumber} design doc (design_draft)`);
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('design_review');
   });
 
   it('propagates dataDir to runner via JEEVES_DATA_DIR', async () => {

@@ -6,6 +6,7 @@ import { LogsPage } from '../pages/LogsPage.js';
 import { PromptsPage } from '../pages/PromptsPage.js';
 import { SdkPage } from '../pages/SdkPage.js';
 import { ViewerLogsPage } from '../pages/ViewerLogsPage.js';
+import { WatchPage } from '../pages/WatchPage.js';
 import { WorkflowsPage } from '../pages/WorkflowsPage.js';
 
 export function makeRouter(): ReturnType<typeof createBrowserRouter> {
@@ -15,6 +16,7 @@ export function makeRouter(): ReturnType<typeof createBrowserRouter> {
       element: <AppShell />,
       children: [
         { index: true, element: <Navigate to="/sdk" replace /> },
+        { path: 'watch', element: <WatchPage /> },
         { path: 'sdk', element: <SdkPage /> },
         { path: 'workflows', element: <WorkflowsPage /> },
         { path: 'create-issue', element: <CreateIssuePage /> },

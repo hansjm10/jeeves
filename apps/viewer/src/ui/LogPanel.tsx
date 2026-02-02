@@ -15,6 +15,7 @@ export interface LogPanelState {
   clipboardError: boolean;
   setFollowTail: (value: boolean) => void;
   setSearchQuery: (value: string) => void;
+  setClipboardError: (value: boolean) => void;
   handleResume: () => void;
   handleCopyVisible: () => Promise<void>;
   clearClipboardError: () => void;
@@ -92,6 +93,7 @@ export function useLogPanel(lines: string[]) {
     clipboardError,
     setFollowTail,
     setSearchQuery,
+    setClipboardError,
     handleResume,
     handleCopyVisible,
     clearClipboardError,
@@ -114,6 +116,7 @@ export function LogPanel(props: LogPanelProps) {
     clipboardError,
     setFollowTail,
     setSearchQuery,
+    setClipboardError,
     handleResume,
     handleCopyVisible,
     clearClipboardError,
@@ -137,16 +140,16 @@ export function LogPanel(props: LogPanelProps) {
     }
   }, [followTail, filteredLines]);
 
-  // Copy selection handler
+  // Copy selection handler - also surfaces clipboard error on failure
   const handleCopySelection = useCallback(async () => {
     const selection = window.getSelection()?.toString() ?? '';
     if (selection) {
       const success = await copyToClipboard(selection);
       if (!success) {
-        // Error is handled silently for selection copy
+        setClipboardError(true);
       }
     }
-  }, []);
+  }, [setClipboardError]);
 
   // Clear clipboard error after a delay
   useEffect(() => {

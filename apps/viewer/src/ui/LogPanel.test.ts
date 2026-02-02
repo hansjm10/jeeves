@@ -23,14 +23,12 @@ const clipboardMock = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  Object.defineProperty(navigator, 'clipboard', {
-    value: clipboardMock,
-    configurable: true,
-  });
+  vi.stubGlobal('navigator', { clipboard: clipboardMock });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 // === filterLines tests (Acceptance Criterion 2) ===

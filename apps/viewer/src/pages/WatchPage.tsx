@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
 import { SdkPage } from './SdkPage.js';
+import './WatchPage.css';
 
 /**
  * Valid view modes for the Watch page.
@@ -125,14 +126,14 @@ const styles = {
   /**
    * Hidden panel - still mounted but not visible
    * Using visibility: hidden preserves scroll position
+   * Stays in grid flow so grid-template-columns controls sizing
    */
   panelHidden: {
     visibility: 'hidden',
-    position: 'absolute',
-    width: 0,
-    height: 0,
     overflow: 'hidden',
     pointerEvents: 'none',
+    minWidth: 0,
+    minHeight: 0,
   } satisfies CSSProperties,
 };
 
@@ -352,9 +353,9 @@ function RunContextStrip() {
   const maxIterations = run?.max_iterations ?? 0;
 
   return (
-    <div style={styles.contextStrip}>
+    <div style={styles.contextStrip} className="watch-context-strip">
       {/* Run state indicator */}
-      <div style={styles.contextItem}>
+      <div style={styles.contextItem} className="watch-context-item">
         <span style={styles.contextLabel}>State</span>
         <span
           style={{
@@ -365,28 +366,28 @@ function RunContextStrip() {
           {runState}
         </span>
       </div>
-      <div style={styles.contextItem}>
+      <div style={styles.contextItem} className="watch-context-item">
         <span style={styles.contextLabel}>Issue</span>
         <span style={styles.contextValue} className="mono">{issueRef ?? '(none)'}</span>
       </div>
-      <div style={styles.contextItem}>
+      <div style={styles.contextItem} className="watch-context-item">
         <span style={styles.contextLabel}>Workflow</span>
         <span style={styles.contextValue} className="mono">{workflowName ?? '(none)'}</span>
       </div>
-      <div style={styles.contextItem}>
+      <div style={styles.contextItem} className="watch-context-item">
         <span style={styles.contextLabel}>Phase</span>
         <span style={styles.contextValue} className="mono">{currentPhase ?? '(none)'}</span>
       </div>
       {/* Show PID when running or when PID is present */}
       {(isRunning || run?.pid != null) && (
-        <div style={styles.contextItem}>
+        <div style={styles.contextItem} className="watch-context-item">
           <span style={styles.contextLabel}>PID</span>
           <span style={styles.contextValue} className="mono">{pidDisplay}</span>
         </div>
       )}
       {/* Show iterations only when running */}
       {isRunning && (
-        <div style={{ ...styles.contextItem, ...styles.contextIterations }}>
+        <div style={{ ...styles.contextItem, ...styles.contextIterations }} className="watch-context-item">
           <span style={styles.contextLabel}>Iteration</span>
           <span style={styles.contextValue} className="mono">
             {currentIteration}/{maxIterations}
@@ -395,27 +396,27 @@ function RunContextStrip() {
       )}
       {/* Show timestamps when present */}
       {run?.started_at && (
-        <div style={styles.contextItem}>
+        <div style={styles.contextItem} className="watch-context-item">
           <span style={styles.contextLabel}>Started</span>
           <span style={styles.contextValue} className="mono">{startedAt}</span>
         </div>
       )}
       {run?.ended_at && (
-        <div style={styles.contextItem}>
+        <div style={styles.contextItem} className="watch-context-item">
           <span style={styles.contextLabel}>Ended</span>
           <span style={styles.contextValue} className="mono">{endedAt}</span>
         </div>
       )}
       {/* Show completion reason when present (run ended) */}
       {completionReason && (
-        <div style={styles.contextItem}>
+        <div style={styles.contextItem} className="watch-context-item">
           <span style={styles.contextLabel}>Completed</span>
           <span style={styles.contextValue}>{completionReason}</span>
         </div>
       )}
       {/* Show last error when present (without breaking layout) */}
       {lastError && (
-        <div style={{ ...styles.contextItem, maxWidth: '300px' }}>
+        <div style={{ ...styles.contextItem, maxWidth: '300px' }} className="watch-context-item">
           <span style={styles.contextLabel}>Error</span>
           <span
             style={{
@@ -446,7 +447,7 @@ function ViewModeToggle({
   onChange: (mode: WatchViewMode) => void;
 }) {
   return (
-    <div style={styles.viewToggle}>
+    <div style={styles.viewToggle} className="watch-view-toggle">
       {VALID_VIEWS.map((v, index) => {
         const isLast = index === VALID_VIEWS.length - 1;
         const isActive = mode === v;
@@ -454,6 +455,7 @@ function ViewModeToggle({
           <button
             key={v}
             type="button"
+            className="watch-view-btn"
             style={{
               ...styles.viewBtn,
               ...(isLast ? styles.viewBtnLast : {}),
@@ -520,7 +522,7 @@ export function WatchPage() {
   return (
     <div style={styles.container}>
       {/* Header with context strip and view toggle */}
-      <div style={styles.header}>
+      <div style={styles.header} className="watch-header">
         <RunContextStrip />
         <ViewModeToggle mode={currentView} onChange={handleViewChange} />
       </div>
@@ -531,6 +533,8 @@ export function WatchPage() {
         Hidden panels have 0 width but remain mounted to preserve state.
       */}
       <div
+        className="watch-content"
+        data-view={currentView}
         style={{
           ...styles.content,
           gridTemplateColumns: getGridTemplate(currentView),

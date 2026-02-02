@@ -1,0 +1,68 @@
+/* WatchPage - Mobile-responsive styles */
+/* Uses shared design tokens from styles/tokens.css */
+
+/* ========== Tablet (900px) ========== */
+@media (max-width: 900px) {
+  .watch-header {
+    padding: var(--space-4) var(--space-5);
+    gap: var(--space-4);
+  }
+
+  .watch-context-strip {
+    gap: var(--space-4);
+  }
+
+  .watch-content {
+    padding: var(--space-4);
+    gap: var(--space-4);
+  }
+}
+
+/* ========== Mobile (768px) ========== */
+@media (max-width: 768px) {
+  /* Header: stack vertically */
+  .watch-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+  }
+
+  /* Context strip: horizontal scroll instead of wrap */
+  .watch-context-strip {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    gap: var(--space-4);
+    padding-bottom: var(--space-2);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Context items: prevent shrinking */
+  .watch-context-item {
+    flex-shrink: 0;
+  }
+
+  /* View toggle: full width, touch-friendly */
+  .watch-view-toggle {
+    width: 100%;
+  }
+
+  .watch-view-btn {
+    flex: 1;
+    padding: var(--space-4) var(--space-3);
+    min-height: 44px; /* Touch target size */
+  }
+
+  /* Content: reduced padding */
+  .watch-content {
+    padding: var(--space-3);
+    gap: var(--space-3);
+  }
+
+  /* Combined view: stack vertically on mobile */
+  .watch-content[data-view="combined"] {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 1fr 1fr;
+  }
+}

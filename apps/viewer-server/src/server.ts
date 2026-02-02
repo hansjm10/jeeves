@@ -19,6 +19,7 @@ import { loadActiveIssue, saveActiveIssue } from './activeIssue.js';
 import { EventHub } from './eventHub.js';
 import { CreateGitHubIssueError, createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
 import { initIssue } from './init.js';
+import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
@@ -973,6 +974,84 @@ export async function buildServer(config: ViewerServerConfig) {
 		      return reply.code(500).send({ ok: false, error: 'Failed to create GitHub issue.', run: runManager.getStatus() });
 		    }
 		  });
+
+	  app.post('/api/github/issues/expand', async (req, reply) => {
+	    // Gated by localhost-only by default
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+
+	    const body = getBody(req);
+
+	    // Validate summary (required, 5-2000 chars)
+	    const summaryRaw = typeof body.summary === 'string' ? body.summary : '';
+	    const summary = summaryRaw.trim();
+	    if (!summary) {
+	      return reply.code(400).send({ ok: false, error: 'summary is required' });
+	    }
+	    if (summary.length < 5) {
+	      return reply.code(400).send({ ok: false, error: 'summary must be at least 5 characters' });
+	    }
+	    if (summary.length > 2000) {
+	      return reply.code(400).send({ ok: false, error: 'summary must be at most 2000 characters' });
+	    }
+
+	    // Validate issue_type (optional, must be one of feature/bug/refactor)
+	    const issueTypeRaw = parseOptionalString(body.issue_type);
+	    let issueType: 'feature' | 'bug' | 'refactor' | undefined;
+	    if (issueTypeRaw !== undefined) {
+	      const validTypes = ['feature', 'bug', 'refactor'] as const;
+	      if (!validTypes.includes(issueTypeRaw as typeof validTypes[number])) {
+	        return reply.code(400).send({ ok: false, error: `issue_type must be one of: ${validTypes.join(', ')}` });
+	      }
+	      issueType = issueTypeRaw as typeof validTypes[number];
+	    }
+
+	    // Resolve provider/model defaults from the 'default' workflow
+	    let defaultProvider = 'claude';
+	    let defaultModel: string | undefined;
+	    try {
+	      const workflow = await loadWorkflowByName('default', { workflowsDir });
+	      if (workflow.defaultProvider) {
+	        defaultProvider = workflow.defaultProvider;
+	      }
+	      if (workflow.defaultModel) {
+	        defaultModel = workflow.defaultModel;
+	      }
+	    } catch {
+	      // If default workflow doesn't exist or is invalid, use fallback defaults
+	    }
+
+	    // Allow overrides from request
+	    const providerOverride = parseOptionalString(body.provider);
+	    const modelOverride = parseOptionalString(body.model);
+	    const effectiveProvider = providerOverride ?? defaultProvider;
+	    const effectiveModel = modelOverride ?? defaultModel;
+
+	    // Spawn runner subprocess with 60s timeout
+	    const { result, timedOut } = await runIssueExpand(
+	      { summary, issue_type: issueType },
+	      {
+	        repoRoot,
+	        promptsDir,
+	        provider: effectiveProvider,
+	        model: effectiveModel,
+	        timeoutMs: 60000,
+	      },
+	    );
+
+	    // Handle timeout
+	    if (timedOut) {
+	      return reply.code(504).send({ ok: false, error: 'Request timed out' });
+	    }
+
+	    // Handle runner failure (do not include raw output in response)
+	    if (!result.ok) {
+	      return reply.code(500).send({ ok: false, error: result.error });
+	    }
+
+	    // Success - return title, body, provider, and optionally model
+	    return reply.send(buildSuccessResponse(result.title, result.body, effectiveProvider, effectiveModel));
+	  });
 
 	  app.post('/api/issues/select', async (req, reply) => {
 	    const gate = await requireMutatingAllowed(req);

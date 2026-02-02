@@ -248,6 +248,31 @@ export type TaskToolInput = Readonly<{
   model?: string;
 }>;
 
+// Issue Expansion Types
+export type IssueType = 'feature' | 'bug' | 'refactor';
+
+export type ExpandIssueRequest = Readonly<{
+  summary: string;
+  issue_type?: IssueType;
+  provider?: string;
+  model?: string;
+}>;
+
+export type ExpandIssueSuccessResponse = Readonly<{
+  ok: true;
+  title: string;
+  body: string;
+  provider: string;
+  model?: string;
+}>;
+
+export type ExpandIssueErrorResponse = Readonly<{
+  ok: false;
+  error: string;
+}>;
+
+export type ExpandIssueResponse = ExpandIssueSuccessResponse | ExpandIssueErrorResponse;
+
 // Union type for all tool inputs
 export type ToolInput =
   | BashToolInput

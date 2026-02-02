@@ -49,32 +49,32 @@ Do NOT attempt partial fixes or workarounds
 
 Delete .jeeves/task-feedback.md after reading, to clear retry state
 
-	Rule:
+Rule:
 
-	If any feedback item is not addressed → the task will fail again
+If any feedback item is not addressed → the task will fail again
 
-	4. Pre-flight working tree check (MANDATORY)
+4. Pre-flight working tree check (MANDATORY)
 
-	Before writing any code, run:
+Before writing any code, run:
 
-	```bash
-	git status --porcelain
-	```
+```bash
+git status --porcelain
+```
 
-	If there are any modified or untracked files that do not match the task’s `filesAllowed` (and are not `.jeeves` / under `.jeeves/`):
+If there are any modified or untracked files that do not match the task’s `filesAllowed` (and are not `.jeeves` / under `.jeeves/`):
 
-	- STOP and do not start implementation yet
-	- Make the worktree clean first, e.g.:
-	  - Prefer: `git stash --include-untracked` (safest default)
-	  - Or if you are certain the files are disposable: `git clean -f <path>`
+- STOP and do not start implementation yet
+- Make the worktree clean first, e.g.:
+  - Prefer: `git stash --include-untracked` (safest default)
+  - Or if you are certain the files are disposable: `git clean -f <path>`
 
-	Then re-run `git status --porcelain` and proceed only when the remaining changes are within `filesAllowed` (and/or `.jeeves` / `.jeeves/`).
+Then re-run `git status --porcelain` and proceed only when the remaining changes are within `filesAllowed` (and/or `.jeeves` / `.jeeves/`).
 
-	If you cannot safely clean/stash the unexpected files → STOP and record the blocker in `.jeeves/progress.txt`.
+If you cannot safely clean/stash the unexpected files → STOP and record the blocker in `.jeeves/progress.txt`.
 
-	5. Implement the task (scope is binding)
+5. Implement the task (scope is binding)
 
-	Implementation rules:
+Implementation rules:
 
 Implement only what is required to satisfy the acceptance criteria
 
@@ -106,7 +106,7 @@ Record the blocker in .jeeves/progress.txt
 
 Do NOT proceed further
 
-	6. Self-verify against acceptance criteria (MANDATORY)
+6. Self-verify against acceptance criteria (MANDATORY)
 
 Before committing:
 
@@ -124,7 +124,7 @@ If you cannot verify a criterion → STOP
 
 Do not assume the spec check will “figure it out”
 
-	7. Update task state (implementation only)
+7. Update task state (implementation only)
 
 Update .jeeves/tasks.json:
 
@@ -140,7 +140,7 @@ Set taskPassed, taskFailed, or allTasksComplete
 
 Those are owned by task_spec_check.
 
-	8. Commit changes
+8. Commit changes
 
 Commit using Conventional Commits
 
@@ -160,7 +160,7 @@ Write error details to .jeeves/ci-error.txt
 End the phase immediately
 (fix_ci will handle recovery)
 
-	9. Push changes
+9. Push changes
 
 Run:
 
@@ -175,7 +175,7 @@ Write error details to .jeeves/ci-error.txt
 
 End the phase immediately
 
-	10. Log implementation progress
+10. Log implementation progress
 
 Append a progress entry to .jeeves/progress.txt.
 

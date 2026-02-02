@@ -233,6 +233,96 @@ export function formatLastError(error: string | null | undefined): string | null
 }
 
 /**
+ * Represents a field that would be rendered in the Run Context Strip.
+ * Used for testing that the correct fields are present in the UI.
+ */
+export interface RunContextField {
+  /** The label displayed for this field (e.g., "State", "PID") */
+  label: string;
+  /** The value displayed for this field */
+  value: string;
+  /** Whether this field is visible (some fields are conditionally shown) */
+  visible: boolean;
+  /** For error field: the full untruncated error (shown in title attribute) */
+  fullValue?: string;
+}
+
+/**
+ * Input state for computing run context fields.
+ * This mirrors the relevant parts of ExtendedStreamState for testing.
+ */
+export interface RunContextInput {
+  issue_ref?: string | null;
+  issue_json?: Record<string, unknown> | null;
+  run?: {
+    running?: boolean | null;
+    pid?: number | null;
+    started_at?: string | null;
+    ended_at?: string | null;
+    completion_reason?: string | null;
+    last_error?: string | null;
+    current_iteration?: number;
+    max_iterations?: number;
+  } | null;
+}
+
+/**
+ * Computes the fields that would be rendered in the Run Context Strip.
+ * This is a pure function that can be tested without rendering React components.
+ * The returned array describes which fields are visible and their values.
+ *
+ * @param input The stream state input
+ * @returns Array of RunContextField describing the rendered fields
+ */
+export function computeRunContextFields(input: RunContextInput): RunContextField[] {
+  const issueRef = input.issue_ref ?? null;
+  const workflowName = extractWorkflowName(input.issue_json);
+  const currentPhase = extractCurrentPhase(input.issue_json);
+  const run = input.run ?? null;
+
+  const isRunning = run?.running ?? false;
+  const runState = formatRunState(run?.running);
+  const pidDisplay = formatPid(run?.pid);
+  const startedAt = formatTimestamp(run?.started_at);
+  const endedAt = formatTimestamp(run?.ended_at);
+  const completionReason = formatCompletionReason(run?.completion_reason);
+  const lastError = formatLastError(run?.last_error);
+
+  const currentIteration = run?.current_iteration ?? 0;
+  const maxIterations = run?.max_iterations ?? 0;
+
+  const fields: RunContextField[] = [
+    // State is always visible
+    { label: 'State', value: runState, visible: true },
+    // Issue is always visible
+    { label: 'Issue', value: issueRef ?? '(none)', visible: true },
+    // Workflow is always visible
+    { label: 'Workflow', value: workflowName ?? '(none)', visible: true },
+    // Phase is always visible
+    { label: 'Phase', value: currentPhase ?? '(none)', visible: true },
+    // PID is shown when running or when PID is present
+    { label: 'PID', value: pidDisplay, visible: isRunning || run?.pid != null },
+    // Iteration is shown only when running
+    { label: 'Iteration', value: `${currentIteration}/${maxIterations}`, visible: isRunning },
+    // Started is shown when started_at is present
+    { label: 'Started', value: startedAt, visible: !!run?.started_at },
+    // Ended is shown when ended_at is present
+    { label: 'Ended', value: endedAt, visible: !!run?.ended_at },
+    // Completed is shown when completion_reason is present
+    { label: 'Completed', value: completionReason ?? '', visible: !!completionReason },
+    // Error is shown when last_error is present
+    {
+      label: 'Error',
+      value: lastError ?? '',
+      visible: !!lastError,
+      fullValue: run?.last_error ?? undefined,
+    },
+  ];
+
+  return fields;
+}
+
+/**
  * Run context strip showing issue, workflow, phase, iteration status,
  * run state, PID, timestamps, completion reason, and last error.
  * Derives workflow/phase from stream state (issue_json) so updates are reflected

@@ -43,8 +43,10 @@ export function streamReducer(
     }
     case 'run': {
       // Store live run update in runOverride (supersedes snapshot until next snapshot)
+      // Also update state.run if state exists, so consumers reading state.run get live updates
       const runOverride = action.data.run;
-      return { ...state, runOverride, effectiveRun: runOverride };
+      const newState = state.state ? { ...state.state, run: runOverride } : null;
+      return { ...state, state: newState, runOverride, effectiveRun: runOverride };
     }
     case 'logs': {
       const next = action.data.reset ? action.data.lines : [...state.logs, ...action.data.lines];

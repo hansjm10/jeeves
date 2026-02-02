@@ -127,7 +127,7 @@ describe('streamReducer run/state ordering', () => {
     expect(s3.effectiveRun).toEqual(snapshot.run); // effectiveRun reflects snapshot
   });
 
-  it('state -> run: run update sets runOverride (run wins until next snapshot)', () => {
+  it('state -> run: run update sets runOverride and updates state.run (run wins until next snapshot)', () => {
     const s1 = makeState();
     // First: state snapshot arrives
     const snapshot = makeStateSnapshot({
@@ -138,12 +138,14 @@ describe('streamReducer run/state ordering', () => {
     expect(s2.runOverride).toBeNull();
     expect(s2.effectiveRun).toEqual(snapshot.run);
 
-    // Then: run update arrives - should set runOverride
+    // Then: run update arrives - should set runOverride AND update state.run
     const runUpdate = makeRunStatus({ running: true, current_iteration: 4 });
     const s3 = streamReducer(s2, { type: 'run', data: { run: runUpdate } });
 
     expect(s3.runOverride).toEqual(runUpdate);
-    expect(s3.state?.run.current_iteration).toBe(2); // Snapshot unchanged
+    // state.run is also updated so UI consumers reading state.run see live updates
+    expect(s3.state?.run.current_iteration).toBe(4);
+    expect(s3.state?.run).toEqual(runUpdate);
     // effectiveRun reflects the live run update
     expect(s3.effectiveRun).toEqual(runUpdate);
     expect(s3.effectiveRun?.current_iteration).toBe(4);
@@ -163,14 +165,15 @@ describe('streamReducer run/state ordering', () => {
     expect(state.effectiveRun?.current_iteration).toBe(3);
   });
 
-  it('run -> state -> run: second run update re-establishes override', () => {
+  it('run -> state -> run: second run update re-establishes override and updates state.run', () => {
     const s1 = makeState();
 
-    // run update
+    // run update (no state yet, so state remains null)
     const run1 = makeRunStatus({ current_iteration: 1 });
     let state = streamReducer(s1, { type: 'run', data: { run: run1 } });
     expect(state.runOverride?.current_iteration).toBe(1);
     expect(state.effectiveRun?.current_iteration).toBe(1);
+    expect(state.state).toBeNull(); // No state yet
 
     // state snapshot clears override
     const snapshot = makeStateSnapshot({
@@ -181,11 +184,12 @@ describe('streamReducer run/state ordering', () => {
     expect(state.state?.run.current_iteration).toBe(2);
     expect(state.effectiveRun?.current_iteration).toBe(2);
 
-    // another run update re-establishes override
+    // another run update re-establishes override AND updates state.run
     const run2 = makeRunStatus({ current_iteration: 5 });
     state = streamReducer(state, { type: 'run', data: { run: run2 } });
     expect(state.runOverride?.current_iteration).toBe(5);
-    expect(state.state?.run.current_iteration).toBe(2); // Snapshot still has old value
+    expect(state.state?.run.current_iteration).toBe(5); // state.run is updated for UI consumers
+    expect(state.state?.run).toEqual(run2);
     expect(state.effectiveRun?.current_iteration).toBe(5); // effectiveRun reflects live update
   });
 });

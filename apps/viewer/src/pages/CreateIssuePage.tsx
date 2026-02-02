@@ -1,17 +1,31 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { expandIssue, buildExpandIssueRequestBody } from '../api/client.js';
-import type { CreateIssueRequest, CreateIssueResponse, CreateIssueRunProvider, IssueType, ExpandIssueRequest } from '../api/types.js';
-import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
-import { useCreateIssueMutation } from '../features/mutations.js';
-import { useViewerStream } from '../stream/ViewerStreamProvider.js';
-import { useToast } from '../ui/toast/ToastProvider.js';
+import {
+  expandIssue,
+  buildExpandIssueRequestBody,
+  getWorkflowDefaults,
+} from "../api/client.js";
+import type {
+  CreateIssueRequest,
+  CreateIssueResponse,
+  CreateIssueRunProvider,
+  IssueType,
+  ExpandIssueRequest,
+} from "../api/types.js";
+import { useViewerServerBaseUrl } from "../app/ViewerServerProvider.js";
+import { useCreateIssueMutation } from "../features/mutations.js";
+import { useViewerStream } from "../stream/ViewerStreamProvider.js";
+import { useToast } from "../ui/toast/ToastProvider.js";
 
-const PROVIDERS = ['claude', 'codex', 'fake'] as const satisfies readonly CreateIssueRunProvider[];
-const ISSUE_TYPES: readonly IssueType[] = ['feature', 'bug', 'refactor'];
+const PROVIDERS = [
+  "claude",
+  "codex",
+  "fake",
+] as const satisfies readonly CreateIssueRunProvider[];
+const ISSUE_TYPES: readonly IssueType[] = ["feature", "bug", "refactor"];
 
 // Export for testing
 export { buildExpandIssueRequestBody };
@@ -68,7 +82,9 @@ export function applyExpansionResult(
  * Restores previous title/body from undo state.
  * Exported for testing purposes.
  */
-export function restoreFromUndo(undoState: UndoState): { title: string; body: string } | null {
+export function restoreFromUndo(
+  undoState: UndoState,
+): { title: string; body: string } | null {
   if (!undoState) return null;
   return { title: undoState.title, body: undoState.body };
 }
@@ -92,29 +108,46 @@ export function CreateIssuePage() {
   const stream = useViewerStream();
   const runRunning = stream.state?.run.running ?? false;
 
-  const [repo, setRepo] = useState('');
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
+  const [repo, setRepo] = useState("");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
 
-  const [labels, setLabels] = useState('');
-  const [assignees, setAssignees] = useState('');
-  const [milestone, setMilestone] = useState('');
+  const [labels, setLabels] = useState("");
+  const [assignees, setAssignees] = useState("");
+  const [milestone, setMilestone] = useState("");
 
   const [init, setInit] = useState(true);
   const [autoSelect, setAutoSelect] = useState(true);
   const [autoRun, setAutoRun] = useState(false);
-  const [provider, setProvider] = useState<CreateIssueRunProvider>('claude');
+  const [provider, setProvider] = useState<CreateIssueRunProvider>("claude");
 
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Expansion state
-  const [summary, setSummary] = useState('');
+  const [summary, setSummary] = useState("");
   const [issueType, setIssueType] = useState<IssueType | undefined>(undefined);
-  const [expandProvider, setExpandProvider] = useState<string>('claude');
-  const [expandModel, setExpandModel] = useState<string>('');
+  const [expandProvider, setExpandProvider] = useState<string>("");
+  const [expandModel, setExpandModel] = useState<string>("");
   const [isExpanding, setIsExpanding] = useState(false);
   const [expandError, setExpandError] = useState<string | null>(null);
   const [undoState, setUndoState] = useState<UndoState>(null);
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
+
+  // Load workflow defaults on mount
+  useEffect(() => {
+    let cancelled = false;
+    void getWorkflowDefaults(baseUrl).then((defaults) => {
+      if (cancelled) return;
+      setExpandProvider(defaults.provider);
+      if (defaults.model !== undefined) {
+        setExpandModel(defaults.model);
+      }
+      setDefaultsLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl]);
 
   useEffect(() => {
     if (!runRunning) return;
@@ -126,14 +159,19 @@ export function CreateIssuePage() {
   }, [init, runRunning]);
 
   const lastResponse: CreateIssueResponse | null = createIssue.data ?? null;
-  const createdIssueUrl = lastResponse && lastResponse.ok ? lastResponse.issue_url : null;
-  const createdIssueNumber = useMemo(() => (createdIssueUrl ? parseIssueNumber(createdIssueUrl) : null), [createdIssueUrl]);
+  const createdIssueUrl =
+    lastResponse && lastResponse.ok ? lastResponse.issue_url : null;
+  const createdIssueNumber = useMemo(
+    () => (createdIssueUrl ? parseIssueNumber(createdIssueUrl) : null),
+    [createdIssueUrl],
+  );
 
   function validate(): string | null {
-    if (!repo.trim()) return 'repo is required';
-    if (!title.trim()) return 'title is required';
-    if (!body.trim()) return 'body is required';
-    if (runRunning && init) return 'Cannot init while Jeeves is running. Disable init or stop the run.';
+    if (!repo.trim()) return "repo is required";
+    if (!title.trim()) return "title is required";
+    if (!body.trim()) return "body is required";
+    if (runRunning && init)
+      return "Cannot init while Jeeves is running. Disable init or stop the run.";
     return null;
   }
 
@@ -141,7 +179,7 @@ export function CreateIssuePage() {
     const trimmed = input.trim();
     if (!trimmed) return undefined;
     const values = trimmed
-      .split(',')
+      .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     return values.length > 0 ? values : undefined;
@@ -180,15 +218,15 @@ export function CreateIssuePage() {
   async function handleExpand() {
     const trimmedSummary = summary.trim();
     if (!trimmedSummary) {
-      setExpandError('Summary is required for expansion');
+      setExpandError("Summary is required for expansion");
       return;
     }
     if (trimmedSummary.length < 5) {
-      setExpandError('Summary must be at least 5 characters');
+      setExpandError("Summary must be at least 5 characters");
       return;
     }
     if (trimmedSummary.length > 2000) {
-      setExpandError('Summary must be at most 2000 characters');
+      setExpandError("Summary must be at most 2000 characters");
       return;
     }
 
@@ -200,7 +238,7 @@ export function CreateIssuePage() {
       if (issueType !== undefined) {
         (request as { issue_type?: IssueType }).issue_type = issueType;
       }
-      if (expandProvider && expandProvider !== 'claude') {
+      if (expandProvider && expandProvider !== "claude") {
         (request as { provider?: string }).provider = expandProvider;
       }
       if (expandModel && expandModel.trim()) {
@@ -215,12 +253,17 @@ export function CreateIssuePage() {
       }
 
       // Apply the result using our helper (supports undo)
-      const result = applyExpansionResult(title, body, response.title, response.body);
+      const result = applyExpansionResult(
+        title,
+        body,
+        response.title,
+        response.body,
+      );
       setTitle(result.newTitle);
       setBody(result.newBody);
       setUndoState(result.undoState);
     } catch (err) {
-      setExpandError(err instanceof Error ? err.message : 'Expansion failed');
+      setExpandError(err instanceof Error ? err.message : "Expansion failed");
     } finally {
       setIsExpanding(false);
     }
@@ -240,7 +283,14 @@ export function CreateIssuePage() {
       <div className="panelTitle">Create Issue</div>
       <div className="panelBody">
         {/* AI Expansion Section */}
-        <div style={{ marginBottom: 20, padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+        <div
+          style={{
+            marginBottom: 20,
+            padding: 12,
+            background: "rgba(255,255,255,0.03)",
+            borderRadius: 6,
+          }}
+        >
           <div className="muted" style={{ marginBottom: 8, fontWeight: 500 }}>
             AI Draft Generation
           </div>
@@ -256,13 +306,17 @@ export function CreateIssuePage() {
             />
           </label>
 
-          <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
             <label className="label" style={{ flex: 1 }}>
               issue type
               <select
                 className="input"
-                value={issueType ?? ''}
-                onChange={(e) => setIssueType(e.target.value ? (e.target.value as IssueType) : undefined)}
+                value={issueType ?? ""}
+                onChange={(e) =>
+                  setIssueType(
+                    e.target.value ? (e.target.value as IssueType) : undefined,
+                  )
+                }
               >
                 <option value="">Select type...</option>
                 {ISSUE_TYPES.map((t) => (
@@ -274,8 +328,21 @@ export function CreateIssuePage() {
             </label>
 
             <label className="label" style={{ flex: 1 }}>
-              provider
-              <select className="input" value={expandProvider} onChange={(e) => setExpandProvider(e.target.value)}>
+              provider{defaultsLoaded ? "" : " (loading...)"}
+              <select
+                className="input"
+                value={expandProvider}
+                onChange={(e) => setExpandProvider(e.target.value)}
+              >
+                {/* Include current value in options if it's not in PROVIDERS (e.g., from workflow defaults) */}
+                {expandProvider &&
+                !PROVIDERS.includes(
+                  expandProvider as CreateIssueRunProvider,
+                ) ? (
+                  <option key={expandProvider} value={expandProvider}>
+                    {expandProvider}
+                  </option>
+                ) : null}
                 {PROVIDERS.map((p) => (
                   <option key={p} value={p}>
                     {p}
@@ -295,16 +362,20 @@ export function CreateIssuePage() {
             </label>
           </div>
 
-          {expandError ? <div className="errorBox" style={{ marginTop: 8 }}>{expandError}</div> : null}
+          {expandError ? (
+            <div className="errorBox" style={{ marginTop: 8 }}>
+              {expandError}
+            </div>
+          ) : null}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button
               className="btn"
               type="button"
               onClick={() => void handleExpand()}
               disabled={isExpanding || !summary.trim()}
             >
-              {isExpanding ? 'Expanding...' : 'Expand'}
+              {isExpanding ? "Expanding..." : "Expand"}
             </button>
 
             {undoState ? (
@@ -319,20 +390,37 @@ export function CreateIssuePage() {
           className="form"
           onSubmit={(e) => {
             e.preventDefault();
-            void handleSubmit().catch((e: unknown) => pushToast(e instanceof Error ? e.message : String(e)));
+            void handleSubmit().catch((e: unknown) =>
+              pushToast(e instanceof Error ? e.message : String(e)),
+            );
           }}
         >
           <label className="label">
             repo (owner/repo)
-            <input className="input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="hansjm10/jeeves" />
+            <input
+              className="input"
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="hansjm10/jeeves"
+            />
           </label>
           <label className="label">
             title
-            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a new feature" />
+            <input
+              className="input"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Add a new feature"
+            />
           </label>
           <label className="label">
             body
-            <textarea className="textarea" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Describe the issue…" />
+            <textarea
+              className="textarea"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Describe the issue…"
+            />
           </label>
 
           <div className="muted" style={{ marginTop: 10 }}>
@@ -340,15 +428,15 @@ export function CreateIssuePage() {
           </div>
           <div
             style={{
-              border: '1px solid rgba(255,255,255,0.1)',
+              border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: 10,
-              background: 'rgba(0,0,0,0.15)',
-              overflowX: 'auto',
+              background: "rgba(0,0,0,0.15)",
+              overflowX: "auto",
             }}
           >
             <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-              {body.trim() ? body : '_Nothing to preview._'}
+              {body.trim() ? body : "_Nothing to preview._"}
             </ReactMarkdown>
           </div>
 
@@ -358,20 +446,38 @@ export function CreateIssuePage() {
 
           <label className="label">
             labels (comma-separated)
-            <input className="input" value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, ui" />
+            <input
+              className="input"
+              value={labels}
+              onChange={(e) => setLabels(e.target.value)}
+              placeholder="bug, ui"
+            />
           </label>
 
           <label className="label">
             assignees (comma-separated)
-            <input className="input" value={assignees} onChange={(e) => setAssignees(e.target.value)} placeholder="octocat, hubot" />
+            <input
+              className="input"
+              value={assignees}
+              onChange={(e) => setAssignees(e.target.value)}
+              placeholder="octocat, hubot"
+            />
           </label>
 
           <label className="label">
             milestone
-            <input className="input" value={milestone} onChange={(e) => setMilestone(e.target.value)} placeholder="v1.0" />
+            <input
+              className="input"
+              value={milestone}
+              onChange={(e) => setMilestone(e.target.value)}
+              placeholder="v1.0"
+            />
           </label>
 
-          <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label
+            className="label"
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
             <input
               type="checkbox"
               checked={init}
@@ -390,11 +496,15 @@ export function CreateIssuePage() {
 
           {runRunning ? (
             <div className="muted" style={{ marginTop: 6 }}>
-              A run is active: init/select/run options are disabled. You can still create an issue without init.
+              A run is active: init/select/run options are disabled. You can
+              still create an issue without init.
             </div>
           ) : null}
 
-          <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label
+            className="label"
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
             <input
               type="checkbox"
               checked={autoSelect}
@@ -408,11 +518,16 @@ export function CreateIssuePage() {
             auto-select new issue
           </label>
 
-          <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label
+            className="label"
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
             <input
               type="checkbox"
               checked={autoRun}
-              disabled={!init || !autoSelect || createIssue.isPending || runRunning}
+              disabled={
+                !init || !autoSelect || createIssue.isPending || runRunning
+              }
               onChange={(e) => setAutoRun(e.target.checked)}
             />
             start-run after create
@@ -424,9 +539,15 @@ export function CreateIssuePage() {
               <button
                 key={p}
                 type="button"
-                className={`segBtn ${provider === p ? 'active' : ''}`}
+                className={`segBtn ${provider === p ? "active" : ""}`}
                 onClick={() => setProvider(p)}
-                disabled={!autoRun || !init || !autoSelect || createIssue.isPending || runRunning}
+                disabled={
+                  !autoRun ||
+                  !init ||
+                  !autoSelect ||
+                  createIssue.isPending ||
+                  runRunning
+                }
               >
                 {p}
               </button>
@@ -436,12 +557,18 @@ export function CreateIssuePage() {
           {localError ? <div className="errorBox">{localError}</div> : null}
           {createIssue.isError ? (
             <div className="errorBox">
-              {createIssue.error instanceof Error ? createIssue.error.message : String(createIssue.error)}
+              {createIssue.error instanceof Error
+                ? createIssue.error.message
+                : String(createIssue.error)}
             </div>
           ) : null}
 
-          <button className="btn primary" type="submit" disabled={createIssue.isPending || (runRunning && init)}>
-            {createIssue.isPending ? 'Creating…' : 'Create Issue'}
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={createIssue.isPending || (runRunning && init)}
+          >
+            {createIssue.isPending ? "Creating…" : "Create Issue"}
           </button>
         </form>
 
@@ -449,13 +576,22 @@ export function CreateIssuePage() {
           <div style={{ marginTop: 16 }}>
             <div className="muted">Created</div>
             <div>
-              URL:{' '}
-              <a href={lastResponse.issue_url} target="_blank" rel="noreferrer" className="mono">
+              URL:{" "}
+              <a
+                href={lastResponse.issue_url}
+                target="_blank"
+                rel="noreferrer"
+                className="mono"
+              >
                 {lastResponse.issue_url}
               </a>
             </div>
-            <div className="mono">issue_ref: {lastResponse.issue_ref ?? '(unknown)'}</div>
-            <div className="mono">number: {createdIssueNumber ?? '(unknown)'}</div>
+            <div className="mono">
+              issue_ref: {lastResponse.issue_ref ?? "(unknown)"}
+            </div>
+            <div className="mono">
+              number: {createdIssueNumber ?? "(unknown)"}
+            </div>
           </div>
         ) : null}
       </div>

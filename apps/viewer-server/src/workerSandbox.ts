@@ -126,6 +126,108 @@ export function validateTaskId(taskId: string): void {
 }
 
 /**
+ * Error thrown when a path-safe ID fails validation.
+ */
+export class InvalidPathSafeIdError extends Error {
+  constructor(
+    message: string,
+    public readonly id: string,
+    public readonly field: string,
+    public readonly reason: string,
+  ) {
+    super(message);
+    this.name = 'InvalidPathSafeIdError';
+  }
+}
+
+/**
+ * Validates a path-safe ID (runId, waveId) for safe use in filesystem paths.
+ *
+ * Security: These IDs come from issue.json.status.parallel and are used in:
+ * - Filesystem paths (STATE/.runs/<runId>/..., .../waves/<waveId>.json)
+ *
+ * Without validation, a corrupted or maliciously edited issue.json could:
+ * - Escape intended directories via path traversal (e.g., "../../../etc")
+ * - Read/write files outside the intended run directory
+ *
+ * Validation rules (looser than taskId to allow runId format like "20260202T033802Z-12345.ABC123"):
+ * 1. Must be a non-empty string
+ * 2. Must not contain path separators (/, \)
+ * 3. Must not contain .. sequences
+ * 4. Must not contain null bytes
+ * 5. Must only contain safe characters: alphanumeric, dash, underscore, dot
+ * 6. Reasonable length limit (1-256 characters)
+ *
+ * @param id The ID to validate
+ * @param field Name of the field (for error messages)
+ * @throws InvalidPathSafeIdError if validation fails
+ */
+export function validatePathSafeId(id: unknown, field: string): void {
+  // Rule 1: Non-empty string
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new InvalidPathSafeIdError(
+      `${field} must be a non-empty string`,
+      String(id),
+      field,
+      'empty',
+    );
+  }
+
+  // Rule 6: Length limit (256 to accommodate longer waveId format)
+  if (id.length > 256) {
+    throw new InvalidPathSafeIdError(
+      `${field} exceeds maximum length of 256 characters: ${id.substring(0, 20)}...`,
+      id,
+      field,
+      'too_long',
+    );
+  }
+
+  // Rule 2: No path separators
+  if (id.includes('/') || id.includes('\\')) {
+    throw new InvalidPathSafeIdError(
+      `${field} contains path separator: ${id}`,
+      id,
+      field,
+      'path_separator',
+    );
+  }
+
+  // Rule 3: No .. sequences
+  if (id.includes('..')) {
+    throw new InvalidPathSafeIdError(
+      `${field} contains path traversal sequence: ${id}`,
+      id,
+      field,
+      'path_traversal',
+    );
+  }
+
+  // Rule 4: No null bytes
+  if (id.includes('\0')) {
+    throw new InvalidPathSafeIdError(
+      `${field} contains null byte`,
+      id,
+      field,
+      'null_byte',
+    );
+  }
+
+  // Rule 5: Only safe characters (alphanumeric, dash, underscore, dot)
+  // Allows runId format "20260202T033802Z-12345.ABC123"
+  // and waveId format "20260202T033802Z-12345.ABC123-wave1-implement_task-20260202T033802Z"
+  const safePattern = /^[a-zA-Z0-9_.-]+$/;
+  if (!safePattern.test(id)) {
+    throw new InvalidPathSafeIdError(
+      `${field} contains unsafe characters (only alphanumeric, dash, underscore, dot allowed): ${id}`,
+      id,
+      field,
+      'unsafe_characters',
+    );
+  }
+}
+
+/**
  * Validates a git branch name using git check-ref-format.
  *
  * @param branchName The branch name to validate

@@ -30,6 +30,7 @@ import {
   hasCompletionMarker,
   cleanupWorkerSandboxOnSuccess,
   validateTaskId,
+  validatePathSafeId,
   type WorkerSandbox,
 } from './workerSandbox.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
@@ -229,6 +230,11 @@ export async function readParallelState(stateDir: string): Promise<ParallelState
   if (!status) return null;
   const parallel = status.parallel as ParallelState | undefined;
   if (!parallel || !parallel.runId || !parallel.activeWaveId) return null;
+
+  // SECURITY: Validate runId and activeWaveId to prevent path traversal when
+  // constructing filesystem paths (§6.2.8 resume safety)
+  validatePathSafeId(parallel.runId, 'status.parallel.runId');
+  validatePathSafeId(parallel.activeWaveId, 'status.parallel.activeWaveId');
 
   // Validate shape: activeWaveTaskIds must be an array
   if (!Array.isArray(parallel.activeWaveTaskIds)) {
@@ -755,6 +761,12 @@ export class ParallelRunner {
   private lastActivityAtMs: number | null = null;
   /** Stores the last implement wave result to include in the combined progress entry */
   private lastImplementWaveResult: WaveResult | null = null;
+  /**
+   * The effective runId for sandbox paths. When resuming an active wave from a previous
+   * run/server restart, this is set to the persisted parallel state's runId to ensure
+   * spec-check finds the correct worker state directories. (§6.2.8 restart-safe resume)
+   */
+  private effectiveRunId: string;
 
   constructor(options: ParallelRunnerOptions) {
     this.options = {
@@ -762,6 +774,8 @@ export class ParallelRunner {
       maxParallelTasks: Math.min(Math.max(1, options.maxParallelTasks), MAX_PARALLEL_TASKS),
     };
     this.spawn = options.spawn ?? spawnDefault;
+    // Default to current run's ID; updated when resuming an active wave
+    this.effectiveRunId = options.runId;
   }
 
   /**
@@ -905,6 +919,11 @@ export class ParallelRunner {
     // Check for active wave to resume
     const existingState = await this.checkForActiveWave();
     if (existingState) {
+      // IMPORTANT: Use the persisted runId for sandbox paths when resuming across
+      // run/server restarts. This ensures spec-check finds the worker state directories
+      // created by the previous run. (§6.2.8 restart-safe resume)
+      this.effectiveRunId = existingState.runId;
+
       if (existingState.activeWavePhase === 'implement_task') {
         const result = await this.resumeImplementWave(existingState);
         // Store implement wave result for combined progress entry
@@ -1053,6 +1072,11 @@ export class ParallelRunner {
       };
     }
 
+    // IMPORTANT: Use the persisted runId for sandbox paths when resuming across
+    // run/server restarts. This ensures spec-check finds the worker state directories
+    // created by the previous run. (§6.2.8 restart-safe resume)
+    this.effectiveRunId = state.runId;
+
     // Check for activeWavePhase mismatch per §6.2.8 resume corruption handling
     // If canonical phase is task_spec_check but parallel state says implement_task, warn and fix
     if (state.activeWavePhase !== 'task_spec_check') {
@@ -1195,7 +1219,7 @@ export class ParallelRunner {
 
     // Update canonical status flags (reflecting both spec-check and merge outcomes)
     await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
-    await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, waveResult);
+    await writeWaveSummary(this.options.canonicalStateDir, this.effectiveRunId, waveResult);
 
     // If merge conflict, write synthetic feedback and return with mergeConflict flag
     if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
@@ -1215,14 +1239,14 @@ export class ParallelRunner {
         `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +
         `3. Reset the task status to "pending" and retry\n\n` +
         `## Artifacts Location\n` +
-        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${mergeResult.conflictTaskId}/\n` +
-        `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json`,
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/workers/${mergeResult.conflictTaskId}/\n` +
+        `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/waves/${waveId}.json`,
       );
 
       // Write combined wave progress entry (implement + spec-check) even on conflict (§6.2.5)
       await appendWaveProgressEntry(
         this.options.canonicalStateDir,
-        this.options.runId,
+        this.effectiveRunId,
         waveId,
         this.lastImplementWaveResult,
         waveResult,
@@ -1260,7 +1284,7 @@ export class ParallelRunner {
     // Write combined wave progress entry (implement + spec-check) (§6.2.5)
     await appendWaveProgressEntry(
       this.options.canonicalStateDir,
-      this.options.runId,
+      this.effectiveRunId,
       waveId,
       this.lastImplementWaveResult,
       waveResult,
@@ -1314,9 +1338,11 @@ export class ParallelRunner {
             `${taskId}.md`,
           );
 
+          // Use effectiveRunId for restart-safe resume (§6.2.8). When resuming after a
+          // server restart, effectiveRunId is set to the persisted parallel state's runId.
           const result = await createWorkerSandbox({
             taskId,
-            runId: this.options.runId,
+            runId: this.effectiveRunId,
             issueNumber: this.options.issueNumber,
             owner: this.options.owner,
             repo: this.options.repo,
@@ -1333,9 +1359,12 @@ export class ParallelRunner {
         } else {
           // For task_spec_check: reuse existing sandbox from implement_task
           // This ensures spec-check runs against the worker's implemented changes, not canonical
+          // IMPORTANT: Use effectiveRunId for restart-safe resume (§6.2.8). When resuming after
+          // a server restart, effectiveRunId is set to the persisted parallel state's runId,
+          // ensuring we find the worker directories created by the previous run.
           sandbox = await reuseWorkerSandbox({
             taskId,
-            runId: this.options.runId,
+            runId: this.effectiveRunId,
             issueNumber: this.options.issueNumber,
             owner: this.options.owner,
             repo: this.options.repo,
@@ -1386,7 +1415,7 @@ export class ParallelRunner {
       };
       await writeWaveSummary(
         this.options.canonicalStateDir,
-        this.options.runId,
+        this.effectiveRunId,
         setupFailureDetails as WaveResult & { error: string; state: string },
       );
 
@@ -1473,7 +1502,7 @@ export class ParallelRunner {
       };
       await writeWaveSummary(
         this.options.canonicalStateDir,
-        this.options.runId,
+        this.effectiveRunId,
         setupFailureDetails as WaveResult & { error: string; state: string },
       );
 
@@ -1567,7 +1596,7 @@ export class ParallelRunner {
     };
 
     // Write wave summary
-    await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, waveResult);
+    await writeWaveSummary(this.options.canonicalStateDir, this.effectiveRunId, waveResult);
 
     // If this is spec_check phase, update canonical statuses and merge passed branches
     if (phase === 'task_spec_check') {
@@ -1626,14 +1655,14 @@ export class ParallelRunner {
           `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +
           `3. Reset the task status to "pending" and retry\n\n` +
           `## Artifacts Location\n` +
-          `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${mergeResult.conflictTaskId}/\n` +
-          `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json`,
+          `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/workers/${mergeResult.conflictTaskId}/\n` +
+          `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/waves/${waveId}.json`,
         );
 
         // Write combined wave progress entry (implement + spec-check) even on conflict (§6.2.5)
         await appendWaveProgressEntry(
           this.options.canonicalStateDir,
-          this.options.runId,
+          this.effectiveRunId,
           waveId,
           this.lastImplementWaveResult,
           waveResult,
@@ -1686,7 +1715,7 @@ export class ParallelRunner {
       // Write combined wave progress entry (implement + spec-check) (§6.2.5)
       await appendWaveProgressEntry(
         this.options.canonicalStateDir,
-        this.options.runId,
+        this.effectiveRunId,
         waveId,
         this.lastImplementWaveResult,
         waveResult,
@@ -1786,7 +1815,7 @@ export class ParallelRunner {
         `- Run ID: ${this.options.runId}\n` +
         `- Timeout Type: ${timeoutType}\n\n` +
         `## Artifacts Location\n` +
-        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n\n` +
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/workers/${outcome.taskId}/\n\n` +
         `The task is eligible for retry in the next wave.`,
       );
       await this.options.appendLog(
@@ -1880,7 +1909,7 @@ export class ParallelRunner {
         `Because the wave timed out, no branches were merged. The task is marked as failed ` +
         `and is eligible for retry in the next wave.\n\n` +
         `## Artifacts Location\n` +
-        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n`,
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/workers/${outcome.taskId}/\n`,
       );
       await this.options.appendLog(
         `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
@@ -1987,7 +2016,7 @@ export class ParallelRunner {
       `- Parallel state cleared from issue.json\n` +
       `- No taskFailed/taskPassed flags updated (setup failure ≠ task failure)\n\n` +
       `### Artifacts\n` +
-      `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json\n\n` +
+      `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/waves/${waveId}.json\n\n` +
       `---\n`;
     await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
   }
@@ -2231,7 +2260,7 @@ export class ParallelRunner {
     // Update wave summary with merge results
     await updateWaveSummaryWithMerge(
       this.options.canonicalStateDir,
-      this.options.runId,
+      this.effectiveRunId,
       waveId,
       mergeResult,
     );

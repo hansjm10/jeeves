@@ -1609,3 +1609,251 @@ describe('RunManager max_iterations handling', () => {
     expect(rm.getStatus().max_iterations).toBe(10);
   });
 });
+
+describe('RunManager parallel mode integration', () => {
+  it('uses parallel runner when settings.taskExecution.mode is "parallel" during implement_task', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2000;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    // Create repos directory structure for parallel runner
+    await fs.mkdir(path.join(dataDir, 'repos', owner, repo), { recursive: true });
+
+    // Set up issue.json with parallel mode enabled and in implement_task phase
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {
+            currentTaskId: 'T1',
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Create tasks.json with some tasks
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          decomposedFrom: 'docs/design.md',
+          tasks: [
+            { id: 'T1', title: 'Task 1', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/a.ts'], dependsOn: [], status: 'pending' },
+            { id: 'T2', title: 'Task 2', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/b.ts'], dependsOn: [], status: 'pending' },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    // Track spawn args to verify parallel runner behavior
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      void args;
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    // Start the run - it should use ParallelRunner for implement_task
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // Verify parallel mode was detected and used:
+    // The key verification is that the code path branches into parallel mode
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+
+    // Verify that parallel mode was attempted (log should show [PARALLEL] prefix)
+    expect(viewerLog).toContain('[PARALLEL]');
+  });
+
+  it('uses sequential runner when parallel mode is disabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2001;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    // Set up issue.json WITHOUT parallel mode (sequential is default)
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {
+            currentTaskId: 'T1',
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    // Track spawn args
+    const spawnCalls: string[][] = [];
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push(a);
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // In sequential mode, spawn should be called with --issue flag
+    expect(spawnCalls.length).toBeGreaterThan(0);
+    expect(spawnCalls[0]).toContain('--issue');
+    expect(spawnCalls[0]).toContain(issueRef);
+
+    // Verify that parallel mode was NOT used (no [PARALLEL] in log)
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).not.toContain('[PARALLEL]');
+  });
+
+  it('uses sequential runner for non-task phases even when parallel mode is enabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2002;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    // Set up issue.json with parallel mode enabled but in design_draft phase
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'hello', // Using fixture-trivial workflow
+          workflow: 'fixture-trivial',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    // Track spawn args
+    const spawnCalls: string[][] = [];
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push(a);
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    // For non-task phases, sequential mode should be used even with parallel settings
+    expect(spawnCalls.length).toBeGreaterThan(0);
+    expect(spawnCalls[0]).toContain('--issue');
+
+    // Verify that parallel mode was NOT used (design phases use sequential)
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).not.toContain('[PARALLEL]');
+  });
+});

@@ -15,6 +15,12 @@ import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
+import {
+  ParallelRunner,
+  isParallelModeEnabled,
+  getMaxParallelTasks,
+  type ParallelRunnerOptions,
+} from './parallelRunner.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -409,62 +415,89 @@ export class RunManager {
         const startAtMs = Date.now();
         const iterStartedAt = nowIso();
 
-        const exitPromise = this.spawnRunner(
-          [
-            'run-phase',
-            '--workflow',
+        // Check if parallel mode is enabled and applicable for this phase
+        const isParallelPhase = currentPhase === 'implement_task' || currentPhase === 'task_spec_check';
+        const parallelEnabled = isParallelPhase && await isParallelModeEnabled(this.stateDir!);
+
+        let exitCode: number;
+        let parallelWaveExecuted = false;
+
+        if (parallelEnabled) {
+          // Run parallel wave for task execution phases
+          const parallelResult = await this.runParallelWave({
+            currentPhase: currentPhase as 'implement_task' | 'task_spec_check',
             workflowName,
-            '--phase',
-            currentPhase,
-            '--provider',
             effectiveProvider,
-            '--workflows-dir',
-            this.workflowsDir,
-            '--prompts-dir',
-            this.promptsDir,
-            '--issue',
-            this.issueRef!,
-          ],
-          viewerLogPath,
-          { model: effectiveModel },
-        );
+            effectiveModel,
+            viewerLogPath,
+            iterStartedAt,
+          });
+          exitCode = parallelResult.exitCode;
+          parallelWaveExecuted = parallelResult.waveExecuted;
 
-        const exitCode = await (async () => {
-          while (true) {
-            if (this.stopRequested) break;
-            const elapsedSec = (Date.now() - startAtMs) / 1000;
-            if (elapsedSec > params.iterationTimeoutSec) {
-              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Iteration exceeded ${params.iterationTimeoutSec}s; stopping`);
-              await this.stop({ force: true, reason: `iteration_timeout (${params.iterationTimeoutSec}s)` });
-              completedNaturally = false;
-              break;
-            }
-
-            const stat = await fs.stat(lastRunLog).catch(() => null);
-            if (stat && stat.isFile()) {
-              if (stat.size !== lastSize) {
-                lastSize = stat.size;
-                lastChangeAtMs = Date.now();
-              }
-            }
-
-            const idleSec = (Date.now() - lastChangeAtMs) / 1000;
-            if (idleSec > params.inactivityTimeoutSec) {
-              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] No log activity for ${params.inactivityTimeoutSec}s; stopping`);
-              await this.stop({ force: true, reason: `inactivity_timeout (${params.inactivityTimeoutSec}s)` });
-              completedNaturally = false;
-              break;
-            }
-
-            const done = await Promise.race([
-              exitPromise.then((code) => ({ done: true as const, code })),
-              new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false as const }), 150)),
-            ]);
-            if (done.done) return done.code;
+          // If no wave was executed (no ready tasks), treat as success and let workflow transition
+          if (!parallelWaveExecuted && exitCode === 0) {
+            await this.appendViewerLog(viewerLogPath, `[PARALLEL] No ready tasks for ${currentPhase}, continuing workflow`);
           }
+        } else {
+          // Run single sequential subprocess (existing behavior)
+          const exitPromise = this.spawnRunner(
+            [
+              'run-phase',
+              '--workflow',
+              workflowName,
+              '--phase',
+              currentPhase,
+              '--provider',
+              effectiveProvider,
+              '--workflows-dir',
+              this.workflowsDir,
+              '--prompts-dir',
+              this.promptsDir,
+              '--issue',
+              this.issueRef!,
+            ],
+            viewerLogPath,
+            { model: effectiveModel },
+          );
 
-          return exitPromise;
-        })();
+          exitCode = await (async () => {
+            while (true) {
+              if (this.stopRequested) break;
+              const elapsedSec = (Date.now() - startAtMs) / 1000;
+              if (elapsedSec > params.iterationTimeoutSec) {
+                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Iteration exceeded ${params.iterationTimeoutSec}s; stopping`);
+                await this.stop({ force: true, reason: `iteration_timeout (${params.iterationTimeoutSec}s)` });
+                completedNaturally = false;
+                break;
+              }
+
+              const stat = await fs.stat(lastRunLog).catch(() => null);
+              if (stat && stat.isFile()) {
+                if (stat.size !== lastSize) {
+                  lastSize = stat.size;
+                  lastChangeAtMs = Date.now();
+                }
+              }
+
+              const idleSec = (Date.now() - lastChangeAtMs) / 1000;
+              if (idleSec > params.inactivityTimeoutSec) {
+                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] No log activity for ${params.inactivityTimeoutSec}s; stopping`);
+                await this.stop({ force: true, reason: `inactivity_timeout (${params.inactivityTimeoutSec}s)` });
+                completedNaturally = false;
+                break;
+              }
+
+              const done = await Promise.race([
+                exitPromise.then((code) => ({ done: true as const, code })),
+                new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false as const }), 150)),
+              ]);
+              if (done.done) return done.code;
+            }
+
+            return exitPromise;
+          })();
+        }
 
         this.status = { ...this.status, returncode: exitCode };
         this.broadcast('run', { run: this.status });
@@ -560,6 +593,115 @@ export class RunManager {
       this.broadcast('run', { run: this.status });
       await this.persistLastRunStatus().catch(() => void 0);
       await this.finalizeRunArchive().catch(() => void 0);
+    }
+  }
+
+  /**
+   * Executes a parallel wave for implement_task or task_spec_check phases.
+   * Returns the effective exit code and whether a wave was actually executed.
+   */
+  private async runParallelWave(params: {
+    currentPhase: 'implement_task' | 'task_spec_check';
+    workflowName: string;
+    effectiveProvider: string;
+    effectiveModel?: string;
+    viewerLogPath: string;
+    iterStartedAt: string;
+  }): Promise<{ exitCode: number; waveExecuted: boolean }> {
+    if (!this.stateDir || !this.workDir || !this.runId || !this.issueRef) {
+      return { exitCode: 1, waveExecuted: false };
+    }
+
+    // Parse issue ref to get owner/repo/issueNumber
+    const parsed = parseIssueRef(this.issueRef);
+    const { owner, repo, issueNumber } = parsed;
+
+    // Get repo directory path
+    const repoDir = path.join(this.dataDir, 'repos', owner, repo);
+
+    // Read issue.json to get canonical branch
+    const issueJson = await readIssueJson(this.stateDir);
+    if (!issueJson) {
+      await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] ERROR: issue.json not found');
+      return { exitCode: 1, waveExecuted: false };
+    }
+    const canonicalBranch = typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${issueNumber}`;
+
+    // Get max parallel tasks from issue settings
+    const maxParallelTasks = await getMaxParallelTasks(this.stateDir);
+
+    // Get runner binary path
+    const runnerBinPath = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');
+
+    // Create parallel runner options
+    const parallelOptions: ParallelRunnerOptions = {
+      canonicalStateDir: this.stateDir,
+      canonicalWorkDir: this.workDir,
+      repoDir,
+      dataDir: this.dataDir,
+      owner,
+      repo,
+      issueNumber,
+      canonicalBranch,
+      runId: this.runId,
+      workflowName: params.workflowName,
+      provider: params.effectiveProvider,
+      workflowsDir: this.workflowsDir,
+      promptsDir: this.promptsDir,
+      viewerLogPath: params.viewerLogPath,
+      maxParallelTasks,
+      appendLog: async (line: string) => {
+        await this.appendViewerLog(params.viewerLogPath, line);
+      },
+      broadcast: (event: string, data: unknown) => {
+        this.broadcast(event, data);
+      },
+      spawn: this.spawnImpl,
+      runnerBinPath,
+      model: params.effectiveModel,
+    };
+
+    const parallelRunner = new ParallelRunner(parallelOptions);
+
+    // Wire up stop handling
+    if (this.stopRequested) {
+      parallelRunner.requestStop();
+    }
+
+    try {
+      if (params.currentPhase === 'implement_task') {
+        // Run implement wave
+        const result = await parallelRunner.runImplementWave();
+        if (!result) {
+          // No ready tasks to run
+          return { exitCode: 0, waveExecuted: false };
+        }
+        if (result.error) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave error: ${result.error}`);
+          return { exitCode: 1, waveExecuted: true };
+        }
+        // Implement wave completed successfully, exit code 0 to proceed to spec check
+        return { exitCode: 0, waveExecuted: true };
+      } else {
+        // Run spec check wave
+        const result = await parallelRunner.runSpecCheckWave();
+        if (!result) {
+          // No active wave to run spec check
+          await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] No active wave state for spec check');
+          return { exitCode: 1, waveExecuted: false };
+        }
+        if (result.error) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave error: ${result.error}`);
+          return { exitCode: 1, waveExecuted: true };
+        }
+        // Spec check wave completed - exit code based on results
+        // The canonical status flags have already been updated by ParallelRunner
+        return { exitCode: 0, waveExecuted: true };
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Wave execution error: ${errMsg}`);
+      return { exitCode: 1, waveExecuted: false };
     }
   }
 

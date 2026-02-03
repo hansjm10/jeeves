@@ -21,6 +21,9 @@ import {
   getMaxParallelTasks,
   validateMaxParallelTasks,
   MAX_PARALLEL_TASKS,
+  readParallelState,
+  rollbackTaskReservations,
+  repairOrphanedInProgressTasks,
   type ParallelRunnerOptions,
 } from './parallelRunner.js';
 import type { WorkerStatusInfo } from './types.js';
@@ -309,7 +312,53 @@ export class RunManager {
     if (this.activeParallelRunner) {
       this.activeParallelRunner.requestStop();
     }
+
+    // Per §6.2.8: On manual stop during an active wave, roll back reserved task statuses
+    if (this.stateDir) {
+      await this.rollbackActiveWaveOnStop().catch(() => void 0);
+    }
+
     return this.getStatus();
+  }
+
+  /**
+   * Rolls back reserved task statuses on manual stop per §6.2.8.
+   *
+   * If an active wave is in progress (issue.json.status.parallel exists):
+   * 1. Revert canonical .jeeves/tasks.json statuses using reservedStatusByTaskId
+   * 2. Clear issue.json.status.parallel
+   * 3. Append progress entry indicating the wave was aborted
+   */
+  private async rollbackActiveWaveOnStop(): Promise<void> {
+    if (!this.stateDir) return;
+
+    const parallelState = await readParallelState(this.stateDir);
+    if (!parallelState) return;
+
+    // Roll back task reservations
+    await rollbackTaskReservations(this.stateDir, parallelState.reservedStatusByTaskId);
+
+    // Append progress entry
+    const progressPath = path.join(this.stateDir, 'progress.txt');
+    const progressEntry = `\n## [${nowIso()}] - Manual Stop: Parallel Wave Aborted\n\n` +
+      `### Wave\n` +
+      `- Wave ID: ${parallelState.activeWaveId}\n` +
+      `- Phase: ${parallelState.activeWavePhase}\n` +
+      `- Tasks: ${parallelState.activeWaveTaskIds.join(', ')}\n\n` +
+      `### Action\n` +
+      `- Task statuses rolled back to pre-reservation state\n` +
+      `- Parallel state cleared from issue.json\n` +
+      `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
+      `---\n`;
+    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+
+    // Log if viewer log file is available
+    if (this.status.viewer_log_file) {
+      await this.appendViewerLog(
+        this.status.viewer_log_file,
+        `[STOP] Rolled back active wave ${parallelState.activeWaveId}, restored ${parallelState.activeWaveTaskIds.length} task(s) to pre-reservation status`,
+      );
+    }
   }
 
   private async appendViewerLog(viewerLogPath: string, line: string): Promise<void> {
@@ -400,6 +449,26 @@ export class RunManager {
   }): Promise<void> {
     const { viewerLogPath } = params;
     try {
+      // Per §6.2.8: Start-of-run recovery - repair orphaned in_progress tasks
+      if (this.stateDir) {
+        const repairResult = await repairOrphanedInProgressTasks(this.stateDir);
+        if (repairResult.repairedTaskIds.length > 0) {
+          await this.appendViewerLog(
+            viewerLogPath,
+            `[RECOVERY] Repaired ${repairResult.repairedTaskIds.length} orphaned in_progress task(s): ${repairResult.repairedTaskIds.join(', ')}`,
+          );
+          // Append progress entry for the repair
+          const progressPath = path.join(this.stateDir, 'progress.txt');
+          const progressEntry = `\n## [${nowIso()}] - Start-of-Run Recovery\n\n` +
+            `### Orphaned Tasks Repaired\n` +
+            repairResult.repairedTaskIds.map((id) => `- ${id}: in_progress -> failed`).join('\n') + '\n\n' +
+            `### Canonical Feedback Written\n` +
+            repairResult.feedbackFilesWritten.map((f) => `- ${path.basename(f)}`).join('\n') + '\n\n' +
+            `---\n`;
+          await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+        }
+      }
+
       let completedNaturally = true;
       for (let iteration = 1; iteration <= params.maxIterations; iteration += 1) {
         if (this.stopRequested) {

@@ -20,6 +20,8 @@ import {
   updateCanonicalTaskStatuses,
   updateCanonicalStatusFlags,
   writeWaveSummary,
+  repairOrphanedInProgressTasks,
+  writeCanonicalFeedback,
   type ParallelState,
   type WaveResult,
   type WorkerOutcome,
@@ -1198,6 +1200,259 @@ describe('parallelRunner', () => {
         // This is a compile-time check but we can verify the type exists
         const status: 'running' | 'passed' | 'failed' | 'timed_out' = 'timed_out';
         expect(status).toBe('timed_out');
+      });
+    });
+
+    describe('§6.2.8 crash/stop recovery', () => {
+      describe('repairOrphanedInProgressTasks', () => {
+        it('repairs orphaned in_progress tasks when no parallel state exists', async () => {
+          // Setup: in_progress task with no parallel state (orphaned)
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: {}, // No parallel state
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' }, // Orphaned!
+              { id: 'T2', status: 'pending' },
+              { id: 'T3', status: 'passed' },
+            ],
+          });
+
+          const result = await repairOrphanedInProgressTasks(stateDir);
+
+          // Verify T1 was repaired
+          expect(result.repairedTaskIds).toEqual(['T1']);
+          expect(result.feedbackFilesWritten.length).toBe(1);
+
+          // Verify task status was changed to failed
+          const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+          const tasks = JSON.parse(tasksRaw);
+          expect(tasks.tasks[0].status).toBe('failed');
+          expect(tasks.tasks[1].status).toBe('pending');
+          expect(tasks.tasks[2].status).toBe('passed');
+        });
+
+        it('repairs orphaned in_progress tasks not in activeWaveTaskIds', async () => {
+          // Setup: parallel state exists but T3 is not in the active wave
+          const parallelState: ParallelState = {
+            runId: 'run-123',
+            activeWaveId: 'wave-1',
+            activeWavePhase: 'implement_task',
+            activeWaveTaskIds: ['T1', 'T2'], // T3 is NOT here
+            reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+            reservedAt: '2026-01-01T00:00:00Z',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: parallelState },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' },
+              { id: 'T2', status: 'in_progress' },
+              { id: 'T3', status: 'in_progress' }, // Orphaned - not in activeWaveTaskIds
+            ],
+          });
+
+          const result = await repairOrphanedInProgressTasks(stateDir);
+
+          // Verify only T3 was repaired (T1 and T2 are in active wave)
+          expect(result.repairedTaskIds).toEqual(['T3']);
+
+          // Verify task statuses
+          const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+          const tasks = JSON.parse(tasksRaw);
+          expect(tasks.tasks[0].status).toBe('in_progress'); // Valid
+          expect(tasks.tasks[1].status).toBe('in_progress'); // Valid
+          expect(tasks.tasks[2].status).toBe('failed'); // Repaired
+        });
+
+        it('does not modify tasks when no orphans exist', async () => {
+          const parallelState: ParallelState = {
+            runId: 'run-123',
+            activeWaveId: 'wave-1',
+            activeWavePhase: 'implement_task',
+            activeWaveTaskIds: ['T1'],
+            reservedStatusByTaskId: { T1: 'pending' },
+            reservedAt: '2026-01-01T00:00:00Z',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: parallelState },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' }, // Valid - in activeWaveTaskIds
+              { id: 'T2', status: 'pending' },
+              { id: 'T3', status: 'passed' },
+            ],
+          });
+
+          const result = await repairOrphanedInProgressTasks(stateDir);
+
+          expect(result.repairedTaskIds).toEqual([]);
+          expect(result.feedbackFilesWritten).toEqual([]);
+        });
+
+        it('returns empty result when tasks.json does not exist', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+          // No tasks.json
+
+          const result = await repairOrphanedInProgressTasks(stateDir);
+
+          expect(result.repairedTaskIds).toEqual([]);
+          expect(result.feedbackFilesWritten).toEqual([]);
+        });
+      });
+
+      describe('writeCanonicalFeedback', () => {
+        it('writes feedback file to task-feedback directory', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+
+          const feedbackPath = await writeCanonicalFeedback(
+            stateDir,
+            'T1',
+            'Test reason',
+            'Test details',
+          );
+
+          // Verify file was created
+          const content = await fs.readFile(feedbackPath, 'utf-8');
+          expect(content).toContain('# Task Recovery Feedback: T1');
+          expect(content).toContain('Test reason');
+          expect(content).toContain('Test details');
+          expect(content).toContain('Timestamp');
+        });
+
+        it('creates task-feedback directory if it does not exist', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+
+          const feedbackPath = await writeCanonicalFeedback(
+            stateDir,
+            'T1',
+            'Test',
+            'Details',
+          );
+
+          // Verify path includes task-feedback directory
+          expect(feedbackPath).toContain('task-feedback');
+          expect(feedbackPath).toContain('T1.md');
+
+          // Verify file exists
+          const stat = await fs.stat(feedbackPath);
+          expect(stat.isFile()).toBe(true);
+        });
+      });
+
+      describe('manual stop rollback', () => {
+        it('rollbackTaskReservations restores original statuses', async () => {
+          // Setup: tasks reserved (in_progress) with saved previous statuses
+          const reservedStatusByTaskId: Record<string, 'pending' | 'failed'> = {
+            T1: 'pending',
+            T2: 'failed',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: { reservedStatusByTaskId } },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' },
+              { id: 'T2', status: 'in_progress' },
+            ],
+          });
+
+          await rollbackTaskReservations(stateDir, reservedStatusByTaskId);
+
+          // Verify statuses restored
+          const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+          const tasks = JSON.parse(tasksRaw);
+          expect(tasks.tasks[0].status).toBe('pending');
+          expect(tasks.tasks[1].status).toBe('failed');
+
+          // Verify parallel state cleared
+          const parallelState = await readParallelState(stateDir);
+          expect(parallelState).toBeNull();
+        });
+
+        it('rollbackTaskReservations clears parallel state from issue.json', async () => {
+          const parallelState: ParallelState = {
+            runId: 'run-123',
+            activeWaveId: 'wave-1',
+            activeWavePhase: 'implement_task',
+            activeWaveTaskIds: ['T1'],
+            reservedStatusByTaskId: { T1: 'pending' },
+            reservedAt: '2026-01-01T00:00:00Z',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: parallelState },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [{ id: 'T1', status: 'in_progress' }],
+          });
+
+          // Verify parallel state exists before rollback
+          let state = await readParallelState(stateDir);
+          expect(state).not.toBeNull();
+
+          await rollbackTaskReservations(stateDir, { T1: 'pending' });
+
+          // Verify parallel state is cleared
+          state = await readParallelState(stateDir);
+          expect(state).toBeNull();
+        });
+      });
+
+      describe('deterministic resume', () => {
+        it('resume uses activeWaveTaskIds without reselection', async () => {
+          // Setup: parallel state from previous run with specific tasks
+          const parallelState: ParallelState = {
+            runId: 'run-123',
+            activeWaveId: 'wave-1',
+            activeWavePhase: 'implement_task',
+            activeWaveTaskIds: ['T1', 'T3'], // Specific tasks selected previously
+            reservedStatusByTaskId: { T1: 'pending', T3: 'pending' },
+            reservedAt: '2026-01-01T00:00:00Z',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: parallelState },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' },
+              { id: 'T2', status: 'pending' }, // Ready but NOT selected
+              { id: 'T3', status: 'in_progress' },
+            ],
+          });
+
+          const runner = createRunner();
+          const state = await runner.checkForActiveWave();
+
+          // Verify resume uses saved activeWaveTaskIds
+          expect(state?.activeWaveTaskIds).toEqual(['T1', 'T3']);
+          expect(state?.activeWaveTaskIds).not.toContain('T2');
+        });
+
+        it('in_progress tasks must be in activeWaveTaskIds to be valid', async () => {
+          const parallelState: ParallelState = {
+            runId: 'run-123',
+            activeWaveId: 'wave-1',
+            activeWavePhase: 'implement_task',
+            activeWaveTaskIds: ['T1'], // Only T1
+            reservedStatusByTaskId: { T1: 'pending' },
+            reservedAt: '2026-01-01T00:00:00Z',
+          };
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+            status: { parallel: parallelState },
+          });
+          await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+            tasks: [
+              { id: 'T1', status: 'in_progress' }, // Valid
+              { id: 'T2', status: 'in_progress' }, // Orphaned!
+            ],
+          });
+
+          // repairOrphanedInProgressTasks should detect T2 as orphan
+          const result = await repairOrphanedInProgressTasks(stateDir);
+          expect(result.repairedTaskIds).toEqual(['T2']);
+        });
       });
     });
   });

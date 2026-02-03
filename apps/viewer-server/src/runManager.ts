@@ -255,6 +255,8 @@ export class RunManager {
     this.stopRequested = false;
     this.stopReason = null;
     this.runArchiveMeta = null;
+    // Reset effectiveMaxParallelTasks to avoid carrying stale values across runs
+    this.effectiveMaxParallelTasks = null;
     this.runId = makeRunId();
     this.runDir = path.join(this.stateDir, '.runs', this.runId);
     await fs.mkdir(path.join(this.runDir, 'iterations'), { recursive: true });

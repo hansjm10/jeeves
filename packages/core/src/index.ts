@@ -53,3 +53,14 @@ export { evaluateGuard } from './guards.js';
 export { WorkflowEngine } from './workflowEngine.js';
 export { resolvePromptPath } from './promptResolution.js';
 export { expandFilesAllowedForTests } from './filesAllowedExpand.js';
+
+export {
+  isTaskReady,
+  scheduleReadyTasks,
+  selectReadyTasks,
+  TaskSchedulerError,
+  validateTaskGraph,
+  type Task,
+  type TasksFile,
+  type TaskStatus,
+} from './taskScheduler.js';

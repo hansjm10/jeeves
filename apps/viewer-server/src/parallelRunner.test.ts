@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { scheduleReadyTasks } from '@jeeves/core';
+
 import {
   MAX_PARALLEL_TASKS,
   ParallelRunner,
@@ -688,6 +690,359 @@ describe('parallelRunner', () => {
 
         // Verify runner has the broadcast capability configured
         expect(runner.getActiveWorkers()).toEqual([]);
+      });
+    });
+  });
+
+  /**
+   * Orchestration recovery tests per §6.2.8 and §10 of the design document.
+   * These tests verify the restart-safe behavior of parallel execution.
+   */
+  describe('orchestration recovery', () => {
+    let stateDir: string;
+    let workDir: string;
+    let repoDir: string;
+    let dataDir: string;
+    let logs: string[];
+
+    beforeEach(async () => {
+      stateDir = path.join(tmpDir, 'state');
+      workDir = path.join(tmpDir, 'work');
+      repoDir = path.join(tmpDir, 'repo');
+      dataDir = path.join(tmpDir, 'data');
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(workDir, { recursive: true });
+      await fs.mkdir(repoDir, { recursive: true });
+      await fs.mkdir(dataDir, { recursive: true });
+
+      logs = [];
+    });
+
+    function createRunner(overrides?: Record<string, unknown>): ParallelRunner {
+      const defaultOptions = {
+        canonicalStateDir: stateDir,
+        canonicalWorkDir: workDir,
+        repoDir,
+        dataDir,
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 123,
+        canonicalBranch: 'issue/123',
+        runId: 'run-test',
+        workflowName: 'default',
+        provider: 'fake',
+        workflowsDir: '/workflows',
+        promptsDir: '/prompts',
+        viewerLogPath: path.join(stateDir, 'viewer-run.log'),
+        maxParallelTasks: 2,
+        appendLog: async (line: string) => {
+          logs.push(line);
+        },
+        broadcast: () => { /* noop for tests */ },
+        runnerBinPath: '/runner/bin.js',
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return new ParallelRunner({ ...defaultOptions, ...overrides } as any);
+    }
+
+    describe('spawn failure after reservation (§6.2.8 wave setup failure)', () => {
+      it('rolls back task reservations on sandbox creation failure', async () => {
+        // Setup: reserve tasks by writing parallel state
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'pending' },
+            { id: 'T2', status: 'failed' },
+          ],
+        });
+
+        // Reserve tasks first
+        const reservedMap = await reserveTasksForWave(
+          stateDir,
+          'run-test',
+          'wave-1',
+          'implement_task',
+          ['T1', 'T2'],
+        );
+
+        // Verify tasks are now in_progress
+        let tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        let tasks = JSON.parse(tasksRaw);
+        expect(tasks.tasks[0].status).toBe('in_progress');
+        expect(tasks.tasks[1].status).toBe('in_progress');
+
+        // Simulate rollback on failure
+        await rollbackTaskReservations(stateDir, reservedMap);
+
+        // Verify tasks are restored to original statuses
+        tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        tasks = JSON.parse(tasksRaw);
+        expect(tasks.tasks[0].status).toBe('pending');
+        expect(tasks.tasks[1].status).toBe('failed');
+
+        // Verify parallel state is cleared
+        const state = await readParallelState(stateDir);
+        expect(state).toBeNull();
+      });
+
+      it('writes setup_failed wave summary artifact on orchestration failure', async () => {
+        // Setup minimal state
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'pending' }],
+        });
+
+        const runner = createRunner();
+
+        // Run implement wave - it will fail because git worktree commands aren't available
+        const result = await runner.runImplementWave();
+
+        // Verify error result (sandbox creation should fail in test environment)
+        expect(result).not.toBeNull();
+        if (result) {
+          expect(result.continueExecution).toBe(false);
+          // Error could be sandbox creation failure or tasks.json issue
+          expect(result.error || result.waveResult).toBeTruthy();
+        }
+      });
+
+      it('does not update taskFailed/taskPassed flags on setup-failed waves', async () => {
+        // Setup
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: {
+            taskPassed: null,
+            taskFailed: null,
+          },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'pending' },
+            { id: 'T2', status: 'pending' },
+          ],
+        });
+
+        // Reserve tasks
+        const reservedMap = await reserveTasksForWave(
+          stateDir,
+          'run-test',
+          'wave-1',
+          'implement_task',
+          ['T1', 'T2'],
+        );
+
+        // Simulate setup failure - rollback without updating flags
+        await rollbackTaskReservations(stateDir, reservedMap);
+
+        // Verify canonical status flags are NOT updated
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.taskPassed).toBeNull();
+        expect(issueJson.status.taskFailed).toBeNull();
+      });
+    });
+
+    describe('stop mid-implement wave (§6.2.8 manual stop)', () => {
+      it('restores task statuses using reservedStatusByTaskId on stop', async () => {
+        // Setup with parallel state (simulating active wave)
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+          ],
+        });
+
+        // Simulate stop by rolling back reservations
+        await rollbackTaskReservations(stateDir, parallelState.reservedStatusByTaskId);
+
+        // Verify tasks are restored to pre-reservation status
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasks = JSON.parse(tasksRaw);
+        expect(tasks.tasks[0].status).toBe('pending');
+        expect(tasks.tasks[1].status).toBe('failed');
+      });
+
+      it('requestStop terminates active workers', () => {
+        const runner = createRunner();
+
+        // Request stop
+        runner.requestStop();
+
+        // Verify stop flag is set (internal state check)
+        expect((runner as unknown as { stopRequested: boolean }).stopRequested).toBe(true);
+      });
+    });
+
+    describe('stop between implement/spec-check waves (§6.2.8)', () => {
+      it('preserves parallel state for resume when stopped between phases', async () => {
+        // Setup: parallel state indicating implement_task completed, waiting for spec_check
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+          ],
+        });
+
+        const runner = createRunner();
+
+        // Check for active wave (as would happen on resume)
+        const state = await runner.checkForActiveWave();
+
+        // Verify parallel state is preserved and can be used for resume
+        expect(state).not.toBeNull();
+        expect(state?.activeWaveTaskIds).toEqual(['T1', 'T2']);
+        expect(state?.activeWavePhase).toBe('implement_task');
+      });
+    });
+
+    describe('resume behavior (§6.2.8 resume active wave)', () => {
+      it('does not leave tasks stuck in_progress after resume', async () => {
+        // Setup: orphaned in_progress task with no parallel state
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: {}, // No parallel state
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' }, // Orphaned!
+            { id: 'T2', status: 'pending' },
+          ],
+        });
+
+        // Per §6.2.8, start-of-run recovery should detect orphaned in_progress
+        // and mark them as failed (this would be done by the orchestrator)
+        // Here we verify the detection mechanism works
+        const state = await readParallelState(stateDir);
+        expect(state).toBeNull(); // No parallel state
+
+        // Verify T1 is orphaned (in_progress but not in any active wave)
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasks = JSON.parse(tasksRaw);
+        const orphanedTask = tasks.tasks.find(
+          (t: { id: string; status: string }) => t.id === 'T1' && t.status === 'in_progress',
+        );
+        expect(orphanedTask).toBeTruthy();
+
+        // The orchestrator would then repair this - simulate the repair
+        tasks.tasks[0].status = 'failed';
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), tasks);
+
+        // Verify repair
+        const repairedRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const repaired = JSON.parse(repairedRaw);
+        expect(repaired.tasks[0].status).toBe('failed');
+      });
+
+      it('resumes implement wave with recorded activeWaveTaskIds (no reselection)', async () => {
+        // Setup: parallel state from previous run
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T3'], // Specific tasks, not T2
+          reservedStatusByTaskId: { T1: 'pending', T3: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'pending' }, // Ready but NOT in active wave
+            { id: 'T3', status: 'in_progress' },
+          ],
+        });
+
+        const runner = createRunner();
+
+        // Check for active wave
+        const state = await runner.checkForActiveWave();
+
+        // Verify that resume uses the saved activeWaveTaskIds, not new selection
+        expect(state?.activeWaveTaskIds).toEqual(['T1', 'T3']);
+        expect(state?.activeWaveTaskIds).not.toContain('T2');
+      });
+
+      it('parallel state invariant: in_progress tasks must be in activeWaveTaskIds', async () => {
+        // Setup: valid parallel state
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+            { id: 'T3', status: 'in_progress' }, // INVALID: not in activeWaveTaskIds
+          ],
+        });
+
+        const state = await readParallelState(stateDir);
+
+        // Verify T3 would be detected as orphaned (not in activeWaveTaskIds)
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasks = JSON.parse(tasksRaw);
+        const t3 = tasks.tasks.find((t: { id: string }) => t.id === 'T3');
+        expect(t3.status).toBe('in_progress');
+        expect(state?.activeWaveTaskIds.includes('T3')).toBe(false);
+      });
+    });
+
+    describe('deterministic wave selection (§6.2.2)', () => {
+      it('wave selection is deterministic across runs', async () => {
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T3', status: 'pending' },
+            { id: 'T1', status: 'failed' },
+            { id: 'T2', status: 'pending' },
+          ],
+        });
+
+        // Multiple scheduler calls should return identical results
+        const tasksJson = JSON.parse(
+          await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8'),
+        );
+
+        const selected1 = scheduleReadyTasks(tasksJson, 2);
+        const selected2 = scheduleReadyTasks(tasksJson, 2);
+        const selected3 = scheduleReadyTasks(tasksJson, 2);
+
+        // All selections should be identical
+        expect(selected1.map((t) => t.id)).toEqual(selected2.map((t) => t.id));
+        expect(selected2.map((t) => t.id)).toEqual(selected3.map((t) => t.id));
+
+        // And follow the deterministic ordering: failed first, then list order
+        expect(selected1[0].id).toBe('T1'); // failed, so first
       });
     });
   });

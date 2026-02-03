@@ -84,10 +84,13 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
 #### 6.2.1 Configuration
 - Add an opt-in configuration to `.jeeves/issue.json`:
   - `settings.taskExecution.mode`: `"sequential"` (default) or `"parallel"`.
-  - `settings.taskExecution.maxParallelTasks`: integer ≥ 1 (default `1`).
+  - `settings.taskExecution.maxParallelTasks`: integer in `[1..MAX_PARALLEL_TASKS]` (default `1`).
 - Add a run-time override in `POST /api/run` body:
   - `max_parallel_tasks?: number` (optional; overrides `settings.taskExecution.maxParallelTasks` for this run only).
   - If omitted, use issue settings; if neither present, default to `1`.
+- Define a hard upper bound for deterministic, safe scheduling:
+  - `MAX_PARALLEL_TASKS = 8`
+  - Rationale: each worker runs two runner phases (implement + spec check) and can be expensive in CPU, filesystem IO, and provider rate/cost; a small fixed cap avoids resource exhaustion and keeps logs/UI usable. Operators can still get most of the benefit with `2–4`.
 
 #### 6.2.2 Task Graph and Readiness
 - Treat `.jeeves/tasks.json.tasks` as the source of truth for task definitions.
@@ -104,9 +107,11 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
   - Failed tasks are never scheduled automatically. To retry a failed task, an operator must reset `task.status` back to `"pending"` in `.jeeves/tasks.json` and re-run.
 
 #### 6.2.3 Worker Sandbox Layout
-For a canonical issue state directory `STATE` and worktree `WORK`, create worker sandboxes under a run-scoped directory:
+For a canonical issue state directory `STATE`, canonical issue worktree `WORK`, and the shared repo clone directory `REPO` (as created by `apps/viewer-server/src/init.ts`), create worker sandboxes under a run-scoped directory:
 - Worker state dir: `STATE/.runs/<runId>/workers/<taskId>/`
-- Worker worktree dir: `WORK/.runs/<runId>/workers/<taskId>/`
+- Worker worktree dir (MUST NOT be nested under `WORK`): `WORKTREES/<owner>/<repo>/issue-<N>-workers/<runId>/<taskId>/`
+  - Where `WORKTREES = <JEEVES_DATA_DIR>/worktrees`.
+  - This keeps worker git worktrees as siblings of the canonical worktree (`.../issue-<N>`), avoiding nested-worktree paths that are unsafe/invalid for `git worktree add`.
 
 Worker initialization steps:
 1. Create the worker state directory and write:
@@ -117,14 +122,22 @@ Worker initialization steps:
    - Optional: copy canonical `.jeeves/task-feedback/<taskId>.md` into worker `.jeeves/task-feedback.md` for retries.
 2. Create a worker git worktree:
    - Branch name: `issue/<N>-<taskId>` (e.g., `issue/78-T1`).
-   - Base ref: the current HEAD of the canonical issue worktree branch (ensures workers include prior merged tasks).
+   - Base ref: the current HEAD of the canonical issue branch (ensures workers include prior merged tasks).
+   - Exact commands (from the shared repo clone `REPO`):
+     - If the worker worktree dir already exists (e.g., from a prior run), remove it first:
+       - `git -C <REPO> worktree remove --force <workerWorktreeDir>`
+     - Create the worktree on a new branch based on the canonical branch:
+       - `git -C <REPO> worktree add -B <workerBranch> <workerWorktreeDir> <canonicalBranch>`
+       - Example: `git -C <REPO> worktree add -B issue/78-T1 <...>/issue-78-workers/<runId>/T1 issue/78`
 3. Create a `.jeeves` symlink in the worker worktree pointing to the worker state directory (same pattern as `apps/viewer-server/src/init.ts`).
 
 Cleanup behavior:
 - “Archival” means retaining the canonical run directory `STATE/.runs/<runId>/...` (including per-worker logs/artifacts) for observability and post-mortems.
 - On success:
-  - Delete the worker git worktree directory (`WORK/.runs/<runId>/workers/<taskId>/`) after a successful merge.
-  - Delete the worker branch after a successful merge (to reduce repo clutter).
+  - Delete the worker git worktree after a successful merge:
+    - `git -C <REPO> worktree remove --force <workerWorktreeDir>`
+  - Delete the worker branch after a successful merge (to reduce repo clutter):
+    - `git -C <REPO> branch -D <workerBranch>`
   - Retain the worker state directory under `STATE/.runs/<runId>/workers/<taskId>/` (do not delete).
 - On failure/timeout:
   - Retain the worker state directory under `STATE/.runs/<runId>/workers/<taskId>/`.
@@ -134,6 +147,17 @@ Cleanup behavior:
 - Extend viewer-server orchestration to manage multiple runner subprocesses concurrently:
   - Track a map of active worker processes keyed by `taskId`.
   - For each worker, run two subprocesses in sequence (implement then spec check), but run workers in parallel.
+- Runner invocation contract (MUST match current `packages/runner/src/cli.ts` behavior):
+  - Worker processes MUST omit `--issue` and instead pass explicit `--state-dir` and `--work-dir`.
+    - Reason: when `--issue` is provided, the runner derives `stateDir`/`cwd` from the XDG layout and ignores `--state-dir`/`--work-dir`.
+  - Exact args per worker phase (invoked via the existing viewer-server `spawnRunner` mechanism):
+    - Implement phase:
+      - `run-phase --workflow <workflowName> --phase implement_task --provider <provider> --workflows-dir <workflowsDir> --prompts-dir <promptsDir> --state-dir <workerStateDir> --work-dir <workerWorktreeDir>`
+    - Spec-check phase:
+      - `run-phase --workflow <workflowName> --phase task_spec_check --provider <provider> --workflows-dir <workflowsDir> --prompts-dir <promptsDir> --state-dir <workerStateDir> --work-dir <workerWorktreeDir>`
+  - Exact env:
+    - `JEEVES_DATA_DIR=<dataDir>` (already set by viewer-server; not relied on for worker dir resolution when `--state-dir/--work-dir` are provided).
+    - Optional model override per worker: `JEEVES_MODEL=<model>` (existing viewer-server behavior).
 - Logging requirements:
   - Prefix viewer-run log lines with taskId to make interleaving readable:
     - Example: `[WORKER T1][STDOUT] ...`
@@ -204,7 +228,7 @@ If the viewer UI needs to show concurrent tasks, extend the run status payload (
   - unchanged schema, but `run.max_parallel_tasks` is included for observability (optional).
 Status codes:
 - `200` on successful start.
-- `400` for invalid `max_parallel_tasks` (non-integer, < 1, too large).
+- `400` for invalid `max_parallel_tasks` (non-integer, < 1, or `> MAX_PARALLEL_TASKS`).
 - `409` if a run is already active.
 - `500` for orchestration failures (e.g., worker sandbox creation errors).
 
@@ -291,7 +315,7 @@ Status codes:
 - **Stale or conflicting status flags**:
   - Mitigation: worker issue.json initialization must clear task-loop flags; canonical state updates happen only in orchestrator code.
 - **Provider cost increases**:
-  - Mitigation: cap `maxParallelTasks`, and optionally limit parallelism for expensive phases (Open Questions).
+  - Mitigation: cap `maxParallelTasks` at `MAX_PARALLEL_TASKS` (8), and optionally limit parallelism for expensive phases (Open Questions).
 
 ## 12. Rollout Plan
 - **Milestones**:

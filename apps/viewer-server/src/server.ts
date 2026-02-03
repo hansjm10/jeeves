@@ -1146,8 +1146,21 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.send({ ok: true, run });
 	    } catch (err) {
 	      const msg = err instanceof Error ? err.message : String(err);
-	      // Return 400 for invalid max_parallel_tasks
-	      const status = msg.includes('already running') ? 409 : 400;
+	      // Per §6.2.6: 409 for already running, 400 for invalid inputs, 500 for orchestration failures
+	      let status: number;
+	      if (msg.includes('already running')) {
+	        status = 409;
+	      } else if (
+	        msg.includes('Invalid max_parallel_tasks') ||
+	        msg.includes('Invalid provider') ||
+	        msg.includes('No issue selected') ||
+	        msg.includes('Worktree not found')
+	      ) {
+	        status = 400;
+	      } else {
+	        // Orchestration failures (filesystem errors, spawn errors, etc.)
+	        status = 500;
+	      }
 	      return reply.code(status).send({ ok: false, error: msg, run: runManager.getStatus() });
 	    }
 	  });

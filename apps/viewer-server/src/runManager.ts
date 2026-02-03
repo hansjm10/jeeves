@@ -550,6 +550,16 @@ export class RunManager {
             break;
           }
 
+          // If merge conflict occurred, stop the run as errored (§6.2.5)
+          if (parallelResult.mergeConflict) {
+            this.stopReason = `merge_conflict (parallel ${currentPhase})`;
+            this.status = { ...this.status, last_error: `Merge conflict during ${currentPhase}` };
+            this.broadcast('run', { run: this.status });
+            await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to merge conflict during ${currentPhase}`);
+            completedNaturally = false;
+            break;
+          }
+
           // If no wave was executed (no ready tasks), treat as success and let workflow transition
           if (!parallelWaveExecuted && exitCode === 0) {
             await this.appendViewerLog(viewerLogPath, `[PARALLEL] No ready tasks for ${currentPhase}, continuing workflow`);
@@ -724,7 +734,7 @@ export class RunManager {
     iterStartedAt: string;
     iterationTimeoutSec: number;
     inactivityTimeoutSec: number;
-  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean }> {
+  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean; mergeConflict?: boolean }> {
     if (!this.stateDir || !this.workDir || !this.runId || !this.issueRef) {
       return { exitCode: 1, waveExecuted: false };
     }
@@ -822,6 +832,10 @@ export class RunManager {
         if (result.timedOut) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave timed out (${result.timeoutType})`);
           return { exitCode: 1, waveExecuted: true, timedOut: true };
+        }
+        if (result.mergeConflict) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave completed with merge conflict: ${result.error}`);
+          return { exitCode: 1, waveExecuted: true, mergeConflict: true };
         }
         if (result.error) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave error: ${result.error}`);

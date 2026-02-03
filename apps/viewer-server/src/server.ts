@@ -1141,10 +1141,12 @@ export async function buildServer(config: ViewerServerConfig) {
 	        max_iterations: parseOptionalNumber(body.max_iterations) ?? body.max_iterations,
 	        inactivity_timeout_sec: parseOptionalNumber(body.inactivity_timeout_sec) ?? body.inactivity_timeout_sec,
 	        iteration_timeout_sec: parseOptionalNumber(body.iteration_timeout_sec) ?? body.iteration_timeout_sec,
+	        max_parallel_tasks: parseOptionalNumber(body.max_parallel_tasks) ?? body.max_parallel_tasks,
 	      });
 	      return reply.send({ ok: true, run });
 	    } catch (err) {
 	      const msg = err instanceof Error ? err.message : String(err);
+	      // Return 400 for invalid max_parallel_tasks
 	      const status = msg.includes('already running') ? 409 : 400;
 	      return reply.code(status).send({ ok: false, error: msg, run: runManager.getStatus() });
 	    }

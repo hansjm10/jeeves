@@ -53,6 +53,15 @@ export type WorkflowCreateRequest = Readonly<{ name: string; from?: string }>;
 export type IssueWorkflowSelectRequest = Readonly<{ workflow: string; reset_phase?: boolean }>;
 export type IssueWorkflowSelectResponse = Readonly<{ ok: true; workflow: string; phase?: string }>;
 
+/** Worker status during parallel execution */
+export type WorkerStatusInfo = Readonly<{
+  taskId: string;
+  phase: 'implement_task' | 'task_spec_check';
+  pid: number | null;
+  started_at: string;
+  status: 'running' | 'passed' | 'failed' | 'timed_out';
+}>;
+
 export type RunStatus = Readonly<{
   run_id?: string | null;
   run_dir?: string | null;
@@ -70,6 +79,10 @@ export type RunStatus = Readonly<{
   last_error: string | null;
   issue_ref: string | null;
   viewer_log_file?: string | null;
+  /** Active workers during parallel execution */
+  workers?: WorkerStatusInfo[] | null;
+  /** Max parallel tasks for this run (if parallel mode enabled) */
+  max_parallel_tasks?: number | null;
 }>;
 
 export type CreateIssueRunProvider = 'claude' | 'codex' | 'fake';

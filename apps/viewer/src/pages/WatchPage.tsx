@@ -1,6 +1,7 @@
 import { useCallback, useEffect, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
+import type { WorkerStatusInfo } from '../api/types.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
 import { SdkPage } from './SdkPage.js';
@@ -135,6 +136,51 @@ const styles = {
     minWidth: 0,
     minHeight: 0,
   } satisfies CSSProperties,
+  /**
+   * Workers strip container - shown between header and content when workers are active
+   */
+  workersStrip: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: 'var(--space-3) var(--space-6)',
+    background: 'rgba(88, 166, 255, 0.08)',
+    borderBottom: '1px solid var(--color-border)',
+    gap: 'var(--space-4)',
+    flexWrap: 'wrap',
+  } satisfies CSSProperties,
+  workersLabel: {
+    fontSize: 'var(--font-size-ui-xs)',
+    color: 'var(--color-accent-blue)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    fontWeight: 600,
+  } satisfies CSSProperties,
+  workerCard: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-3)',
+    padding: 'var(--space-2) var(--space-4)',
+    background: 'var(--color-surface-1)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--font-size-ui-sm)',
+  } satisfies CSSProperties,
+  workerTaskId: {
+    fontWeight: 600,
+    color: 'var(--color-text)',
+    fontFamily: 'var(--font-mono)',
+  } satisfies CSSProperties,
+  workerPhase: {
+    color: 'var(--color-text-muted)',
+    fontSize: 'var(--font-size-ui-xs)',
+  } satisfies CSSProperties,
+  workerStatus: {
+    padding: 'var(--space-1) var(--space-2)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: 'var(--font-size-ui-xs)',
+    fontWeight: 500,
+    textTransform: 'uppercase',
+  } satisfies CSSProperties,
 };
 
 /**
@@ -158,6 +204,31 @@ function getGridTemplate(view: WatchViewMode): string {
     default:
       return '1fr 1fr 0';
   }
+}
+
+/**
+ * Returns the color style for a worker status.
+ */
+export function getWorkerStatusColor(status: WorkerStatusInfo['status']): CSSProperties {
+  switch (status) {
+    case 'running':
+      return { background: 'rgba(88, 166, 255, 0.15)', color: 'var(--color-accent-blue)' };
+    case 'passed':
+      return { background: 'rgba(63, 185, 80, 0.15)', color: 'var(--color-accent-green)' };
+    case 'failed':
+      return { background: 'rgba(248, 81, 73, 0.15)', color: 'var(--color-accent-red)' };
+    case 'timed_out':
+      return { background: 'rgba(255, 166, 87, 0.15)', color: 'var(--color-accent-orange, #ff9966)' };
+    default:
+      return { background: 'var(--color-surface-2)', color: 'var(--color-text-muted)' };
+  }
+}
+
+/**
+ * Formats a phase name for display.
+ */
+export function formatWorkerPhase(phase: WorkerStatusInfo['phase']): string {
+  return phase === 'implement_task' ? 'implement' : 'spec-check';
 }
 
 /**
@@ -437,6 +508,46 @@ function RunContextStrip() {
 }
 
 /**
+ * Workers strip component showing active parallel workers.
+ * Only renders when workers array is present and non-empty.
+ * Updates live based on websocket `run` events.
+ */
+function WorkersStrip() {
+  const stream = useViewerStream();
+  const workers = stream.state?.run?.workers;
+
+  // Don't render if no workers
+  if (!workers || workers.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={styles.workersStrip} className="watch-workers-strip" data-testid="workers-strip">
+      <span style={styles.workersLabel}>Workers</span>
+      {workers.map((worker) => (
+        <div
+          key={worker.taskId}
+          style={styles.workerCard}
+          className="watch-worker-card"
+          data-testid={`worker-${worker.taskId}`}
+        >
+          <span style={styles.workerTaskId}>{worker.taskId}</span>
+          <span style={styles.workerPhase}>{formatWorkerPhase(worker.phase)}</span>
+          <span
+            style={{
+              ...styles.workerStatus,
+              ...getWorkerStatusColor(worker.status),
+            }}
+          >
+            {worker.status}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * View mode segmented toggle.
  */
 function ViewModeToggle({
@@ -526,6 +637,9 @@ export function WatchPage() {
         <RunContextStrip />
         <ViewModeToggle mode={currentView} onChange={handleViewChange} />
       </div>
+
+      {/* Workers strip - shown only when parallel workers are active */}
+      <WorkersStrip />
 
       {/*
         Content grid: SDK | Logs | ViewerLogs

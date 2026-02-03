@@ -19,8 +19,11 @@ import {
   ParallelRunner,
   isParallelModeEnabled,
   getMaxParallelTasks,
+  validateMaxParallelTasks,
+  MAX_PARALLEL_TASKS,
   type ParallelRunnerOptions,
 } from './parallelRunner.js';
+import type { WorkerStatusInfo } from './types.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -120,6 +123,8 @@ export class RunManager {
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
+  private activeParallelRunner: ParallelRunner | null = null;
+  private maxParallelTasksOverride: number | null = null;
 
   private status: RunStatus = {
     running: false,
@@ -159,7 +164,23 @@ export class RunManager {
   }
 
   getStatus(): RunStatus {
-    return this.status;
+    // Include active workers if parallel execution is active
+    const workers = this.activeParallelRunner?.getActiveWorkers() ?? null;
+    const workerStatusInfo: WorkerStatusInfo[] | null = workers && workers.length > 0
+      ? workers.map((w) => ({
+          taskId: w.taskId,
+          phase: w.phase,
+          pid: w.pid,
+          started_at: w.startedAt,
+          status: w.status,
+        }))
+      : null;
+
+    return {
+      ...this.status,
+      workers: workerStatusInfo,
+      max_parallel_tasks: this.maxParallelTasksOverride,
+    };
   }
 
   async setIssue(issueRef: string): Promise<void> {
@@ -188,6 +209,7 @@ export class RunManager {
     max_iterations?: unknown;
     inactivity_timeout_sec?: unknown;
     iteration_timeout_sec?: unknown;
+    max_parallel_tasks?: unknown;
   }): Promise<RunStatus> {
     if (this.status.running) throw new Error('Jeeves is already running');
     if (!this.issueRef || !this.stateDir || !this.workDir) throw new Error('No issue selected. Use /api/issues/select or /api/init/issue.');
@@ -195,6 +217,17 @@ export class RunManager {
       throw new Error(`Worktree not found at ${this.workDir}. Run init first.`);
     }
     await ensureJeevesExcludedFromGitStatus(this.workDir).catch(() => void 0);
+
+    // Validate max_parallel_tasks if provided
+    if (params.max_parallel_tasks !== undefined && params.max_parallel_tasks !== null) {
+      const validatedMaxParallel = validateMaxParallelTasks(params.max_parallel_tasks);
+      if (validatedMaxParallel === null) {
+        throw new Error(`Invalid max_parallel_tasks: must be an integer between 1 and ${MAX_PARALLEL_TASKS}`);
+      }
+      this.maxParallelTasksOverride = validatedMaxParallel;
+    } else {
+      this.maxParallelTasksOverride = null;
+    }
 
     const provider = mapProvider(params.provider);
     const maxIterations = Number.isFinite(Number(params.max_iterations)) ? Math.max(1, Number(params.max_iterations)) : 10;
@@ -247,7 +280,7 @@ export class RunManager {
       iteration_timeout_sec: iterationTimeoutSec,
     });
 
-    this.broadcast('run', { run: this.status });
+    this.broadcast('run', { run: this.getStatus() });
     void this.runLoop({
       provider,
       maxIterations,
@@ -257,7 +290,7 @@ export class RunManager {
       viewerLogPath,
     });
 
-    return this.status;
+    return this.getStatus();
   }
 
   async stop(params?: { force?: boolean; reason?: string }): Promise<RunStatus> {
@@ -272,7 +305,11 @@ export class RunManager {
         // ignore
       }
     }
-    return this.status;
+    // Also stop parallel runner if active
+    if (this.activeParallelRunner) {
+      this.activeParallelRunner.requestStop();
+    }
+    return this.getStatus();
   }
 
   private async appendViewerLog(viewerLogPath: string, line: string): Promise<void> {
@@ -627,8 +664,8 @@ export class RunManager {
     }
     const canonicalBranch = typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${issueNumber}`;
 
-    // Get max parallel tasks from issue settings
-    const maxParallelTasks = await getMaxParallelTasks(this.stateDir);
+    // Get max parallel tasks: API override > issue settings > default (1)
+    const maxParallelTasks = this.maxParallelTasksOverride ?? await getMaxParallelTasks(this.stateDir);
 
     // Get runner binary path
     const runnerBinPath = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');
@@ -662,6 +699,11 @@ export class RunManager {
     };
 
     const parallelRunner = new ParallelRunner(parallelOptions);
+    this.activeParallelRunner = parallelRunner;
+
+    // Broadcast initial worker status
+    this.status = { ...this.status };
+    this.broadcast('run', { run: this.getStatus() });
 
     // Wire up stop handling
     if (this.stopRequested) {
@@ -702,6 +744,11 @@ export class RunManager {
       const errMsg = err instanceof Error ? err.message : String(err);
       await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Wave execution error: ${errMsg}`);
       return { exitCode: 1, waveExecuted: false };
+    } finally {
+      // Clear the parallel runner when wave completes
+      this.activeParallelRunner = null;
+      // Broadcast final status without workers
+      this.broadcast('run', { run: this.getStatus() });
     }
   }
 

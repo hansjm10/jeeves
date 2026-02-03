@@ -2844,3 +2844,300 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     expect(canTransition).toBe(true);
   }, 30000);
 });
+
+/**
+ * T17: Stop run on parallel wave setup failures.
+ *
+ * This test validates that when a parallel wave fails during setup (sandbox creation
+ * or worker spawn) after reserving tasks, the viewer-server run stops immediately
+ * (no further iterations) and reports a clear completion_reason/last_error indicating
+ * setup failure.
+ *
+ * Per design §6.2.8 step 6:
+ * - End the run as **errored** (no canonical workflow transition)
+ * - Do not update taskFailed/taskPassed/hasMoreTasks/allTasksComplete based on a setup-failed wave
+ * - Reserved tasks are restored via reservedStatusByTaskId
+ */
+describe('T17: Stop run on parallel wave setup failures', () => {
+  it('stops immediately on setup failure without continuing to max_iterations', async () => {
+    const dataDir = await makeTempDir('jeeves-setup-fail-');
+    const repoRoot = await makeTempDir('jeeves-sf-reporoot-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'setup-fail-owner';
+    const repo = 'setup-fail-repo';
+    const issueNumber = 9200;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    // Create a proper git repo setup (like the merge conflict test)
+    const origin = await makeTempDir('jeeves-sf-origin-');
+    await runGit(origin, ['init', '--bare']);
+
+    const initWork = await makeTempDir('jeeves-sf-init-');
+    await runGit(initWork, ['init']);
+    await fs.writeFile(path.join(initWork, 'README.md'), 'test\n', 'utf-8');
+    await runGit(initWork, ['add', '.']);
+    await runGit(initWork, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'init']);
+    await runGit(initWork, ['branch', '-M', 'main']);
+    await runGit(initWork, ['remote', 'add', 'origin', origin]);
+    await runGit(initWork, ['push', '-u', 'origin', 'main']);
+
+    const repoDir = path.join(dataDir, 'repos', owner, repo);
+    await fs.mkdir(path.dirname(repoDir), { recursive: true });
+    await runGit(path.dirname(repoDir), ['clone', origin, repo]);
+
+    const branchName = `issue/${issueNumber}`;
+    await runGit(repoDir, ['checkout', '-b', branchName]);
+    await fs.writeFile(path.join(repoDir, '.gitignore'), '.jeeves\n', 'utf-8');
+    await runGit(repoDir, ['add', '.gitignore']);
+    await runGit(repoDir, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'add gitignore']);
+    await runGit(repoDir, ['checkout', 'main']);
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(path.dirname(workDir), { recursive: true });
+    await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
+
+    // Set up issue.json with parallel mode enabled and in implement_task phase
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: branchName,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {
+            currentTaskId: 'T1',
+            taskDecompositionComplete: true,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Set up tasks.json with pending tasks
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          decomposedFrom: 'docs/design.md',
+          tasks: [
+            { id: 'T1', title: 'Task 1', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/a.ts'], dependsOn: [], status: 'pending' },
+            { id: 'T2', title: 'Task 2', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/b.ts'], dependsOn: [], status: 'pending' },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Create an empty progress.txt
+    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
+
+    // Create spawn that throws synchronously on the second call (simulating a spawn failure
+    // after the first worker was successfully spawned)
+    let spawnCallCount = 0;
+    const spawn = () => {
+      spawnCallCount++;
+      if (spawnCallCount === 2) {
+        // Throw synchronously to simulate a spawn failure
+        throw new Error('Spawn failed: simulated error for testing');
+      }
+      // First spawn succeeds (create a fake child that exits quickly)
+      const proc = makeFakeChild(0, 10);
+      return proc;
+    };
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: spawn as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    // Start the run with high max_iterations - if setup failure doesn't stop immediately,
+    // it would try more iterations
+    await rm.start({
+      provider: 'fake',
+      max_iterations: 10, // High value - should NOT reach all 10 if setup failure stops immediately
+      inactivity_timeout_sec: 30,
+      iteration_timeout_sec: 30,
+    });
+
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    // KEY ASSERTIONS:
+
+    // 1. Run should have stopped early (current_iteration should be low)
+    const status = rm.getStatus();
+    expect(status.current_iteration).toBeLessThanOrEqual(1);
+
+    // 2. completion_reason should indicate setup failure
+    expect(status.completion_reason).toContain('setup_failure');
+
+    // 3. last_error should indicate the setup failure details
+    expect(status.last_error).toBeTruthy();
+    expect(status.last_error?.toLowerCase()).toContain('spawn');
+
+    // 4. Per §6.2.8: taskFailed/taskPassed should NOT be modified by setup failure
+    // (The tasks should be rolled back to their pre-reservation state, not marked failed)
+    const issueAfter = await readIssueJson(stateDir);
+    const statusFlags = issueAfter?.status as Record<string, unknown>;
+    // Setup failure should NOT set these flags (only task execution failures do)
+    // The flags should be undefined or remain their original values
+    expect(statusFlags?.taskFailed).not.toBe(true);
+
+    // 5. Per §6.2.8: status.parallel should be cleared after setup failure
+    expect(statusFlags?.parallel).toBeUndefined();
+
+    // 6. Per §6.2.8: Reserved tasks should be restored to pre-reservation status
+    const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+    const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+    const inProgressTasks = tasksJson.tasks.filter((t) => t.status === 'in_progress');
+    expect(inProgressTasks).toHaveLength(0); // No tasks should be stuck in in_progress
+
+    // 7. Progress entry should document the setup failure
+    const progressContent = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+    expect(progressContent.toLowerCase()).toContain('setup failure');
+
+    // 8. Viewer log should show the error was handled
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[ERROR]');
+    expect(viewerLog).toContain('setup failure');
+  }, 30000);
+
+  it('reports clear completion_reason and last_error on sandbox creation failure', async () => {
+    const dataDir = await makeTempDir('jeeves-sandbox-fail-');
+    const repoRoot = await makeTempDir('jeeves-sbf-reporoot-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'sandbox-fail-owner';
+    const repo = 'sandbox-fail-repo';
+    const issueNumber = 9201;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    // Create repos directory structure BUT don't initialize git
+    // This will cause sandbox creation to fail (can't create worktree without git repo)
+    const repoDir = path.join(dataDir, 'repos', owner, repo);
+    await fs.mkdir(repoDir, { recursive: true });
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    // Set up issue.json with parallel mode enabled
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {
+            currentTaskId: 'T1',
+            taskDecompositionComplete: true,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Set up tasks.json with pending tasks
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          decomposedFrom: 'docs/design.md',
+          tasks: [
+            { id: 'T1', title: 'Task 1', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/a.ts'], dependsOn: [], status: 'pending' },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
+
+    const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    await rm.start({
+      provider: 'fake',
+      max_iterations: 5,
+      inactivity_timeout_sec: 30,
+      iteration_timeout_sec: 30,
+    });
+
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    // Verify run stopped with setup failure indication
+    const status = rm.getStatus();
+
+    // Should stop at iteration 1 (not continue to max_iterations)
+    expect(status.current_iteration).toBe(1);
+
+    // completion_reason should indicate the setup failure
+    expect(status.completion_reason).toContain('setup_failure');
+
+    // last_error should contain meaningful error message (sandbox/worktree related)
+    expect(status.last_error).toBeTruthy();
+
+    // Viewer log should document the error
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[ERROR]');
+    expect(viewerLog.toLowerCase()).toContain('setup failure');
+  }, 30000);
+});

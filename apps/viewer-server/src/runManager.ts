@@ -617,6 +617,25 @@ export class RunManager {
             break;
           }
 
+          // If setup/orchestration failure occurred, stop the run immediately as errored (§6.2.8 step 6)
+          // Per T17: Setup failures should NOT continue iterating until max_iterations
+          if (parallelResult.setupFailure) {
+            this.stopReason = `setup_failure (parallel ${currentPhase})`;
+            this.status = { ...this.status, last_error: parallelResult.setupError ?? `Setup failure during ${currentPhase}` };
+            this.broadcast('run', { run: this.status });
+            await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to setup failure during ${currentPhase}: ${parallelResult.setupError ?? 'unknown'}`);
+
+            // Per §6.2.8 "Wave setup failure":
+            // - Task statuses have already been rolled back via reservedStatusByTaskId
+            // - status.parallel has been cleared
+            // - Progress entry and wave artifact have been written
+            // - Do NOT update taskFailed/taskPassed flags (setup failure ≠ task failure)
+            // The issue state is already clean (tasks restored to pre-reservation status), so we
+            // just stop the run immediately without modifying any flags.
+            completedNaturally = false;
+            break;
+          }
+
           // If no wave was executed (no ready tasks), treat as success and let workflow transition
           if (!parallelWaveExecuted && exitCode === 0) {
             await this.appendViewerLog(viewerLogPath, `[PARALLEL] No ready tasks for ${currentPhase}, continuing workflow`);
@@ -791,7 +810,7 @@ export class RunManager {
     iterStartedAt: string;
     iterationTimeoutSec: number;
     inactivityTimeoutSec: number;
-  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean; mergeConflict?: boolean }> {
+  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean; mergeConflict?: boolean; setupFailure?: boolean; setupError?: string }> {
     if (!this.stateDir || !this.workDir || !this.runId || !this.issueRef) {
       return { exitCode: 1, waveExecuted: false };
     }
@@ -874,6 +893,11 @@ export class RunManager {
         }
         if (result.error) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave error: ${result.error}`);
+          // Check if this is a setup/orchestration failure (continueExecution=false + error)
+          // Per §6.2.8 step 6: setup failures should stop the run immediately as errored
+          if (!result.continueExecution) {
+            return { exitCode: 1, waveExecuted: true, setupFailure: true, setupError: result.error };
+          }
           return { exitCode: 1, waveExecuted: true };
         }
         // Implement wave completed successfully, exit code 0 to proceed to spec check
@@ -896,6 +920,11 @@ export class RunManager {
         }
         if (result.error) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave error: ${result.error}`);
+          // Check if this is a setup/orchestration failure (continueExecution=false + error)
+          // Per §6.2.8 step 6: setup failures should stop the run immediately as errored
+          if (!result.continueExecution) {
+            return { exitCode: 1, waveExecuted: true, setupFailure: true, setupError: result.error };
+          }
           return { exitCode: 1, waveExecuted: true };
         }
         // Spec check wave completed - exit code based on results

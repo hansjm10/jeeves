@@ -71,10 +71,9 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
 - Execute each selected task inside a worker sandbox:
   - a dedicated git worktree on a dedicated branch,
   - a dedicated `.jeeves/` state directory containing copies of `issue.json`, `tasks.json`, and per-task logs/feedback.
-- For each worker task:
-  1. Run `implement_task` once (execute).
-  2. Run `task_spec_check` once (evaluate).
-  3. Determine pass/fail from worker `.jeeves/issue.json.status.taskPassed/taskFailed` and capture `.jeeves/task-feedback.md` on failure.
+- A parallel “wave” spans two canonical workflow iterations to integrate cleanly with the existing `WorkflowEngine` phase loop:
+  1. **Canonical `implement_task` iteration**: select ready tasks, reserve them as `status="in_progress"` in canonical `.jeeves/tasks.json`, then run `implement_task` for each task in its worker sandbox (in parallel).
+  2. **Canonical `task_spec_check` iteration**: run `task_spec_check` for those same tasks (in parallel), then merge passed branches and update canonical `.jeeves/tasks.json` + `.jeeves/issue.json.status.*` to drive the next workflow transition.
 - After all workers in a wave complete:
   - merge successful worker branches into the canonical issue branch,
   - update canonical `.jeeves/tasks.json` statuses and canonical `.jeeves/progress.txt`,
@@ -98,13 +97,15 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
   1. Task IDs are unique.
   2. `dependsOn` entries reference existing task IDs.
   3. Dependency graph is acyclic (detect cycles via DFS/Kahn’s algorithm).
-  4. A task is “ready” iff:
-     - `task.status === "pending"`,
+  4. A task is “ready to implement” iff:
+     - `task.status` is `"pending"` or `"failed"` (both are retryable),
      - and for every `depId` in `dependsOn`, the referenced task has `status === "passed"`.
 - Selection rules:
   - Prefer stable ordering for determinism (e.g., by task list order, then task ID).
-  - Do not schedule tasks whose dependencies are failed or in_progress.
-  - Failed tasks are never scheduled automatically. To retry a failed task, an operator must reset `task.status` back to `"pending"` in `.jeeves/tasks.json` and re-run.
+  - Prefer retries first: schedule `"failed"` tasks before `"pending"` tasks when both are ready.
+  - Do not schedule tasks whose dependencies are `"failed"` or `"in_progress"`.
+  - When a task is selected for an `implement_task` wave, update canonical `.jeeves/tasks.json` immediately to set `task.status = "in_progress"` (reservation) before spawning worker processes.
+  - Retry semantics are automatic (aligned with the existing task loop): a task that fails `task_spec_check` becomes `"failed"` and is eligible to be re-scheduled in a later `implement_task` wave without manual operator edits.
 
 #### 6.2.3 Worker Sandbox Layout
 For a canonical issue state directory `STATE`, canonical issue worktree `WORK`, and the shared repo clone directory `REPO` (as created by `apps/viewer-server/src/init.ts`), create worker sandboxes under a run-scoped directory:
@@ -144,9 +145,10 @@ Cleanup behavior:
   - Retain the worker git worktree directory and branch by default to support debugging and manual remediation.
 
 #### 6.2.4 Parallel Process Management
-- Extend viewer-server orchestration to manage multiple runner subprocesses concurrently:
+- Extend viewer-server orchestration to manage multiple runner subprocesses concurrently while preserving the existing canonical phase loop:
   - Track a map of active worker processes keyed by `taskId`.
-  - For each worker, run two subprocesses in sequence (implement then spec check), but run workers in parallel.
+  - In canonical `implement_task`: spawn worker `implement_task` processes in parallel for the selected wave.
+  - In canonical `task_spec_check`: spawn worker `task_spec_check` processes in parallel for the tasks recorded as the active wave.
 - Runner invocation contract (MUST match current `packages/runner/src/cli.ts` behavior):
   - Worker processes MUST omit `--issue` and instead pass explicit `--state-dir` and `--work-dir`.
     - Reason: when `--issue` is provided, the runner derives `stateDir`/`cwd` from the XDG layout and ignores `--state-dir`/`--work-dir`.
@@ -164,9 +166,13 @@ Cleanup behavior:
   - Persist per-worker `last-run.log` and `sdk-output.json` under the worker state dir for drill-down.
 
 Timeouts:
-- Apply `iteration_timeout_sec` per worker phase invocation.
-- Apply `inactivity_timeout_sec` per worker based on that worker’s `last-run.log` growth.
-- If a worker times out, mark it failed with a deterministic reason and do not schedule any additional waves after the current wave completes.
+- `max_iterations` retains its current meaning: it is a global cap on the number of canonical workflow iterations (fresh-context subprocesses). In parallel mode, each wave consumes **two** iterations (one `implement_task`, one `task_spec_check`).
+- Apply `iteration_timeout_sec` to the entire canonical iteration (wave step), consistent with the current viewer-server run loop behavior:
+  - Start the timer when the first worker process is spawned for the iteration.
+  - If exceeded, stop the run and terminate remaining workers (same as sequential mode).
+- Apply `inactivity_timeout_sec` to the iteration as “no observable progress across any worker”:
+  - Observable progress includes any worker stdout/stderr, changes in any worker `last-run.log`, or periodic orchestrator progress writes.
+  - If exceeded, stop the run and terminate remaining workers.
 
 #### 6.2.5 Result Aggregation and Merge
 After a wave completes:
@@ -195,11 +201,13 @@ After a wave completes:
 
 Failure propagation:
 - Wave execution is non-cancelling by default for determinism and maximum salvage:
-  - If one worker fails/times out, other workers in the same wave continue to completion.
-  - No additional waves are scheduled after the current wave completes if any worker failed/timed out.
-- Overall run verdict:
-  - `failed` if any worker failed spec check or timed out (even if other tasks in the wave pass and are merged).
-  - `errored` if orchestration fails (sandbox creation, process spawn) or if a merge conflict occurs.
+  - If one worker fails, other workers in the same wave continue to completion.
+- Orchestration errors:
+  - If sandbox creation/spawn fails, or a merge conflict occurs while merging a “passed” task, treat the run as errored and stop (do not attempt further waves).
+- Retry integration (aligned with the existing task loop):
+  - If any worker fails `task_spec_check`, set canonical `issue.json.status.taskFailed = true` (and `taskPassed = false`) so the workflow transitions back to `implement_task` for retries.
+  - If all workers in the wave pass and there is remaining work, set `taskPassed = true`, `taskFailed = false`, and `hasMoreTasks = true` so the workflow continues to the next `implement_task` wave.
+  - If all tasks are passed, set `allTasksComplete = true` to transition to `completeness_verification`.
 - Required ordering of canonical updates after a wave:
   1. Ensure all worker processes have exited (or been marked timed out).
   2. Write the wave summary artifact to `STATE/.runs/<runId>/waves/<waveId>.json`.
@@ -231,6 +239,37 @@ Status codes:
 - `400` for invalid `max_parallel_tasks` (non-integer, < 1, or `> MAX_PARALLEL_TASKS`).
 - `409` if a run is already active.
 - `500` for orchestration failures (e.g., worker sandbox creation errors).
+
+#### 6.2.7 Canonical Workflow Integration (Parallel Mode)
+When `issue.json.settings.taskExecution.mode="parallel"` is enabled, viewer-server remains the canonical workflow owner and keeps the existing `implement_task → task_spec_check → implement_task ...` phase transitions deterministic:
+- Viewer-server MUST special-case execution for the canonical task phases:
+  - In canonical `implement_task`, do not run the canonical prompt. Instead, run an **implement wave** in worker sandboxes for the selected ready tasks.
+  - In canonical `task_spec_check`, do not run the canonical prompt. Instead, run a **spec-check wave** in worker sandboxes for the tasks from the preceding implement wave, then merge/update canonical state.
+- Viewer-server MUST still advance `issue.json.phase` using the existing `WorkflowEngine` transition rules after each canonical iteration, relying on the canonical `issue.json.status.*` flags computed by the orchestrator (not by prompts).
+
+Required canonical status fields after a `task_spec_check` wave (to satisfy `workflows/default.yaml` guards):
+- If any task failed spec-check (or is unverifiable): set
+  - `status.taskPassed = false`
+  - `status.taskFailed = true`
+  - `status.hasMoreTasks = true`
+  - `status.allTasksComplete = false`
+- If all wave tasks passed and there exists any task with `status !== "passed"`: set
+  - `status.taskPassed = true`
+  - `status.taskFailed = false`
+  - `status.hasMoreTasks = true`
+  - `status.allTasksComplete = false`
+- If all tasks are passed: set
+  - `status.taskPassed = true`
+  - `status.taskFailed = false`
+  - `status.hasMoreTasks = false`
+  - `status.allTasksComplete = true`
+
+Wave linkage across canonical phases:
+- Persist the active wave selection in canonical `issue.json.status.parallel` so the following canonical phase is deterministic:
+  - `status.parallel.activeWaveId: string`
+  - `status.parallel.activeWaveTaskIds: string[]`
+- In canonical `implement_task`: populate `activeWave*` immediately after selecting tasks (before spawning workers).
+- In canonical `task_spec_check`: consume `activeWaveTaskIds`, then clear `status.parallel` after the wave is summarized/merged.
 
 ### 6.3 Operational Considerations
 - **Deployment**:

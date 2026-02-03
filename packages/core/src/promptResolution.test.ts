@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
 
@@ -29,6 +30,12 @@ describe('resolvePromptPath', () => {
     const engine = new WorkflowEngine(workflow);
     const resolved = await resolvePromptPath('design_draft', promptsDir, engine);
     expect(resolved.endsWith('/prompts/design.draft.md') || resolved.endsWith('\\prompts\\design.draft.md')).toBe(true);
+  });
+
+  it('includes the design pre-submission checklist in the draft prompt', async () => {
+    const promptPath = fileURLToPath(new URL('../../../prompts/design.draft.md', import.meta.url));
+    const content = await readFile(promptPath, 'utf8');
+    expect(content).toContain('## Pre-Submission Checklist');
   });
 
   it('blocks path traversal and errors on missing prompts', async () => {

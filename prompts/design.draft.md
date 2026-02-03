@@ -100,6 +100,30 @@ Before writing the design, think through:
 5. How will this be tested?
 </thinking_guidance>
 
+## Pre-Submission Checklist
+
+Before completing this phase, verify:
+
+### API Contracts
+- [ ] All external contracts are defined (e.g., for HTTP APIs: status codes like 200, 400, 403, 500, 504)
+- [ ] Request/response field shapes locked (including optional vs omitted)
+- [ ] Default values specified for optional parameters
+
+### Failure Modes
+- [ ] Timeout values and behavior defined
+- [ ] Error message formats specified
+- [ ] Retry semantics documented (if applicable)
+
+### Security
+- [ ] No TBDs affecting security/compliance
+- [ ] Logging/redaction policy defined (what can/cannot be logged)
+- [ ] Input validation limits specified
+
+### Testing
+- [ ] Concrete test cases listed (not just 'add tests')
+- [ ] Failure path tests included
+- [ ] Edge cases enumerated
+
 <completion>
 Update `.jeeves/issue.json` when complete:
 ```json

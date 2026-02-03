@@ -2068,6 +2068,329 @@ describe('parallelRunner', () => {
         const afterRefresh = r.checkTimeouts();
         expect(afterRefresh.timedOut).toBe(false);
       });
+
+      it('terminateAllWorkersForTimeout calls proc.kill(SIGKILL) on active workers', () => {
+        // Per §6.2.4: on timeout, workers must be terminated via SIGKILL for immediate cleanup
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        // Create mock processes with kill spies
+        const mockProc1 = createMockProc(0);
+        const killSpy1 = vi.fn();
+        (mockProc1 as { kill: (signal?: string) => void }).kill = killSpy1;
+        (mockProc1 as { exitCode: number | null }).exitCode = null; // Still running
+
+        const mockProc2 = createMockProc(0);
+        const killSpy2 = vi.fn();
+        (mockProc2 as { kill: (signal?: string) => void }).kill = killSpy2;
+        (mockProc2 as { exitCode: number | null }).exitCode = null; // Still running
+
+        // Directly inject workers into activeWorkers map (simulating spawned workers)
+        const r = runner as unknown as {
+          activeWorkers: Map<
+            string,
+            {
+              taskId: string;
+              phase: string;
+              pid: number | null;
+              startedAt: string;
+              endedAt: string | null;
+              returncode: number | null;
+              status: string;
+              sandbox: object;
+              proc: typeof mockProc1 | null;
+            }
+          >;
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        };
+
+        r.activeWorkers.set('T1', {
+          taskId: 'T1',
+          phase: 'implement_task',
+          pid: 1001,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: null,
+          returncode: null,
+          status: 'running',
+          sandbox: {},
+          proc: mockProc1,
+        });
+
+        r.activeWorkers.set('T2', {
+          taskId: 'T2',
+          phase: 'implement_task',
+          pid: 1002,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: null,
+          returncode: null,
+          status: 'running',
+          sandbox: {},
+          proc: mockProc2,
+        });
+
+        // Trigger timeout termination
+        r.terminateAllWorkersForTimeout('iteration');
+
+        // Assert SIGKILL was called on both workers
+        expect(killSpy1).toHaveBeenCalledWith('SIGKILL');
+        expect(killSpy2).toHaveBeenCalledWith('SIGKILL');
+      });
+
+      it('terminateAllWorkersForTimeout sets worker status to timed_out', () => {
+        // Per §6.2.4: affected workers must have their status updated to timed_out
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        // Create mock process
+        const mockProc = createMockProc(0);
+        (mockProc as { exitCode: number | null }).exitCode = null; // Still running
+
+        // Inject worker
+        const r = runner as unknown as {
+          activeWorkers: Map<
+            string,
+            {
+              taskId: string;
+              phase: string;
+              pid: number | null;
+              startedAt: string;
+              endedAt: string | null;
+              returncode: number | null;
+              status: string;
+              sandbox: object;
+              proc: typeof mockProc | null;
+            }
+          >;
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        };
+
+        r.activeWorkers.set('T1', {
+          taskId: 'T1',
+          phase: 'implement_task',
+          pid: 1001,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: null,
+          returncode: null,
+          status: 'running',
+          sandbox: {},
+          proc: mockProc,
+        });
+
+        // Verify initial status
+        expect(r.activeWorkers.get('T1')?.status).toBe('running');
+
+        // Trigger timeout
+        r.terminateAllWorkersForTimeout('inactivity');
+
+        // Worker status should be timed_out
+        expect(r.activeWorkers.get('T1')?.status).toBe('timed_out');
+      });
+
+      it('terminateAllWorkersForTimeout skips workers with null proc or already exited', () => {
+        // Edge case: worker.proc is null or already has an exitCode
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        const mockProcExited = createMockProc(0);
+        const killSpyExited = vi.fn();
+        (mockProcExited as { kill: (signal?: string) => void }).kill = killSpyExited;
+        (mockProcExited as { exitCode: number | null }).exitCode = 0; // Already exited
+
+        const r = runner as unknown as {
+          activeWorkers: Map<
+            string,
+            {
+              taskId: string;
+              phase: string;
+              pid: number | null;
+              startedAt: string;
+              endedAt: string | null;
+              returncode: number | null;
+              status: string;
+              sandbox: object;
+              proc: typeof mockProcExited | null;
+            }
+          >;
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        };
+
+        // Worker with null proc
+        r.activeWorkers.set('T1', {
+          taskId: 'T1',
+          phase: 'implement_task',
+          pid: null,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: '2026-01-01T00:01:00Z',
+          returncode: 0,
+          status: 'passed',
+          sandbox: {},
+          proc: null,
+        });
+
+        // Worker with already-exited proc
+        r.activeWorkers.set('T2', {
+          taskId: 'T2',
+          phase: 'implement_task',
+          pid: 1002,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: '2026-01-01T00:01:00Z',
+          returncode: 0,
+          status: 'passed',
+          sandbox: {},
+          proc: mockProcExited,
+        });
+
+        // Should not throw and should not call kill on already-exited process
+        r.terminateAllWorkersForTimeout('iteration');
+
+        expect(killSpyExited).not.toHaveBeenCalled();
+      });
+
+      it('canonical tasks.json reflects timed_out worker outcomes after updateCanonicalTaskStatuses', async () => {
+        // Integration test: after timeout, canonical task status should reflect failure
+        // This tests the path: timeout -> updateCanonicalTaskStatuses -> tasks.json update
+
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+            { id: 'T3', status: 'pending' },
+          ],
+        });
+
+        // Simulate worker outcomes from a timeout scenario
+        // Per design: timed_out workers are marked as failed (retryable)
+        const outcomes: WorkerOutcome[] = [
+          {
+            taskId: 'T1',
+            phase: 'implement_task',
+            status: 'timed_out',
+            exitCode: -1, // Killed by signal
+            taskPassed: false,
+            taskFailed: true,
+            startedAt: '2026-01-01T00:00:00Z',
+            endedAt: '2026-01-01T00:05:00Z',
+          },
+          {
+            taskId: 'T2',
+            phase: 'implement_task',
+            status: 'timed_out',
+            exitCode: -1,
+            taskPassed: false,
+            taskFailed: true,
+            startedAt: '2026-01-01T00:00:00Z',
+            endedAt: '2026-01-01T00:05:00Z',
+          },
+        ];
+
+        await updateCanonicalTaskStatuses(stateDir, outcomes);
+
+        // Verify tasks.json updated correctly
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasks = JSON.parse(tasksRaw);
+
+        // Timed-out tasks should be marked as failed (retryable status)
+        expect(tasks.tasks.find((t: { id: string }) => t.id === 'T1').status).toBe('failed');
+        expect(tasks.tasks.find((t: { id: string }) => t.id === 'T2').status).toBe('failed');
+        // Non-wave tasks should be unchanged
+        expect(tasks.tasks.find((t: { id: string }) => t.id === 'T3').status).toBe('pending');
+
+        // No in_progress tasks should remain (workflow not stuck)
+        const inProgressTasks = tasks.tasks.filter(
+          (t: { status: string }) => t.status === 'in_progress',
+        );
+        expect(inProgressTasks).toHaveLength(0);
+      });
+
+      it('parallel state is cleared after timeout completes workflow is resumable', async () => {
+        // After timeout handling, parallel state must be cleared so workflow can resume
+        // without stuck tasks
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+          ],
+        });
+
+        // Simulate what happens after timeout: wave result triggers state update
+        const waveResult: WaveResult = {
+          waveId: 'wave-1',
+          phase: 'implement_task',
+          taskIds: ['T1', 'T2'],
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: '2026-01-01T00:05:00Z',
+          workers: [
+            {
+              taskId: 'T1',
+              phase: 'implement_task',
+              status: 'timed_out',
+              exitCode: -1,
+              taskPassed: false,
+              taskFailed: true,
+              startedAt: '2026-01-01T00:00:00Z',
+              endedAt: '2026-01-01T00:05:00Z',
+            },
+            {
+              taskId: 'T2',
+              phase: 'implement_task',
+              status: 'timed_out',
+              exitCode: -1,
+              taskPassed: false,
+              taskFailed: true,
+              startedAt: '2026-01-01T00:00:00Z',
+              endedAt: '2026-01-01T00:05:00Z',
+            },
+          ],
+          allPassed: false,
+          anyFailed: true,
+        };
+
+        // updateCanonicalStatusFlags clears parallel state on implement_task completion
+        // (whether from timeout or normal completion)
+        // For implement phase, it only clears if there's an error or all tasks timed out
+        // The actual clearing happens when the full wave cycle completes
+
+        // First, simulate task status updates
+        await updateCanonicalTaskStatuses(stateDir, waveResult.workers);
+
+        // Verify tasks are no longer in_progress
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasks = JSON.parse(tasksRaw);
+        const inProgressTasks = tasks.tasks.filter(
+          (t: { status: string }) => t.status === 'in_progress',
+        );
+        expect(inProgressTasks).toHaveLength(0);
+
+        // After timeout during implement phase with all failures, workflow can:
+        // 1. Rollback via rollbackTaskReservations (for clean stop)
+        // 2. Or let spec-check phase handle it (but timeout aborts before spec-check)
+        // On full timeout, parallel state should be cleared by the orchestrator
+
+        // Simulate orchestrator clearing parallel state after timeout abort
+        await rollbackTaskReservations(stateDir, parallelState.reservedStatusByTaskId);
+
+        const stateAfter = await readParallelState(stateDir);
+        expect(stateAfter).toBeNull();
+      });
     });
 
     describe('§6.2.5 merge conflict stop behavior', () => {

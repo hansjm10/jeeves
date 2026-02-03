@@ -100,6 +100,7 @@ Each wave consumes two canonical workflow iterations (one for implement, one for
 When a task fails during execution:
 - Other workers in the same wave **continue** (non-cancelling behavior)
 - The failed task is marked `status: "failed"` in `tasks.json`
+- If the worker generated a `task-feedback.md` file, it is copied to canonical `.jeeves/task-feedback/<taskId>.md`
 - Failed tasks are eligible for retry in later waves
 
 ### Merge Conflicts
@@ -109,6 +110,7 @@ When merging a passed task's branch into the canonical branch:
 2. If a conflict occurs:
    - The merge is aborted (`git merge --abort`)
    - The conflicting task is marked as `failed`
+   - A synthetic feedback file is written to `.jeeves/task-feedback/<taskId>.md` describing the conflict, resolution steps, and artifact locations
    - A progress log entry describes the conflict
    - The run is marked as **errored** and stops
    - Worker worktrees/branches are retained for debugging
@@ -118,7 +120,7 @@ When merging a passed task's branch into the canonical branch:
 When a wave times out (`iteration_timeout_sec` or `inactivity_timeout_sec`):
 - All workers are terminated
 - All wave tasks are marked `status: "failed"`
-- Synthetic feedback files are written explaining the timeout
+- Synthetic feedback files are written to `.jeeves/task-feedback/<taskId>.md` explaining the timeout (includes wave ID, run ID, timeout type, and artifacts location)
 - The run ends as **failed** (eligible for retry)
 
 ### Manual Stop
@@ -173,6 +175,35 @@ Each task runs in an isolated sandbox:
 | Merge Conflict | Retained | Retained | Retained |
 
 Retained artifacts support debugging and manual remediation.
+
+## Wave Summaries and Artifacts
+
+Each wave generates persistent artifacts for observability:
+
+### Progress Entry
+
+A single combined wave summary entry is appended to `.jeeves/progress.txt` after the spec-check phase completes. This entry includes:
+- Wave tasks and run ID
+- Implement phase summary (timestamps, pass/fail counts)
+- Spec-check phase summary (timestamps, verdicts)
+- Merge results (order, success/failure per task, commit SHAs)
+- Per-task verdicts (implement status, spec-check status, final verdict)
+
+### Wave Summary JSON
+
+Each wave is recorded in `<STATE>/.runs/<runId>/waves/<waveId>.json` with:
+- `waveId`, `phase`, `taskIds`
+- `startedAt`, `endedAt` timestamps
+- `workers` array with per-worker outcomes
+- `taskVerdicts` object with per-task status, exit code, branch, taskPassed/taskFailed
+- `mergeResult` (added after spec-check) with merge order and results
+
+### Task Feedback Files
+
+Canonical task feedback is stored in `.jeeves/task-feedback/<taskId>.md`:
+- Worker-generated feedback is copied from worker state on failures
+- Synthetic feedback is generated for timeouts and merge conflicts
+- Feedback includes failure reason, details, timestamps, and artifact locations
 
 ## Merge Strategy
 

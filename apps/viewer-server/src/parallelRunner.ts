@@ -34,7 +34,6 @@ import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import {
   mergePassedBranches,
-  appendMergeProgress,
   updateWaveSummaryWithMerge,
   type WaveMergeResult,
 } from './waveResultMerge.js';
@@ -83,6 +82,8 @@ export interface WorkerOutcome {
   taskFailed: boolean;
   startedAt: string;
   endedAt: string;
+  /** Branch name used for this worker (for wave summary metadata) */
+  branch?: string;
 }
 
 /** Parallel execution state stored in issue.json.status.parallel */
@@ -481,7 +482,39 @@ export async function updateCanonicalStatusFlags(
 }
 
 /**
- * Writes a wave summary artifact.
+ * Enhanced wave summary with required metadata per §6.2.5.
+ */
+export interface EnhancedWaveSummary extends WaveResult {
+  /** Per-task verdicts with detailed outcomes */
+  taskVerdicts: Record<string, {
+    status: 'passed' | 'failed' | 'timed_out';
+    exitCode: number | null;
+    branch: string;
+    taskPassed: boolean;
+    taskFailed: boolean;
+  }>;
+  /** Merge order (task IDs in order they were merged) */
+  mergeOrder?: string[];
+  /** Merge results per task */
+  mergeResults?: Record<string, {
+    success: boolean;
+    conflict: boolean;
+    commitSha?: string;
+    error?: string;
+  }>;
+  /** Error if setup/orchestration failed */
+  error?: string;
+  /** State if setup failed */
+  state?: 'setup_failed';
+}
+
+/**
+ * Writes a wave summary artifact with enhanced metadata (§6.2.5).
+ *
+ * The wave summary JSON includes:
+ * - Per-task verdicts (status, exit code, branch, taskPassed, taskFailed)
+ * - Wave timestamps and task IDs
+ * - Worker outcomes
  */
 export async function writeWaveSummary(
   stateDir: string,
@@ -490,7 +523,184 @@ export async function writeWaveSummary(
 ): Promise<void> {
   const wavesDir = path.join(stateDir, '.runs', runId, 'waves');
   await fs.mkdir(wavesDir, { recursive: true });
-  await writeJsonAtomic(path.join(wavesDir, `${waveResult.waveId}.json`), waveResult);
+
+  // Build enhanced wave summary with taskVerdicts
+  const taskVerdicts: Record<string, {
+    status: 'passed' | 'failed' | 'timed_out';
+    exitCode: number | null;
+    branch: string;
+    taskPassed: boolean;
+    taskFailed: boolean;
+  }> = {};
+
+  for (const worker of waveResult.workers) {
+    taskVerdicts[worker.taskId] = {
+      status: worker.status as 'passed' | 'failed' | 'timed_out',
+      exitCode: worker.exitCode,
+      branch: worker.branch ?? `issue/-${worker.taskId}`,
+      taskPassed: worker.taskPassed,
+      taskFailed: worker.taskFailed,
+    };
+  }
+
+  const enhancedWave: EnhancedWaveSummary = {
+    ...waveResult,
+    taskVerdicts,
+  };
+
+  await writeJsonAtomic(path.join(wavesDir, `${waveResult.waveId}.json`), enhancedWave);
+}
+
+/**
+ * Copies worker task-feedback.md to canonical .jeeves/task-feedback/<taskId>.md on failures.
+ *
+ * Per §6.2.5 of the design, worker feedback should be propagated to canonical state
+ * for failed tasks to enable retries with proper context.
+ */
+export async function copyWorkerFeedbackToCanonical(
+  canonicalStateDir: string,
+  sandbox: WorkerSandbox,
+): Promise<string | null> {
+  const workerFeedbackPath = path.join(sandbox.stateDir, 'task-feedback.md');
+
+  try {
+    const feedbackExists = await fs
+      .stat(workerFeedbackPath)
+      .then((s) => s.isFile())
+      .catch(() => false);
+
+    if (!feedbackExists) {
+      return null;
+    }
+
+    const feedbackContent = await fs.readFile(workerFeedbackPath, 'utf-8');
+    const feedbackDir = path.join(canonicalStateDir, 'task-feedback');
+    await fs.mkdir(feedbackDir, { recursive: true });
+    const canonicalFeedbackPath = path.join(feedbackDir, `${sandbox.taskId}.md`);
+    await fs.writeFile(canonicalFeedbackPath, feedbackContent, 'utf-8');
+    return canonicalFeedbackPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Writes a wave summary entry to canonical progress.txt.
+ *
+ * Per §6.2.5, canonical progress.txt receives a single wave summary entry per wave
+ * (covering both implement + spec-check phases).
+ */
+export async function appendWaveProgressEntry(
+  stateDir: string,
+  runId: string,
+  waveId: string,
+  implementResult: WaveResult | null,
+  specCheckResult: WaveResult | null,
+  mergeResult: WaveMergeResult | null,
+): Promise<void> {
+  const progressPath = path.join(stateDir, 'progress.txt');
+  const now = new Date().toISOString();
+
+  const lines: string[] = [];
+  lines.push(`## [${now}] - Parallel Wave Summary: ${waveId}`);
+  lines.push('');
+
+  // Wave info
+  const taskIds = specCheckResult?.taskIds ?? implementResult?.taskIds ?? [];
+  lines.push(`### Wave Tasks`);
+  lines.push(`- Run ID: ${runId}`);
+  lines.push(`- Tasks: ${taskIds.join(', ')}`);
+  lines.push('');
+
+  // Implement phase summary
+  if (implementResult) {
+    const implPassedCount = implementResult.workers.filter((w) => w.exitCode === 0 || w.status === 'passed').length;
+    const implTimedOutCount = implementResult.workers.filter((w) => w.status === 'timed_out').length;
+    lines.push(`### Implement Phase`);
+    lines.push(`- Started: ${implementResult.startedAt}`);
+    lines.push(`- Ended: ${implementResult.endedAt}`);
+    lines.push(`- Passed: ${implPassedCount}/${implementResult.workers.length}`);
+    if (implTimedOutCount > 0) {
+      lines.push(`- Timed out: ${implTimedOutCount}`);
+    }
+    lines.push('');
+  }
+
+  // Spec-check phase summary
+  if (specCheckResult) {
+    const specPassedCount = specCheckResult.workers.filter((w) => w.taskPassed).length;
+    const specFailedCount = specCheckResult.workers.filter((w) => w.taskFailed || !w.taskPassed).length;
+    const specTimedOutCount = specCheckResult.workers.filter((w) => w.status === 'timed_out').length;
+    lines.push(`### Spec-Check Phase`);
+    lines.push(`- Started: ${specCheckResult.startedAt}`);
+    lines.push(`- Ended: ${specCheckResult.endedAt}`);
+    lines.push(`- Passed: ${specPassedCount}/${specCheckResult.workers.length}`);
+    if (specFailedCount > 0) {
+      lines.push(`- Failed: ${specFailedCount}`);
+    }
+    if (specTimedOutCount > 0) {
+      lines.push(`- Timed out: ${specTimedOutCount}`);
+    }
+    lines.push('');
+  }
+
+  // Merge summary
+  if (mergeResult) {
+    lines.push(`### Merge Results`);
+    lines.push(`- Merged: ${mergeResult.mergedCount}`);
+    lines.push(`- Failed: ${mergeResult.failedCount}`);
+    if (mergeResult.hasConflict) {
+      lines.push(`- **Conflict on task**: ${mergeResult.conflictTaskId}`);
+    }
+    lines.push('');
+    lines.push(`#### Merge Order`);
+    for (const merge of mergeResult.merges) {
+      if (merge.success) {
+        lines.push(`- [x] ${merge.taskId}: merged (${merge.commitSha?.substring(0, 7) ?? 'unknown'})`);
+      } else if (merge.conflict) {
+        lines.push(`- [ ] ${merge.taskId}: CONFLICT`);
+      } else {
+        lines.push(`- [ ] ${merge.taskId}: skipped/failed`);
+      }
+    }
+    lines.push('');
+  }
+
+  // Per-task verdicts
+  const allWorkers = [
+    ...(implementResult?.workers ?? []),
+    ...(specCheckResult?.workers ?? []),
+  ];
+  const verdictsByTask = new Map<string, { impl?: WorkerOutcome; spec?: WorkerOutcome }>();
+  for (const w of allWorkers) {
+    const entry = verdictsByTask.get(w.taskId) ?? {};
+    if (w.phase === 'implement_task') entry.impl = w;
+    if (w.phase === 'task_spec_check') entry.spec = w;
+    verdictsByTask.set(w.taskId, entry);
+  }
+
+  if (verdictsByTask.size > 0) {
+    lines.push(`### Per-Task Verdicts`);
+    for (const [taskId, v] of verdictsByTask) {
+      const implStatus = v.impl ? (v.impl.exitCode === 0 ? '✓' : '✗') : '-';
+      const specStatus = v.spec ? (v.spec.taskPassed ? '✓' : '✗') : '-';
+      const finalStatus = v.spec?.taskPassed ? 'passed' : 'failed';
+      lines.push(`- ${taskId}: impl=${implStatus}, spec=${specStatus}, verdict=${finalStatus}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('');
+
+  const entry = lines.join('\n');
+
+  try {
+    await fs.appendFile(progressPath, entry, 'utf-8');
+  } catch {
+    // If append fails, try to create the file
+    await fs.writeFile(progressPath, entry, 'utf-8');
+  }
 }
 
 /**
@@ -509,6 +719,8 @@ export class ParallelRunner {
   private waveStartedAtMs: number | null = null;
   /** Timestamp of last activity (for inactivity timeout) */
   private lastActivityAtMs: number | null = null;
+  /** Stores the last implement wave result to include in the combined progress entry */
+  private lastImplementWaveResult: WaveResult | null = null;
 
   constructor(options: ParallelRunnerOptions) {
     this.options = {
@@ -659,7 +871,12 @@ export class ParallelRunner {
     // Check for active wave to resume
     const existingState = await this.checkForActiveWave();
     if (existingState && existingState.activeWavePhase === 'implement_task') {
-      return this.resumeImplementWave(existingState);
+      const result = await this.resumeImplementWave(existingState);
+      // Store implement wave result for combined progress entry
+      if (result) {
+        this.lastImplementWaveResult = result.waveResult;
+      }
+      return result;
     }
 
     // Select ready tasks
@@ -704,7 +921,12 @@ export class ParallelRunner {
     }
 
     // Create sandboxes and run workers
-    return this.executeWave(waveId, 'implement_task', taskIds, reservedStatusByTaskId);
+    const result = await this.executeWave(waveId, 'implement_task', taskIds, reservedStatusByTaskId);
+
+    // Store implement wave result for combined progress entry
+    this.lastImplementWaveResult = result.waveResult;
+
+    return result;
   }
 
   /**
@@ -862,6 +1084,7 @@ export class ParallelRunner {
         taskFailed,
         startedAt: state.reservedAt,
         endedAt: now,
+        branch: sandbox.branch,
       });
     }
 
@@ -882,6 +1105,24 @@ export class ParallelRunner {
     // Update canonical statuses initially based on spec-check outcomes
     await updateCanonicalTaskStatuses(this.options.canonicalStateDir, outcomes);
 
+    // Copy worker task-feedback.md to canonical for failed tasks (§6.2.5)
+    for (const outcome of outcomes) {
+      if (!outcome.taskPassed || outcome.taskFailed) {
+        const sandbox = sandboxes.find((s) => s.taskId === outcome.taskId);
+        if (sandbox) {
+          const copied = await copyWorkerFeedbackToCanonical(
+            this.options.canonicalStateDir,
+            sandbox,
+          );
+          if (copied) {
+            await this.options.appendLog(
+              `[WORKER ${outcome.taskId}] Copied task feedback to canonical: ${copied}`,
+            );
+          }
+        }
+      }
+    }
+
     // Merge passed branches into canonical branch (§6.2.5)
     const mergeResult = await this.mergePassedBranchesAfterSpecCheck(waveId, sandboxes, outcomes);
 
@@ -889,8 +1130,39 @@ export class ParallelRunner {
     await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
     await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, waveResult);
 
-    // If merge conflict, return with mergeConflict flag
-    if (mergeResult.hasConflict) {
+    // If merge conflict, write synthetic feedback and return with mergeConflict flag
+    if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
+      // Write synthetic feedback for merge conflict (§6.2.5)
+      await writeCanonicalFeedback(
+        this.options.canonicalStateDir,
+        mergeResult.conflictTaskId,
+        'Merge conflict during branch integration',
+        `The task passed spec-check but encountered a merge conflict when integrating ` +
+        `into the canonical issue branch.\n\n` +
+        `## Conflict Details\n` +
+        `- Wave ID: ${waveId}\n` +
+        `- Run ID: ${this.options.runId}\n` +
+        `- Branch: issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}\n\n` +
+        `## Resolution Steps\n` +
+        `1. Check the worker worktree for the conflicting changes\n` +
+        `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +
+        `3. Reset the task status to "pending" and retry\n\n` +
+        `## Artifacts Location\n` +
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${mergeResult.conflictTaskId}/\n` +
+        `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json`,
+      );
+
+      // Write combined wave progress entry (implement + spec-check) even on conflict (§6.2.5)
+      await appendWaveProgressEntry(
+        this.options.canonicalStateDir,
+        this.options.runId,
+        waveId,
+        this.lastImplementWaveResult,
+        waveResult,
+        mergeResult,
+      );
+      this.lastImplementWaveResult = null;
+
       return {
         waveResult,
         continueExecution: false,
@@ -917,6 +1189,18 @@ export class ParallelRunner {
         }
       }
     }
+
+    // Write combined wave progress entry (implement + spec-check) (§6.2.5)
+    await appendWaveProgressEntry(
+      this.options.canonicalStateDir,
+      this.options.runId,
+      waveId,
+      this.lastImplementWaveResult,
+      waveResult,
+      mergeResult,
+    );
+    // Clear stored implement result
+    this.lastImplementWaveResult = null;
 
     return { waveResult, continueExecution: true, mergeResult };
   }
@@ -1086,14 +1370,88 @@ export class ParallelRunner {
     if (phase === 'task_spec_check') {
       await updateCanonicalTaskStatuses(this.options.canonicalStateDir, outcomes);
 
+      // Copy worker task-feedback.md to canonical for failed tasks (§6.2.5)
+      for (const outcome of outcomes) {
+        if (!outcome.taskPassed || outcome.taskFailed) {
+          const sandbox = sandboxes.find((s) => s.taskId === outcome.taskId);
+          if (sandbox) {
+            const copied = await copyWorkerFeedbackToCanonical(
+              this.options.canonicalStateDir,
+              sandbox,
+            );
+            if (copied) {
+              await this.options.appendLog(
+                `[WORKER ${outcome.taskId}] Copied task feedback to canonical: ${copied}`,
+              );
+            }
+          }
+        }
+      }
+
+      // Write synthetic feedback for timed-out tasks (§6.2.5)
+      if (this.timedOut) {
+        for (const outcome of outcomes) {
+          if (outcome.status === 'timed_out') {
+            const timeoutType = this.timeoutType ?? 'unknown';
+            await writeCanonicalFeedback(
+              this.options.canonicalStateDir,
+              outcome.taskId,
+              `Task timed out during ${phase}`,
+              `The task was terminated due to ${timeoutType}_timeout during the ${phase} phase.\n\n` +
+              `## Wave Details\n` +
+              `- Wave ID: ${waveId}\n` +
+              `- Run ID: ${this.options.runId}\n` +
+              `- Timeout Type: ${timeoutType}\n\n` +
+              `## Artifacts Location\n` +
+              `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n\n` +
+              `The task is eligible for retry in the next wave.`,
+            );
+            await this.options.appendLog(
+              `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
+            );
+          }
+        }
+      }
+
       // Merge passed branches into canonical branch (§6.2.5)
       const mergeResult = await this.mergePassedBranchesAfterSpecCheck(waveId, sandboxes, outcomes);
 
       // Update canonical status flags (reflecting both spec-check and merge outcomes)
       await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
 
-      // If merge conflict, return with mergeConflict flag
-      if (mergeResult.hasConflict) {
+      // If merge conflict, write synthetic feedback and return with mergeConflict flag
+      if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
+        // Write synthetic feedback for merge conflict (§6.2.5)
+        await writeCanonicalFeedback(
+          this.options.canonicalStateDir,
+          mergeResult.conflictTaskId,
+          'Merge conflict during branch integration',
+          `The task passed spec-check but encountered a merge conflict when integrating ` +
+          `into the canonical issue branch.\n\n` +
+          `## Conflict Details\n` +
+          `- Wave ID: ${waveId}\n` +
+          `- Run ID: ${this.options.runId}\n` +
+          `- Branch: issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}\n\n` +
+          `## Resolution Steps\n` +
+          `1. Check the worker worktree for the conflicting changes\n` +
+          `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +
+          `3. Reset the task status to "pending" and retry\n\n` +
+          `## Artifacts Location\n` +
+          `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${mergeResult.conflictTaskId}/\n` +
+          `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json`,
+        );
+
+        // Write combined wave progress entry (implement + spec-check) even on conflict (§6.2.5)
+        await appendWaveProgressEntry(
+          this.options.canonicalStateDir,
+          this.options.runId,
+          waveId,
+          this.lastImplementWaveResult,
+          waveResult,
+          mergeResult,
+        );
+        this.lastImplementWaveResult = null;
+
         await this.options.appendLog(
           `[PARALLEL] Wave ${phase} completed with merge conflict on task ${mergeResult.conflictTaskId}`,
         );
@@ -1135,6 +1493,17 @@ export class ParallelRunner {
           `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${mergeResult.mergedCount} merged`,
         );
       }
+
+      // Write combined wave progress entry (implement + spec-check) (§6.2.5)
+      await appendWaveProgressEntry(
+        this.options.canonicalStateDir,
+        this.options.runId,
+        waveId,
+        this.lastImplementWaveResult,
+        waveResult,
+        mergeResult,
+      );
+      this.lastImplementWaveResult = null;
 
       return {
         waveResult,
@@ -1291,6 +1660,7 @@ export class ParallelRunner {
       taskFailed,
       startedAt,
       endedAt,
+      branch: sandbox.branch,
     };
   }
 
@@ -1331,9 +1701,6 @@ export class ParallelRunner {
       outcomes,
       appendLog: this.options.appendLog,
     });
-
-    // Append merge progress entry to canonical progress.txt
-    await appendMergeProgress(this.options.canonicalStateDir, waveId, mergeResult);
 
     // Update wave summary with merge results
     await updateWaveSummaryWithMerge(

@@ -22,6 +22,8 @@ import {
   writeWaveSummary,
   repairOrphanedInProgressTasks,
   writeCanonicalFeedback,
+  copyWorkerFeedbackToCanonical,
+  appendWaveProgressEntry,
   type ParallelState,
   type WaveResult,
   type WorkerOutcome,
@@ -458,7 +460,20 @@ describe('parallelRunner', () => {
       const summaryPath = path.join(tmpDir, '.runs', 'run-123', 'waves', 'wave-1.json');
       const raw = await fs.readFile(summaryPath, 'utf-8');
       const json = JSON.parse(raw);
-      expect(json).toEqual(waveResult);
+
+      // Verify base wave result fields are present
+      expect(json.waveId).toBe(waveResult.waveId);
+      expect(json.phase).toBe(waveResult.phase);
+      expect(json.taskIds).toEqual(waveResult.taskIds);
+      expect(json.startedAt).toBe(waveResult.startedAt);
+      expect(json.endedAt).toBe(waveResult.endedAt);
+      expect(json.workers).toEqual(waveResult.workers);
+      expect(json.allPassed).toBe(waveResult.allPassed);
+      expect(json.anyFailed).toBe(waveResult.anyFailed);
+
+      // Enhanced summary includes taskVerdicts
+      expect(json.taskVerdicts).toBeDefined();
+      expect(json.taskVerdicts).toEqual({});
     });
   });
 
@@ -1453,6 +1468,229 @@ describe('parallelRunner', () => {
           const result = await repairOrphanedInProgressTasks(stateDir);
           expect(result.repairedTaskIds).toEqual(['T2']);
         });
+      });
+    });
+
+    describe('feedback propagation', () => {
+      describe('copyWorkerFeedbackToCanonical', () => {
+        it('copies worker task-feedback.md to canonical task-feedback/<taskId>.md', async () => {
+          // Create worker sandbox structure
+          const workerStateDir = path.join(stateDir, '.runs', 'run-123', 'workers', 'T1');
+          await fs.mkdir(workerStateDir, { recursive: true });
+
+          // Create worker feedback file
+          const workerFeedback = '# Task Feedback: T1\n\n- Issue found in file X\n- Suggested fix: Y';
+          await fs.writeFile(path.join(workerStateDir, 'task-feedback.md'), workerFeedback, 'utf-8');
+
+          // Create mock sandbox
+          const sandbox = {
+            taskId: 'T1',
+            stateDir: workerStateDir,
+            runId: 'run-123',
+            issueNumber: 78,
+            owner: 'test',
+            repo: 'repo',
+            worktreeDir: '/tmp/worktree',
+            branch: 'issue/78-T1',
+            repoDir: '/tmp/repo',
+            canonicalBranch: 'issue/78',
+          };
+
+          const result = await copyWorkerFeedbackToCanonical(stateDir, sandbox);
+
+          expect(result).toBeTruthy();
+          expect(result).toContain('task-feedback');
+          expect(result).toContain('T1.md');
+
+          // Verify canonical feedback file contents
+          const canonicalFeedback = await fs.readFile(result!, 'utf-8');
+          expect(canonicalFeedback).toContain('Task Feedback: T1');
+          expect(canonicalFeedback).toContain('Issue found in file X');
+        });
+
+        it('returns null when worker task-feedback.md does not exist', async () => {
+          const workerStateDir = path.join(stateDir, '.runs', 'run-123', 'workers', 'T2');
+          await fs.mkdir(workerStateDir, { recursive: true });
+
+          const sandbox = {
+            taskId: 'T2',
+            stateDir: workerStateDir,
+            runId: 'run-123',
+            issueNumber: 78,
+            owner: 'test',
+            repo: 'repo',
+            worktreeDir: '/tmp/worktree',
+            branch: 'issue/78-T2',
+            repoDir: '/tmp/repo',
+            canonicalBranch: 'issue/78',
+          };
+
+          const result = await copyWorkerFeedbackToCanonical(stateDir, sandbox);
+
+          expect(result).toBeNull();
+        });
+      });
+
+      describe('appendWaveProgressEntry', () => {
+        it('appends combined wave summary to progress.txt', async () => {
+          const implementResult: WaveResult = {
+            waveId: 'wave-1',
+            phase: 'implement_task',
+            taskIds: ['T1', 'T2'],
+            startedAt: '2026-01-01T12:00:00Z',
+            endedAt: '2026-01-01T12:05:00Z',
+            workers: [
+              { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:02:00Z', branch: 'issue/78-T1' },
+              { taskId: 'T2', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:03:00Z', branch: 'issue/78-T2' },
+            ],
+            allPassed: true,
+            anyFailed: false,
+          };
+
+          const specCheckResult: WaveResult = {
+            waveId: 'wave-1',
+            phase: 'task_spec_check',
+            taskIds: ['T1', 'T2'],
+            startedAt: '2026-01-01T12:05:00Z',
+            endedAt: '2026-01-01T12:10:00Z',
+            workers: [
+              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1' },
+              { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+            ],
+            allPassed: false,
+            anyFailed: true,
+          };
+
+          const mergeResult = {
+            merges: [
+              { taskId: 'T1', branch: 'issue/78-T1', success: true, conflict: false, commitSha: 'abc1234' },
+            ],
+            mergedCount: 1,
+            failedCount: 0,
+            allMerged: true,
+            hasConflict: false,
+          };
+
+          await appendWaveProgressEntry(stateDir, 'run-123', 'wave-1', implementResult, specCheckResult, mergeResult);
+
+          const progress = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+
+          // Verify structure
+          expect(progress).toContain('Parallel Wave Summary: wave-1');
+          expect(progress).toContain('Run ID: run-123');
+          expect(progress).toContain('Tasks: T1, T2');
+
+          // Verify implement phase
+          expect(progress).toContain('Implement Phase');
+          expect(progress).toContain('Passed: 2/2');
+
+          // Verify spec-check phase
+          expect(progress).toContain('Spec-Check Phase');
+          expect(progress).toContain('Passed: 1/2');
+          expect(progress).toContain('Failed: 1');
+
+          // Verify merge results
+          expect(progress).toContain('Merge Results');
+          expect(progress).toContain('Merged: 1');
+          expect(progress).toContain('[x] T1: merged (abc1234)');
+
+          // Verify per-task verdicts
+          expect(progress).toContain('Per-Task Verdicts');
+          expect(progress).toContain('T1: impl=✓, spec=✓, verdict=passed');
+          expect(progress).toContain('T2: impl=✓, spec=✗, verdict=failed');
+        });
+
+        it('handles merge conflict in progress entry', async () => {
+          const specCheckResult: WaveResult = {
+            waveId: 'wave-1',
+            phase: 'task_spec_check',
+            taskIds: ['T1', 'T2'],
+            startedAt: '2026-01-01T12:05:00Z',
+            endedAt: '2026-01-01T12:10:00Z',
+            workers: [
+              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1' },
+              { taskId: 'T2', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+            ],
+            allPassed: true,
+            anyFailed: false,
+          };
+
+          const mergeResult = {
+            merges: [
+              { taskId: 'T1', branch: 'issue/78-T1', success: true, conflict: false, commitSha: 'abc1234' },
+              { taskId: 'T2', branch: 'issue/78-T2', success: false, conflict: true, error: 'CONFLICT' },
+            ],
+            mergedCount: 1,
+            failedCount: 1,
+            allMerged: false,
+            hasConflict: true,
+            conflictTaskId: 'T2',
+          };
+
+          await appendWaveProgressEntry(stateDir, 'run-123', 'wave-1', null, specCheckResult, mergeResult);
+
+          const progress = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+
+          expect(progress).toContain('**Conflict on task**: T2');
+          expect(progress).toContain('[x] T1: merged (abc1234)');
+          expect(progress).toContain('[ ] T2: CONFLICT');
+        });
+      });
+    });
+
+    describe('enhanced wave summary', () => {
+      it('writeWaveSummary includes taskVerdicts in JSON', async () => {
+        const waveResult: WaveResult = {
+          waveId: 'wave-1',
+          phase: 'task_spec_check',
+          taskIds: ['T1', 'T2'],
+          startedAt: '2026-01-01T12:00:00Z',
+          endedAt: '2026-01-01T12:10:00Z',
+          workers: [
+            { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1' },
+            { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+          ],
+          allPassed: false,
+          anyFailed: true,
+        };
+
+        await writeWaveSummary(stateDir, 'run-123', waveResult);
+
+        const summaryPath = path.join(stateDir, '.runs', 'run-123', 'waves', 'wave-1.json');
+        const summary = JSON.parse(await fs.readFile(summaryPath, 'utf-8'));
+
+        expect(summary.taskVerdicts).toBeDefined();
+        expect(summary.taskVerdicts.T1).toEqual({
+          status: 'passed',
+          exitCode: 0,
+          branch: 'issue/78-T1',
+          taskPassed: true,
+          taskFailed: false,
+        });
+        expect(summary.taskVerdicts.T2).toEqual({
+          status: 'failed',
+          exitCode: 1,
+          branch: 'issue/78-T2',
+          taskPassed: false,
+          taskFailed: true,
+        });
+      });
+
+      it('worker outcomes include branch field', async () => {
+        const waveResult: WaveResult = {
+          waveId: 'wave-1',
+          phase: 'implement_task',
+          taskIds: ['T1'],
+          startedAt: '2026-01-01T12:00:00Z',
+          endedAt: '2026-01-01T12:05:00Z',
+          workers: [
+            { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1' },
+          ],
+          allPassed: true,
+          anyFailed: false,
+        };
+
+        expect(waveResult.workers[0].branch).toBe('issue/78-T1');
       });
     });
   });

@@ -137,6 +137,11 @@ Worker initialization steps:
        - Example: `git -C <REPO> worktree add -B issue/78-T1 <...>/issue-78-workers/<runId>/T1 issue/78`
 3. Create a `.jeeves` symlink in the worker worktree pointing to the worker state directory (same pattern as `apps/viewer-server/src/init.ts`).
 
+Worker completion markers (for deterministic resume):
+- Implement done marker: `STATE/.runs/<runId>/workers/<taskId>/implement_task.done`
+- Spec-check done marker: `STATE/.runs/<runId>/workers/<taskId>/task_spec_check.done`
+- A marker file is a zero-byte file created by the orchestrator only after the corresponding worker process has fully exited (regardless of success/failure), and MUST be created atomically (write temp + rename) so existence is a reliable signal.
+
 Cleanup behavior:
 - “Archival” means retaining the canonical run directory `STATE/.runs/<runId>/...` (including per-worker logs/artifacts) for observability and post-mortems.
 - On success:
@@ -208,7 +213,7 @@ Failure propagation:
 - Wave execution is non-cancelling by default for determinism and maximum salvage:
   - If one worker fails, other workers in the same wave continue to completion.
 - Orchestration errors:
-  - If sandbox creation/spawn fails, or a merge conflict occurs while merging a “passed” task, treat the run as errored and stop (do not attempt further waves).
+  - If sandbox creation/spawn fails, or a merge conflict occurs while merging a “passed” task, treat the run as errored and stop (do not attempt further waves). For sandbox/spawn failure after reservation, follow the rollback semantics in §6.2.8 (“Wave setup failure”).
 - Retry integration (aligned with the existing task loop):
   - If any worker fails `task_spec_check`, set canonical `issue.json.status.taskFailed = true` (and `taskPassed = false`) so the workflow transitions back to `implement_task` for retries.
   - If all workers in the wave pass and there is remaining work, set `taskPassed = true`, `taskFailed = false`, and `hasMoreTasks = true` so the workflow continues to the next `implement_task` wave.
@@ -299,12 +304,25 @@ Parallel mode MUST be restart-safe and MUST not leave canonical tasks permanentl
 If `issue.json.status.parallel` is present at run start, the orchestrator MUST resume that exact wave (no new ready-task selection):
 - If `issue.json.phase === "implement_task"`:
   - Require `status.parallel.activeWavePhase === "implement_task"` (if not, treat as state corruption and set `activeWavePhase` to `"implement_task"` and append a warning to `.jeeves/progress.txt`).
-  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker implement process unless a worker “implement done” marker already exists in `STATE/.runs/<runId>/workers/<taskId>/` (marker format is an implementation detail; it MUST be deterministic and written only after the worker exits).
+  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker implement process unless `STATE/.runs/<runId>/workers/<taskId>/implement_task.done` exists.
   - Do not change canonical `.jeeves/tasks.json` statuses during resume; tasks remain `in_progress` until spec-check completes.
 - If `issue.json.phase === "task_spec_check"`:
   - Require `status.parallel.activeWavePhase === "task_spec_check"` (same corruption handling as above).
-  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker spec-check process unless a worker “spec-check done” marker already exists in `STATE/.runs/<runId>/workers/<taskId>/`.
+  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker spec-check process unless `STATE/.runs/<runId>/workers/<taskId>/task_spec_check.done` exists.
   - After all spec checks complete, run the merge/update routine (§6.2.5) and clear `issue.json.status.parallel`.
+
+**Wave setup failure (sandbox creation / spawn)**
+If an `implement_task` wave fails during setup after tasks were reserved (`.jeeves/tasks.json` set to `status="in_progress"` and `issue.json.status.parallel` populated), the orchestrator MUST deterministically roll back canonical reservation state:
+1. Terminate any worker processes that were successfully spawned (best-effort; do not wait indefinitely).
+2. Write a wave artifact at `STATE/.runs/<runId>/waves/<waveId>.json` with:
+   - `state: "setup_failed"`,
+   - the selected `activeWaveTaskIds`,
+   - which worker sandboxes were created and which worker processes started,
+   - the error message/stack.
+3. Restore canonical `.jeeves/tasks.json` statuses for all `activeWaveTaskIds` using `status.parallel.reservedStatusByTaskId` (i.e., rollback to each task’s pre-reservation `"pending"` or `"failed"`).
+4. Clear `issue.json.status.parallel`.
+5. Append a progress entry describing the setup failure, rollback, and artifact location. Do not delete worker artifacts.
+6. End the run as **errored** (no canonical workflow transition; do not update `taskFailed/taskPassed/hasMoreTasks/allTasksComplete` based on a setup-failed wave).
 
 **Manual stop**:
 If the operator stops a run while a wave is active:
@@ -391,7 +409,7 @@ If the run stops due to `iteration_timeout_sec` or `inactivity_timeout_sec` duri
     - successful merge updates canonical tasks.json
     - merge conflict aborts and writes progress entry
   - Orchestration recovery / restart safety:
-    - spawn failure after reservation: reserved tasks are recovered deterministically (no permanent `in_progress`) and `status.parallel` is cleared
+    - spawn failure after reservation: terminate any started workers, write a `state="setup_failed"` wave artifact, rollback reserved tasks using `reservedStatusByTaskId`, clear `status.parallel`, and end the run as errored (no `taskFailed/taskPassed/hasMoreTasks/allTasksComplete` update)
     - stop mid-implement wave: worker processes are terminated; active-wave tasks are restored using `reservedStatusByTaskId`; artifacts are retained
     - stop between implement/spec-check waves: resume runs spec-check for the recorded `activeWaveTaskIds` (no reselection) and merges/updates canonical state
     - resume after server restart: starting a new run with `status.parallel` present resumes the wave and produces the same canonical merge/task-status results as an uninterrupted run (using deterministic worker outputs in tests)

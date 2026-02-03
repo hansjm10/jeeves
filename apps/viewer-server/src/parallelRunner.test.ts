@@ -1356,6 +1356,34 @@ describe('parallelRunner', () => {
           const stat = await fs.stat(feedbackPath);
           expect(stat.isFile()).toBe(true);
         });
+
+        it('rejects task IDs with path traversal sequences', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+
+          // Path traversal attempts should be rejected (note: path separator is checked first for ../)
+          await expect(writeCanonicalFeedback(stateDir, '../outside', 'Test', 'Details'))
+            .rejects.toThrow(/path separator/i);
+          // Pure .. without separator triggers path traversal check
+          await expect(writeCanonicalFeedback(stateDir, '..', 'Test', 'Details'))
+            .rejects.toThrow(/path traversal/i);
+        });
+
+        it('rejects task IDs with path separators', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+
+          // Path separator attempts should be rejected
+          await expect(writeCanonicalFeedback(stateDir, 'foo/bar', 'Test', 'Details'))
+            .rejects.toThrow(/path separator/i);
+          await expect(writeCanonicalFeedback(stateDir, 'foo\\bar', 'Test', 'Details'))
+            .rejects.toThrow(/path separator/i);
+        });
+
+        it('rejects empty task IDs', async () => {
+          await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+
+          await expect(writeCanonicalFeedback(stateDir, '', 'Test', 'Details'))
+            .rejects.toThrow(/non-empty/i);
+        });
       });
 
       describe('manual stop rollback', () => {

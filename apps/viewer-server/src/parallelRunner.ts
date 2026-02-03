@@ -369,6 +369,9 @@ export async function writeCanonicalFeedback(
   reason: string,
   details: string,
 ): Promise<string> {
+  // Validate taskId to prevent path traversal attacks (per code review)
+  validateTaskId(taskId);
+
   const feedbackDir = path.join(stateDir, 'task-feedback');
   await fs.mkdir(feedbackDir, { recursive: true });
   const feedbackPath = path.join(feedbackDir, `${taskId}.md`);

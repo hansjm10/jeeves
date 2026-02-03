@@ -1217,12 +1217,15 @@ export class ParallelRunner {
       }
     }
 
+    // Write wave summary BEFORE merge so updateWaveSummaryWithMerge has something to update
+    await writeWaveSummary(this.options.canonicalStateDir, this.effectiveRunId, waveResult);
+
     // Merge passed branches into canonical branch (§6.2.5)
+    // Note: mergePassedBranchesAfterSpecCheck calls updateWaveSummaryWithMerge internally
     const mergeResult = await this.mergePassedBranchesAfterSpecCheck(waveId, sandboxes, outcomes);
 
-    // Update canonical status flags (reflecting both spec-check and merge outcomes)
+    // Update canonical status flags AFTER merge (so it reflects merge failures in tasks.json)
     await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
-    await writeWaveSummary(this.options.canonicalStateDir, this.effectiveRunId, waveResult);
 
     // If merge conflict, write synthetic feedback and return with mergeConflict flag
     if (mergeResult.hasConflict && mergeResult.conflictTaskId) {

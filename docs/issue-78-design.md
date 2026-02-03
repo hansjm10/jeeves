@@ -127,14 +127,14 @@ Worker initialization steps:
    - `tasks.json`: copy of canonical `.jeeves/tasks.json`.
    - Optional: copy canonical `.jeeves/task-feedback/<taskId>.md` into worker `.jeeves/task-feedback.md` for retries.
 2. Create a worker git worktree:
-   - Branch name: `issue/<N>-<taskId>` (e.g., `issue/78-T1`).
+   - Branch name: `issue/<N>-<taskId>-<shortRunId>` where `shortRunId` is the first 8 characters of the runId (e.g., `issue/78-T1-abc12345`). Including the runId ensures uniqueness across runs, preventing conflicts when a prior run's failed worktree retains its branch checked out.
    - Base ref: the current HEAD of the canonical issue branch (ensures workers include prior merged tasks).
    - Exact commands (from the shared repo clone `REPO`):
      - If the worker worktree dir already exists (e.g., from a prior run), remove it first:
        - `git -C <REPO> worktree remove --force <workerWorktreeDir>`
      - Create the worktree on a new branch based on the canonical branch:
        - `git -C <REPO> worktree add -B <workerBranch> <workerWorktreeDir> <canonicalBranch>`
-       - Example: `git -C <REPO> worktree add -B issue/78-T1 <...>/issue-78-workers/<runId>/T1 issue/78`
+       - Example: `git -C <REPO> worktree add -B issue/78-T1-abc12345 <...>/issue-78-workers/<runId>/T1 issue/78`
 3. Create a `.jeeves` symlink in the worker worktree pointing to the worker state directory (same pattern as `apps/viewer-server/src/init.ts`).
 
 Worker completion markers (for deterministic resume):

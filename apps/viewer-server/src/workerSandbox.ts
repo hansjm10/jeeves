@@ -344,8 +344,11 @@ export function getWorkerSandboxPaths(params: {
   const worktreesDir = getWorktreesDir(dataDir);
   const worktreeDir = path.join(worktreesDir, owner, repo, `issue-${issueNumber}-workers`, runId, taskId);
 
-  // Worker branch name: issue/<N>-<taskId>
-  const branch = `issue/${issueNumber}-${taskId}`;
+  // Worker branch name: issue/<N>-<taskId>-<shortRunId>
+  // Include runId (first 8 chars) to ensure uniqueness across runs, preventing
+  // conflicts when a prior run's failed worktree retains the branch checked out.
+  const shortRunId = runId.slice(0, 8);
+  const branch = `issue/${issueNumber}-${taskId}-${shortRunId}`;
 
   return {
     taskId,

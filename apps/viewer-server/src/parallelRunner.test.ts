@@ -1520,7 +1520,7 @@ describe('parallelRunner', () => {
             owner: 'test',
             repo: 'repo',
             worktreeDir: '/tmp/worktree',
-            branch: 'issue/78-T1',
+            branch: 'issue/78-T1-run-123',
             repoDir: '/tmp/repo',
             canonicalBranch: 'issue/78',
           };
@@ -1549,7 +1549,7 @@ describe('parallelRunner', () => {
             owner: 'test',
             repo: 'repo',
             worktreeDir: '/tmp/worktree',
-            branch: 'issue/78-T2',
+            branch: 'issue/78-T2-run-123',
             repoDir: '/tmp/repo',
             canonicalBranch: 'issue/78',
           };
@@ -1569,8 +1569,8 @@ describe('parallelRunner', () => {
             startedAt: '2026-01-01T12:00:00Z',
             endedAt: '2026-01-01T12:05:00Z',
             workers: [
-              { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:02:00Z', branch: 'issue/78-T1' },
-              { taskId: 'T2', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:03:00Z', branch: 'issue/78-T2' },
+              { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:02:00Z', branch: 'issue/78-T1-run-123' },
+              { taskId: 'T2', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:03:00Z', branch: 'issue/78-T2-run-123' },
             ],
             allPassed: true,
             anyFailed: false,
@@ -1583,8 +1583,8 @@ describe('parallelRunner', () => {
             startedAt: '2026-01-01T12:05:00Z',
             endedAt: '2026-01-01T12:10:00Z',
             workers: [
-              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1' },
-              { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1-run-123' },
+              { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2-run-123' },
             ],
             allPassed: false,
             anyFailed: true,
@@ -1592,7 +1592,7 @@ describe('parallelRunner', () => {
 
           const mergeResult = {
             merges: [
-              { taskId: 'T1', branch: 'issue/78-T1', success: true, conflict: false, commitSha: 'abc1234' },
+              { taskId: 'T1', branch: 'issue/78-T1-run-123', success: true, conflict: false, commitSha: 'abc1234' },
             ],
             mergedCount: 1,
             failedCount: 0,
@@ -1637,8 +1637,8 @@ describe('parallelRunner', () => {
             startedAt: '2026-01-01T12:05:00Z',
             endedAt: '2026-01-01T12:10:00Z',
             workers: [
-              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1' },
-              { taskId: 'T2', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+              { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:07:00Z', branch: 'issue/78-T1-run-123' },
+              { taskId: 'T2', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:05:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2-run-123' },
             ],
             allPassed: true,
             anyFailed: false,
@@ -1646,8 +1646,8 @@ describe('parallelRunner', () => {
 
           const mergeResult = {
             merges: [
-              { taskId: 'T1', branch: 'issue/78-T1', success: true, conflict: false, commitSha: 'abc1234' },
-              { taskId: 'T2', branch: 'issue/78-T2', success: false, conflict: true, error: 'CONFLICT' },
+              { taskId: 'T1', branch: 'issue/78-T1-run-123', success: true, conflict: false, commitSha: 'abc1234' },
+              { taskId: 'T2', branch: 'issue/78-T2-run-123', success: false, conflict: true, error: 'CONFLICT' },
             ],
             mergedCount: 1,
             failedCount: 1,
@@ -1676,8 +1676,8 @@ describe('parallelRunner', () => {
           startedAt: '2026-01-01T12:00:00Z',
           endedAt: '2026-01-01T12:10:00Z',
           workers: [
-            { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1' },
-            { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2' },
+            { taskId: 'T1', phase: 'task_spec_check', status: 'passed', exitCode: 0, taskPassed: true, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1-run-123' },
+            { taskId: 'T2', phase: 'task_spec_check', status: 'failed', exitCode: 1, taskPassed: false, taskFailed: true, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:08:00Z', branch: 'issue/78-T2-run-123' },
           ],
           allPassed: false,
           anyFailed: true,
@@ -1692,14 +1692,14 @@ describe('parallelRunner', () => {
         expect(summary.taskVerdicts.T1).toEqual({
           status: 'passed',
           exitCode: 0,
-          branch: 'issue/78-T1',
+          branch: 'issue/78-T1-run-123',
           taskPassed: true,
           taskFailed: false,
         });
         expect(summary.taskVerdicts.T2).toEqual({
           status: 'failed',
           exitCode: 1,
-          branch: 'issue/78-T2',
+          branch: 'issue/78-T2-run-123',
           taskPassed: false,
           taskFailed: true,
         });
@@ -1713,13 +1713,13 @@ describe('parallelRunner', () => {
           startedAt: '2026-01-01T12:00:00Z',
           endedAt: '2026-01-01T12:05:00Z',
           workers: [
-            { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1' },
+            { taskId: 'T1', phase: 'implement_task', status: 'passed', exitCode: 0, taskPassed: false, taskFailed: false, startedAt: '2026-01-01T12:00:00Z', endedAt: '2026-01-01T12:05:00Z', branch: 'issue/78-T1-run-123' },
           ],
           allPassed: true,
           anyFailed: false,
         };
 
-        expect(waveResult.workers[0].branch).toBe('issue/78-T1');
+        expect(waveResult.workers[0].branch).toBe('issue/78-T1-run-123');
       });
     });
   });
@@ -3150,7 +3150,7 @@ describe('parallelRunner', () => {
             taskFailed: true,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:01:00Z',
-            branch: 'issue/123-T1',
+            branch: 'issue/123-T1-run-test',
           },
           {
             taskId: 'T2',
@@ -3161,7 +3161,7 @@ describe('parallelRunner', () => {
             taskFailed: true,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:01:00Z',
-            branch: 'issue/123-T2',
+            branch: 'issue/123-T2-run-test',
           },
         ];
 
@@ -3576,7 +3576,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: true,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:01:00Z',
-            branch: 'issue/123-T1',
+            branch: 'issue/123-T1-run-test',
           },
           {
             taskId: 'T2',
@@ -3587,7 +3587,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: false,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:00:30Z',
-            branch: 'issue/123-T2',
+            branch: 'issue/123-T2-run-test',
           },
           {
             taskId: 'T3',
@@ -3598,7 +3598,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: true,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:00:45Z',
-            branch: 'issue/123-T3',
+            branch: 'issue/123-T3-run-test',
           },
         ];
 
@@ -3683,7 +3683,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: false,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:00:30Z',
-            branch: 'issue/123-T1',
+            branch: 'issue/123-T1-run-test',
           },
           {
             taskId: 'T2',
@@ -3694,7 +3694,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: false, // Neither passed nor failed - was interrupted
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:01:00Z',
-            branch: 'issue/123-T2',
+            branch: 'issue/123-T2-run-test',
           },
         ];
 
@@ -3782,7 +3782,7 @@ The task is eligible for retry in the next wave.`,
             taskFailed: false,
             startedAt: '2026-01-01T00:00:00Z',
             endedAt: '2026-01-01T00:00:30Z',
-            branch: 'issue/123-T1',
+            branch: 'issue/123-T1-run-test',
           },
         ];
 
@@ -4262,7 +4262,7 @@ The task is eligible for retry in the next wave.`,
           taskId: 'T1',
           stateDir: `${stateDir}/.runs/run-setup-fail/workers/T1`,
           worktreeDir: '/worktrees/T1',
-          branch: 'issue/78-T1',
+          branch: 'issue/78-T1-run-123',
         },
       ];
 

@@ -54,7 +54,7 @@ describe('waveResultMerge', () => {
       repo: 'repo',
       stateDir: path.join(stateDir, '.runs', 'run-123', 'workers', taskId),
       worktreeDir: path.join(tmpDir, 'worktrees', taskId),
-      branch: `issue/42-${taskId}`,
+      branch: `issue/42-${taskId}-run-123`,
       repoDir: path.join(tmpDir, 'repo'),
       canonicalBranch: 'issue/42',
     };
@@ -145,7 +145,7 @@ describe('waveResultMerge', () => {
       const mergeCall = mockRunGit.mock.calls.find((call) => call[0][0] === 'merge');
       expect(mergeCall).toBeDefined();
       expect(mergeCall![0]).toContain('--no-ff');
-      expect(mergeCall![0]).toContain('issue/42-T1');
+      expect(mergeCall![0]).toContain('issue/42-T1-run-123');
     });
 
     it('aborts cleanly on merge conflict', async () => {
@@ -257,8 +257,8 @@ describe('waveResultMerge', () => {
     it('formats successful merge correctly', () => {
       const mergeResult: WaveMergeResult = {
         merges: [
-          { taskId: 'T1', branch: 'issue/42-T1', success: true, conflict: false, commitSha: 'abc1234' },
-          { taskId: 'T2', branch: 'issue/42-T2', success: true, conflict: false, commitSha: 'def5678' },
+          { taskId: 'T1', branch: 'issue/42-T1-run-123', success: true, conflict: false, commitSha: 'abc1234' },
+          { taskId: 'T2', branch: 'issue/42-T2-run-123', success: true, conflict: false, commitSha: 'def5678' },
         ],
         mergedCount: 2,
         failedCount: 0,
@@ -279,8 +279,8 @@ describe('waveResultMerge', () => {
     it('formats merge conflict correctly', () => {
       const mergeResult: WaveMergeResult = {
         merges: [
-          { taskId: 'T1', branch: 'issue/42-T1', success: false, conflict: true, error: 'CONFLICT in file.ts' },
-          { taskId: 'T2', branch: 'issue/42-T2', success: false, conflict: false, error: 'Skipped due to earlier merge conflict' },
+          { taskId: 'T1', branch: 'issue/42-T1-run-123', success: false, conflict: true, error: 'CONFLICT in file.ts' },
+          { taskId: 'T2', branch: 'issue/42-T2-run-123', success: false, conflict: false, error: 'Skipped due to earlier merge conflict' },
         ],
         mergedCount: 0,
         failedCount: 2,
@@ -305,7 +305,7 @@ describe('waveResultMerge', () => {
       await fs.writeFile(progressPath, 'Previous content\n');
 
       const mergeResult: WaveMergeResult = {
-        merges: [{ taskId: 'T1', branch: 'issue/42-T1', success: true, conflict: false, commitSha: 'abc' }],
+        merges: [{ taskId: 'T1', branch: 'issue/42-T1-run-123', success: true, conflict: false, commitSha: 'abc' }],
         mergedCount: 1,
         failedCount: 0,
         allMerged: true,
@@ -343,7 +343,7 @@ describe('waveResultMerge', () => {
       await fs.writeFile(wavePath, JSON.stringify({ waveId: 'wave-123', phase: 'task_spec_check' }));
 
       const mergeResult: WaveMergeResult = {
-        merges: [{ taskId: 'T1', branch: 'issue/42-T1', success: true, conflict: false, commitSha: 'abc' }],
+        merges: [{ taskId: 'T1', branch: 'issue/42-T1-run-123', success: true, conflict: false, commitSha: 'abc' }],
         mergedCount: 1,
         failedCount: 0,
         allMerged: true,

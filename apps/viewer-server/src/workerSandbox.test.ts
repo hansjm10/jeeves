@@ -101,7 +101,8 @@ describe('workerSandbox', () => {
         canonicalBranch: 'issue/42',
       });
 
-      expect(paths.branch).toBe('issue/42-T1');
+      // Branch includes short runId (first 8 chars) for uniqueness across runs
+      expect(paths.branch).toBe('issue/42-T1-run-123');
     });
 
     it('includes all required fields in returned sandbox', () => {
@@ -336,7 +337,7 @@ describe('workerSandbox', () => {
       expect(args).toContain('worktree');
       expect(args).toContain('add');
       expect(args).toContain('-B');
-      expect(args).toContain('issue/42-T1'); // worker branch
+      expect(args).toContain('issue/42-T1-run-123'); // worker branch (includes short runId)
       expect(args).toContain('issue/42'); // canonical branch
     });
 
@@ -518,7 +519,7 @@ describe('workerSandbox', () => {
       expect(args).toContain(repoDir);
       expect(args).toContain('branch');
       expect(args).toContain('-D');
-      expect(args).toContain('issue/42-T1');
+      expect(args).toContain('issue/42-T1-run-123');
     });
 
     it('does not delete worker state directory', async () => {
@@ -712,7 +713,7 @@ describe('workerSandbox', () => {
       expect(args).toContain(sandbox.branch);
 
       expect(result.taskId).toBe('T1');
-      expect(result.branch).toBe('issue/42-T1');
+      expect(result.branch).toBe('issue/42-T1-run-123');
     });
 
     it('reuses existing worktree when both worktree and branch exist', async () => {
@@ -759,7 +760,7 @@ describe('workerSandbox', () => {
       expect(worktreeAddCall).toBeUndefined();
 
       expect(result.taskId).toBe('T1');
-      expect(result.branch).toBe('issue/42-T1');
+      expect(result.branch).toBe('issue/42-T1-run-123');
     });
 
     it('creates .jeeves symlink pointing to state directory', async () => {

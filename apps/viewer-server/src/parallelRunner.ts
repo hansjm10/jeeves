@@ -1229,6 +1229,10 @@ export class ParallelRunner {
 
     // If merge conflict, write synthetic feedback and return with mergeConflict flag
     if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
+      // Look up actual worker branch from sandboxes array (includes shortRunId suffix)
+      const conflictSandbox = sandboxes.find((s) => s.taskId === mergeResult.conflictTaskId);
+      const conflictBranch = conflictSandbox?.branch ?? `issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}`;
+
       // Write synthetic feedback for merge conflict (§6.2.5)
       await writeCanonicalFeedback(
         this.options.canonicalStateDir,
@@ -1238,8 +1242,8 @@ export class ParallelRunner {
         `into the canonical issue branch.\n\n` +
         `## Conflict Details\n` +
         `- Wave ID: ${waveId}\n` +
-        `- Run ID: ${this.options.runId}\n` +
-        `- Branch: issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}\n\n` +
+        `- Run ID: ${this.effectiveRunId}\n` +
+        `- Branch: ${conflictBranch}\n\n` +
         `## Resolution Steps\n` +
         `1. Check the worker worktree for the conflicting changes\n` +
         `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +
@@ -1645,6 +1649,10 @@ export class ParallelRunner {
 
       // If merge conflict, write synthetic feedback and return with mergeConflict flag
       if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
+        // Look up actual worker branch from sandboxes array (includes shortRunId suffix)
+        const conflictSandbox = sandboxes.find((s) => s.taskId === mergeResult.conflictTaskId);
+        const conflictBranch = conflictSandbox?.branch ?? `issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}`;
+
         // Write synthetic feedback for merge conflict (§6.2.5)
         await writeCanonicalFeedback(
           this.options.canonicalStateDir,
@@ -1654,8 +1662,8 @@ export class ParallelRunner {
           `into the canonical issue branch.\n\n` +
           `## Conflict Details\n` +
           `- Wave ID: ${waveId}\n` +
-          `- Run ID: ${this.options.runId}\n` +
-          `- Branch: issue/${this.options.issueNumber}-${mergeResult.conflictTaskId}\n\n` +
+          `- Run ID: ${this.effectiveRunId}\n` +
+          `- Branch: ${conflictBranch}\n\n` +
           `## Resolution Steps\n` +
           `1. Check the worker worktree for the conflicting changes\n` +
           `2. Manually resolve the conflict or adjust task file patterns to reduce overlap\n` +

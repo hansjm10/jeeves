@@ -271,7 +271,7 @@ export interface WorkerSandbox {
   stateDir: string;
   /** Worker git worktree directory */
   worktreeDir: string;
-  /** Worker branch name (issue/<N>-<taskId>) */
+  /** Worker branch name (issue/<N>-<taskId>-<shortRunId>) */
   branch: string;
   /** Path to shared repo clone directory */
   repoDir: string;
@@ -373,7 +373,7 @@ export function getWorkerSandboxPaths(params: {
  *    - tasks.json (copy of canonical)
  *    - Optional: task-feedback.md for retries
  * 2. Create worker git worktree:
- *    - Branch: issue/<N>-<taskId>
+ *    - Branch: issue/<N>-<taskId>-<shortRunId>
  *    - Based on canonical issue branch HEAD
  * 3. Create .jeeves symlink in worktree pointing to worker state dir
  */

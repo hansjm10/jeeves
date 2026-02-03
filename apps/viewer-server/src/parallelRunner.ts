@@ -32,6 +32,12 @@ import {
 } from './workerSandbox.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import {
+  mergePassedBranches,
+  appendMergeProgress,
+  updateWaveSummaryWithMerge,
+  type WaveMergeResult,
+} from './waveResultMerge.js';
 
 /** Maximum allowed parallel tasks (hard cap per §6.2.1) */
 export const MAX_PARALLEL_TASKS = 8;
@@ -140,6 +146,10 @@ export interface ParallelWaveStepResult {
   continueExecution: boolean;
   /** Error message if setup/orchestration failed */
   error?: string;
+  /** Merge result after spec-check wave (if merging was performed) */
+  mergeResult?: WaveMergeResult;
+  /** True if a merge conflict occurred (run should stop as errored) */
+  mergeConflict?: boolean;
 }
 
 /**
@@ -612,6 +622,7 @@ export class ParallelRunner {
     state: ParallelState,
   ): Promise<ParallelWaveStepResult> {
     const outcomes: WorkerOutcome[] = [];
+    const sandboxes: WorkerSandbox[] = [];
     const now = nowIso();
 
     for (const taskId of taskIds) {
@@ -626,6 +637,7 @@ export class ParallelRunner {
         dataDir: this.options.dataDir,
         canonicalBranch: this.options.canonicalBranch,
       });
+      sandboxes.push(sandbox);
 
       const workerIssue = await readIssueJson(sandbox.stateDir);
       const workerStatus = workerIssue?.status as Record<string, unknown> | undefined;
@@ -658,12 +670,46 @@ export class ParallelRunner {
       anyFailed,
     };
 
-    // Update canonical statuses
+    // Update canonical statuses initially based on spec-check outcomes
     await updateCanonicalTaskStatuses(this.options.canonicalStateDir, outcomes);
+
+    // Merge passed branches into canonical branch (§6.2.5)
+    const mergeResult = await this.mergePassedBranchesAfterSpecCheck(waveId, sandboxes, outcomes);
+
+    // Update canonical status flags (reflecting both spec-check and merge outcomes)
     await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
     await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, waveResult);
 
-    return { waveResult, continueExecution: true };
+    // If merge conflict, return with mergeConflict flag
+    if (mergeResult.hasConflict) {
+      return {
+        waveResult,
+        continueExecution: false,
+        mergeResult,
+        mergeConflict: true,
+        error: `Merge conflict on task ${mergeResult.conflictTaskId}`,
+      };
+    }
+
+    // Cleanup successfully merged workers
+    for (const outcome of outcomes) {
+      if (outcome.taskPassed) {
+        const merge = mergeResult.merges.find((m) => m.taskId === outcome.taskId);
+        // Only cleanup if task passed spec-check AND merged successfully
+        if (merge?.success) {
+          const sandbox = sandboxes.find((s) => s.taskId === outcome.taskId);
+          if (sandbox) {
+            await cleanupWorkerSandboxOnSuccess(sandbox).catch((e) => {
+              void this.options.appendLog(
+                `[WORKER ${outcome.taskId}] Cleanup warning: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            });
+          }
+        }
+      }
+    }
+
+    return { waveResult, continueExecution: true, mergeResult };
   }
 
   /**
@@ -780,28 +826,60 @@ export class ParallelRunner {
     // Write wave summary
     await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, waveResult);
 
-    // If this is spec_check phase, update canonical statuses
+    // If this is spec_check phase, update canonical statuses and merge passed branches
     if (phase === 'task_spec_check') {
       await updateCanonicalTaskStatuses(this.options.canonicalStateDir, outcomes);
+
+      // Merge passed branches into canonical branch (§6.2.5)
+      const mergeResult = await this.mergePassedBranchesAfterSpecCheck(waveId, sandboxes, outcomes);
+
+      // Update canonical status flags (reflecting both spec-check and merge outcomes)
       await updateCanonicalStatusFlags(this.options.canonicalStateDir, waveResult);
 
-      // Cleanup successful workers
+      // If merge conflict, return with mergeConflict flag
+      if (mergeResult.hasConflict) {
+        await this.options.appendLog(
+          `[PARALLEL] Wave ${phase} completed with merge conflict on task ${mergeResult.conflictTaskId}`,
+        );
+        return {
+          waveResult,
+          continueExecution: false,
+          mergeResult,
+          mergeConflict: true,
+          error: `Merge conflict on task ${mergeResult.conflictTaskId}`,
+        };
+      }
+
+      // Cleanup successfully merged workers
       for (const outcome of outcomes) {
         if (outcome.taskPassed) {
-          const sandbox = sandboxes.find((s) => s.taskId === outcome.taskId);
-          if (sandbox) {
-            await cleanupWorkerSandboxOnSuccess(sandbox).catch((e) => {
-              this.options.appendLog(
-                `[WORKER ${outcome.taskId}] Cleanup warning: ${e instanceof Error ? e.message : String(e)}`,
-              );
-            });
+          const merge = mergeResult.merges.find((m) => m.taskId === outcome.taskId);
+          // Only cleanup if task passed spec-check AND merged successfully
+          if (merge?.success) {
+            const sandbox = sandboxes.find((s) => s.taskId === outcome.taskId);
+            if (sandbox) {
+              await cleanupWorkerSandboxOnSuccess(sandbox).catch((e) => {
+                void this.options.appendLog(
+                  `[WORKER ${outcome.taskId}] Cleanup warning: ${e instanceof Error ? e.message : String(e)}`,
+                );
+              });
+            }
           }
         }
       }
+
+      const passedCount = outcomes.filter((o) => o.status === 'passed').length;
+      await this.options.appendLog(
+        `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${mergeResult.mergedCount} merged`,
+      );
+
+      return { waveResult, continueExecution: !this.stopRequested, mergeResult };
     }
 
+    // For implement_task phase, count by exit code since taskPassed isn't set yet
+    const passedCount = outcomes.filter((o) => o.status === 'passed' || o.exitCode === 0).length;
     await this.options.appendLog(
-      `[PARALLEL] Wave ${phase} completed: ${outcomes.filter((o) => o.status === 'passed' || (phase === 'implement_task' && o.exitCode === 0)).length}/${outcomes.length} passed`,
+      `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed`,
     );
 
     return { waveResult, continueExecution: !this.stopRequested };
@@ -936,6 +1014,68 @@ export class ParallelRunner {
       allPassed: false,
       anyFailed: true,
     };
+  }
+
+  /**
+   * Merges passed branches after spec-check wave.
+   *
+   * Per §6.2.5:
+   * - Merge order: taskId lexicographic ascending
+   * - Merge strategy: git merge --no-ff
+   * - If merge conflict: abort cleanly, mark task as failed, log progress entry
+   */
+  private async mergePassedBranchesAfterSpecCheck(
+    waveId: string,
+    sandboxes: WorkerSandbox[],
+    outcomes: WorkerOutcome[],
+  ): Promise<WaveMergeResult> {
+    const mergeResult = await mergePassedBranches({
+      canonicalWorkDir: this.options.canonicalWorkDir,
+      canonicalBranch: this.options.canonicalBranch,
+      sandboxes,
+      outcomes,
+      appendLog: this.options.appendLog,
+    });
+
+    // Append merge progress entry to canonical progress.txt
+    await appendMergeProgress(this.options.canonicalStateDir, waveId, mergeResult);
+
+    // Update wave summary with merge results
+    await updateWaveSummaryWithMerge(
+      this.options.canonicalStateDir,
+      this.options.runId,
+      waveId,
+      mergeResult,
+    );
+
+    // If a merge conflict occurred, update the conflicted task status to 'failed'
+    if (mergeResult.hasConflict && mergeResult.conflictTaskId) {
+      await this.markTaskAsFailedDueToMergeConflict(mergeResult.conflictTaskId);
+    }
+
+    // Also mark any other tasks that failed to merge as 'failed'
+    for (const merge of mergeResult.merges) {
+      if (!merge.success && !merge.conflict) {
+        await this.markTaskAsFailedDueToMergeConflict(merge.taskId);
+      }
+    }
+
+    return mergeResult;
+  }
+
+  /**
+   * Marks a task as failed due to merge conflict.
+   */
+  private async markTaskAsFailedDueToMergeConflict(taskId: string): Promise<void> {
+    const tasksJson = await readTasksJson(this.options.canonicalStateDir);
+    if (!tasksJson) return;
+
+    const task = tasksJson.tasks.find((t) => t.id === taskId);
+    if (task && task.status === 'passed') {
+      task.status = 'failed';
+      await writeTasksJson(this.options.canonicalStateDir, tasksJson);
+      await this.options.appendLog(`[MERGE] Marked task ${taskId} as failed due to merge conflict`);
+    }
   }
 }
 

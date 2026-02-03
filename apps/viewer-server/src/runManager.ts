@@ -549,17 +549,25 @@ export class RunManager {
           if (parallelResult.timedOut) {
             this.stopReason = `wave_timeout (parallel ${currentPhase})`;
 
-            // Per §6.2.8: After timeout, evaluate workflow transitions so next run can proceed
-            // The canonical status flags have already been updated by ParallelRunner
-            const timeoutIssue = await readIssueJson(this.stateDir!);
-            if (timeoutIssue) {
-              const nextPhase = engine.evaluateTransitions(currentPhase, timeoutIssue);
-              if (nextPhase && nextPhase !== currentPhase) {
-                timeoutIssue.phase = nextPhase;
-                await writeIssueJson(this.stateDir!, timeoutIssue);
-                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
-                this.broadcast('state', await this.getStateSnapshot());
+            // Per §6.2.8 "Timeout stop":
+            // - implement_task timeout: Keep phase at implement_task so next run can retry
+            //   (transitioning to task_spec_check would create stuck state with no active wave)
+            // - task_spec_check timeout: Evaluate transitions to go back to implement_task
+            //   (taskFailed=true triggers the transition per workflows/default.yaml)
+            if (currentPhase === 'task_spec_check') {
+              const timeoutIssue = await readIssueJson(this.stateDir!);
+              if (timeoutIssue) {
+                const nextPhase = engine.evaluateTransitions(currentPhase, timeoutIssue);
+                if (nextPhase && nextPhase !== currentPhase) {
+                  timeoutIssue.phase = nextPhase;
+                  await writeIssueJson(this.stateDir!, timeoutIssue);
+                  await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
+                  this.broadcast('state', await this.getStateSnapshot());
+                }
               }
+            } else {
+              // implement_task timeout: Stay at implement_task for retry
+              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Keeping phase at ${currentPhase} for retry`);
             }
 
             completedNaturally = false;

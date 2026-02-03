@@ -123,7 +123,9 @@ When a wave times out (`iteration_timeout_sec` or `inactivity_timeout_sec`):
 - Synthetic feedback files are written to `.jeeves/task-feedback/<taskId>.md` explaining the timeout (includes wave ID, run ID, timeout type, and artifacts location)
 - Canonical status flags are updated (`taskFailed: true`, `hasMoreTasks: true`)
 - The `status.parallel` state is cleared
-- The workflow phase is evaluated and transitioned (typically back to `implement_task` for retries)
+- Phase handling depends on which phase timed out:
+  - **`implement_task` timeout**: Phase remains at `implement_task` so the next run can immediately retry the failed tasks
+  - **`task_spec_check` timeout**: Workflow transitions back to `implement_task` for retries (via `taskFailed: true` guard)
 - The run ends as **failed** (eligible for retry on next run)
 
 ### Manual Stop

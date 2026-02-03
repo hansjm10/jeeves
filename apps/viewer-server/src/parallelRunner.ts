@@ -870,13 +870,34 @@ export class ParallelRunner {
 
     // Check for active wave to resume
     const existingState = await this.checkForActiveWave();
-    if (existingState && existingState.activeWavePhase === 'implement_task') {
-      const result = await this.resumeImplementWave(existingState);
-      // Store implement wave result for combined progress entry
-      if (result) {
-        this.lastImplementWaveResult = result.waveResult;
+    if (existingState) {
+      if (existingState.activeWavePhase === 'implement_task') {
+        const result = await this.resumeImplementWave(existingState);
+        // Store implement wave result for combined progress entry
+        if (result) {
+          this.lastImplementWaveResult = result.waveResult;
+        }
+        return result;
+      } else {
+        // Phase mismatch: canonical phase is implement_task but parallel state says task_spec_check
+        // Per §6.2.8 resume corruption handling: treat as state corruption, fix and warn
+        await this.handleActiveWavePhaseMismatch(
+          existingState,
+          'implement_task',
+          existingState.activeWavePhase,
+        );
+        // After fixing, resume as implement_task
+        const fixedState: ParallelState = {
+          ...existingState,
+          activeWavePhase: 'implement_task',
+        };
+        await writeParallelState(this.options.canonicalStateDir, fixedState);
+        const result = await this.resumeImplementWave(fixedState);
+        if (result) {
+          this.lastImplementWaveResult = result.waveResult;
+        }
+        return result;
       }
-      return result;
     }
 
     // Select ready tasks
@@ -1277,11 +1298,35 @@ export class ParallelRunner {
         allPassed: false,
         anyFailed: true,
       };
-      await writeWaveSummary(this.options.canonicalStateDir, this.options.runId, {
+      // Build setup failure details for wave summary (§6.2.8 AC3)
+      const setupFailureDetails = {
         ...failedWave,
         error: errMsg,
         state: 'setup_failed',
-      } as WaveResult & { error: string; state: string });
+        partialSetup: {
+          createdSandboxes: sandboxes.map((s) => ({
+            taskId: s.taskId,
+            stateDir: s.stateDir,
+            worktreeDir: s.worktreeDir,
+            branch: s.branch,
+          })),
+          startedWorkers: [] as string[], // No workers started yet (sandbox creation phase)
+        },
+      };
+      await writeWaveSummary(
+        this.options.canonicalStateDir,
+        this.options.runId,
+        setupFailureDetails as WaveResult & { error: string; state: string },
+      );
+
+      // Append progress entry for setup failure (§6.2.8 step 5, AC2)
+      await this.appendSetupFailureProgressEntry(
+        waveId,
+        phase,
+        taskIds,
+        sandboxes,
+        errMsg,
+      );
 
       return {
         waveResult: failedWave,
@@ -1733,6 +1778,77 @@ export class ParallelRunner {
       `- Run ended as failed (eligible for retry)\n\n` +
       `---\n`;
     await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+  }
+
+  /**
+   * Appends a progress entry for wave setup failure (§6.2.8 step 5).
+   *
+   * Per design §6.2.8 "Wave setup failure", step 5:
+   * - Append a progress entry describing the setup failure, rollback, and artifact location
+   */
+  private async appendSetupFailureProgressEntry(
+    waveId: string,
+    phase: WorkerPhase,
+    taskIds: string[],
+    createdSandboxes: WorkerSandbox[],
+    errorMessage: string,
+  ): Promise<void> {
+    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
+    const progressEntry = `\n## [${nowIso()}] - Parallel Wave Setup Failure\n\n` +
+      `### Wave\n` +
+      `- Wave ID: ${waveId}\n` +
+      `- Phase: ${phase}\n` +
+      `- Selected Tasks: ${taskIds.join(', ')}\n\n` +
+      `### Error\n` +
+      `\`\`\`\n${errorMessage}\n\`\`\`\n\n` +
+      `### Partial Setup State\n` +
+      `- Sandboxes created: ${createdSandboxes.length}/${taskIds.length}\n` +
+      (createdSandboxes.length > 0
+        ? `- Created sandbox tasks: ${createdSandboxes.map((s) => s.taskId).join(', ')}\n`
+        : '') +
+      `- Worker processes started: 0 (failure occurred during sandbox creation)\n\n` +
+      `### Rollback Action\n` +
+      `- Task statuses restored to pre-reservation values via reservedStatusByTaskId\n` +
+      `- Parallel state cleared from issue.json\n` +
+      `- No taskFailed/taskPassed flags updated (setup failure ≠ task failure)\n\n` +
+      `### Artifacts\n` +
+      `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/waves/${waveId}.json\n\n` +
+      `---\n`;
+    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+  }
+
+  /**
+   * Handles activeWavePhase mismatch by appending a warning to progress.txt.
+   *
+   * Per §6.2.8 resume corruption handling:
+   * - If canonical phase doesn't match status.parallel.activeWavePhase, treat as state corruption
+   * - Fix activeWavePhase to match the canonical phase
+   * - Append a warning to progress.txt
+   */
+  private async handleActiveWavePhaseMismatch(
+    state: ParallelState,
+    canonicalPhase: WorkerPhase,
+    parallelStatePhase: WorkerPhase,
+  ): Promise<void> {
+    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
+    const warningEntry = `\n## [${nowIso()}] - Parallel State Corruption Warning\n\n` +
+      `### Mismatch Detected\n` +
+      `- Canonical issue.json.phase: ${canonicalPhase}\n` +
+      `- status.parallel.activeWavePhase: ${parallelStatePhase}\n` +
+      `- Wave ID: ${state.activeWaveId}\n` +
+      `- Active tasks: ${state.activeWaveTaskIds.join(', ')}\n\n` +
+      `### Recovery Action\n` +
+      `Per §6.2.8 resume corruption handling, treating as state corruption:\n` +
+      `- activeWavePhase corrected from "${parallelStatePhase}" to "${canonicalPhase}"\n` +
+      `- Resuming wave execution with corrected phase\n\n` +
+      `### Context\n` +
+      `This mismatch can occur if the orchestrator crashed between updating issue.json.phase ` +
+      `and status.parallel.activeWavePhase, or if external tooling modified the state files.\n\n` +
+      `---\n`;
+    await fs.appendFile(progressPath, warningEntry, 'utf-8').catch(() => void 0);
+    await this.options.appendLog(
+      `[PARALLEL] Warning: activeWavePhase mismatch (${parallelStatePhase} vs ${canonicalPhase}), correcting`,
+    );
   }
 
   /**

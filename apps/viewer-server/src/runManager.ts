@@ -11,6 +11,7 @@ function isValidModel(model: unknown): model is ModelId {
 }
 
 import type { RunStatus } from './types.js';
+import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
@@ -29,6 +30,10 @@ function makeRunId(pid: number = process.pid): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function hasCompletionPromise(content: string): boolean {
@@ -183,6 +188,7 @@ export class RunManager {
     if (!(await pathExists(this.workDir))) {
       throw new Error(`Worktree not found at ${this.workDir}. Run init first.`);
     }
+    await ensureJeevesExcludedFromGitStatus(this.workDir).catch(() => void 0);
 
     const provider = mapProvider(params.provider);
     const maxIterations = Number.isFinite(Number(params.max_iterations)) ? Math.max(1, Number(params.max_iterations)) : 10;
@@ -490,6 +496,13 @@ export class RunManager {
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {
             updatedIssue.phase = nextPhase;
+
+            const control = updatedIssue.control;
+            if (isPlainRecord(control) && control.restartPhase === true) {
+              delete control.restartPhase;
+              if (Object.keys(control).length === 0) delete updatedIssue.control;
+            }
+
             await writeIssueJson(this.stateDir!, updatedIssue);
             if (nextPhase === 'implement_task') {
               await expandTasksFilesAllowedForTests(this.stateDir!);

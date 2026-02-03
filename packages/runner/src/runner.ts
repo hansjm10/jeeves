@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
 
+import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import type { AgentProvider } from './provider.js';
 import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted } from './progress.js';
 import { SdkOutputWriterV1 } from './outputWriter.js';
@@ -18,6 +19,7 @@ export type RunPhaseParams = Readonly<{
 }>;
 
 export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: boolean }> {
+  await ensureJeevesExcludedFromGitStatus(params.cwd).catch(() => void 0);
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
   await ensureProgressFile(params.progressPath);

@@ -91,8 +91,12 @@ phases:
     prompt: task.implement.md
     description: Implement current task
     transitions:
+      - to: implement_task
+        when: control.restartPhase == true
+        priority: 0
       - to: task_spec_check
         auto: true
+        priority: 1
     model: opus
     thinking_budget: max
   prepare_pr:

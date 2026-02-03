@@ -794,6 +794,15 @@ export class RunManager {
         }
 
         // Advance phase via workflow transitions (viewer-server owns orchestration)
+        // Skip transitions if stopRequested is set, to avoid advancing to task_spec_check
+        // after a mid-implement manual stop (which clears status.parallel via rollbackActiveWaveOnStop).
+        // Per §6.2.8: On manual stop mid-wave, the phase should remain at implement_task so the
+        // next run can re-select tasks rather than entering task_spec_check with no active wave.
+        if (this.stopRequested) {
+          await this.appendViewerLog(viewerLogPath, `[STOP] Stop requested; skipping phase transition`);
+          continue;
+        }
+
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
           await this.commitDesignDocCheckpoint({ phase: currentPhase, issueJson: updatedIssue });

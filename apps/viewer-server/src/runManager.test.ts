@@ -3141,3 +3141,202 @@ describe('T17: Stop run on parallel wave setup failures', () => {
     expect(viewerLog.toLowerCase()).toContain('setup failure');
   }, 30000);
 });
+
+/**
+ * T18: Manual stop mid-implement wave should NOT transition to task_spec_check
+ *
+ * Per code review: When stop() is called during an implement_task wave, rollbackActiveWaveOnStop()
+ * clears status.parallel. If we then transition to task_spec_check, the next run will fail with
+ * "No active wave state found for spec check", creating a stuck loop.
+ *
+ * Fix: Skip phase transitions when stopRequested is set.
+ */
+describe('T18: Manual stop mid-implement skips phase transition to task_spec_check', () => {
+  it('after stop during implement_task wave, phase stays at implement_task (not task_spec_check)', async () => {
+    const dataDir = await makeTempDir('jeeves-stop-midimpl-');
+    const repoRoot = await makeTempDir('jeeves-smi-reporoot-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'stop-midimpl-owner';
+    const repo = 'stop-midimpl-repo';
+    const issueNumber = 9300;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    // Create a proper git repo setup
+    const origin = await makeTempDir('jeeves-smi-origin-');
+    await runGit(origin, ['init', '--bare']);
+
+    const initWork = await makeTempDir('jeeves-smi-init-');
+    await runGit(initWork, ['init']);
+    await fs.writeFile(path.join(initWork, 'README.md'), 'test\n', 'utf-8');
+    await runGit(initWork, ['add', '.']);
+    await runGit(initWork, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'init']);
+    await runGit(initWork, ['branch', '-M', 'main']);
+    await runGit(initWork, ['remote', 'add', 'origin', origin]);
+    await runGit(initWork, ['push', '-u', 'origin', 'main']);
+
+    const repoDir = path.join(dataDir, 'repos', owner, repo);
+    await fs.mkdir(path.dirname(repoDir), { recursive: true });
+    await runGit(path.dirname(repoDir), ['clone', origin, repo]);
+
+    const branchName = `issue/${issueNumber}`;
+    await runGit(repoDir, ['checkout', '-b', branchName]);
+    await fs.writeFile(path.join(repoDir, '.gitignore'), '.jeeves\n', 'utf-8');
+    await runGit(repoDir, ['add', '.gitignore']);
+    await runGit(repoDir, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'add gitignore']);
+    await runGit(repoDir, ['checkout', 'main']);
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(path.dirname(workDir), { recursive: true });
+    await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
+
+    // Set up issue.json with parallel mode enabled and in implement_task phase
+    // Pre-set taskPassed=true (simulating a successful task iteration)
+    // This would normally trigger transition to task_spec_check
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: branchName,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {
+            currentTaskId: 'T1',
+            taskDecompositionComplete: true,
+            taskPassed: true, // Simulates successful implement - would trigger task_spec_check transition
+            taskFailed: false,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Set up tasks.json with in_progress task (simulating mid-wave)
+    const runId = 'run-stop-midimpl-test';
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          decomposedFrom: 'docs/design.md',
+          tasks: [
+            { id: 'T1', title: 'Task 1', summary: 's', acceptanceCriteria: ['c'], filesAllowed: ['src/a.ts'], dependsOn: [], status: 'in_progress' },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    // Create parallel state (simulating active wave)
+    const parallelState = {
+      runId,
+      activeWaveId: `${runId}-implement_task-1`,
+      activeWavePhase: 'implement_task',
+      activeWaveTaskIds: ['T1'],
+      reservedStatusByTaskId: { T1: 'pending' as const },
+      reservedAt: new Date().toISOString(),
+    };
+
+    // Add parallel state to issue.json status
+    const issueJson = JSON.parse(await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8'));
+    issueJson.status.parallel = parallelState;
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify(issueJson, null, 2) + '\n', 'utf-8');
+
+    // Create worker sandbox structure (but WITHOUT implement_task.done marker - simulating mid-implement)
+    const workerStateT1 = path.join(stateDir, '.runs', runId, 'workers', 'T1');
+    await fs.mkdir(workerStateT1, { recursive: true });
+    await fs.mkdir(path.join(stateDir, '.runs', runId, 'waves'), { recursive: true });
+
+    const worktreeBaseDir = path.join(dataDir, 'worktrees', owner, repo, `issue-${issueNumber}-workers`, runId);
+    await fs.mkdir(worktreeBaseDir, { recursive: true });
+    await runGit(repoDir, ['worktree', 'add', '-B', `issue/${issueNumber}-T1`, path.join(worktreeBaseDir, 'T1'), branchName]);
+    await fs.symlink(workerStateT1, path.join(worktreeBaseDir, 'T1', '.jeeves'));
+
+    // Write minimal worker issue.json
+    await fs.writeFile(
+      path.join(workerStateT1, 'issue.json'),
+      JSON.stringify({ phase: 'implement_task', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(workerStateT1, 'tasks.json'),
+      JSON.stringify({ schemaVersion: 1, tasks: [{ id: 'T1', status: 'in_progress' }] }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
+
+    // Create a spawn that creates a slow child process (giving time to call stop())
+    const spawn = (() => {
+      const proc = makeFakeChild(0, 500); // 500ms delay
+      return proc;
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    // Start the run
+    await rm.start({
+      provider: 'fake',
+      max_iterations: 3,
+      inactivity_timeout_sec: 30,
+      iteration_timeout_sec: 30,
+    });
+
+    // Give it a moment to start the parallel wave
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Now call stop() mid-implement
+    await rm.stop({ reason: 'manual stop test' });
+
+    // Wait for run to complete
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    // KEY ASSERTION: Phase should still be implement_task, NOT task_spec_check
+    const issueAfter = await readIssueJson(stateDir);
+    expect(issueAfter?.phase).toBe('implement_task');
+
+    // status.parallel should be cleared (per rollbackActiveWaveOnStop)
+    const statusAfter = issueAfter?.status as Record<string, unknown>;
+    expect(statusAfter?.parallel).toBeUndefined();
+
+    // Tasks should be rolled back to pending (not stuck in in_progress)
+    const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+    const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+    const t1 = tasksJson.tasks.find((t) => t.id === 'T1');
+    expect(t1?.status).toBe('pending');
+
+    // Viewer log should show stop happened and transition was skipped
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[STOP]');
+    expect(viewerLog).toContain('skipping phase transition');
+  }, 30000);
+});

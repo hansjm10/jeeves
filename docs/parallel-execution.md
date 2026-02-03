@@ -132,10 +132,18 @@ When a wave times out (`iteration_timeout_sec` or `inactivity_timeout_sec`):
 ### Manual Stop
 
 When an operator stops a run during an active wave:
+
+**Mid-implement wave** (not all `implement_task.done` markers present):
 - All workers are terminated
 - Wave task statuses are rolled back to their pre-reservation values
 - Parallel state is cleared
 - A progress entry documents the abort
+
+**Between implement/spec-check phases** (all `implement_task.done` markers present):
+- Any running workers are terminated
+- Parallel state is **preserved** so the next run can resume spec-check without re-selecting tasks
+- Task statuses remain `in_progress` (valid per the invariant since parallel state exists)
+- A progress entry documents that the wave is between phases and will resume on next run
 
 ## Recovery and Resume
 

@@ -326,10 +326,18 @@ If an `implement_task` wave fails during setup after tasks were reserved (`.jeev
 
 **Manual stop**:
 If the operator stops a run while a wave is active:
+
+*Mid-implement wave stop* (not all `implement_task.done` markers present):
 1. Terminate all worker processes.
 2. Revert canonical `.jeeves/tasks.json` for the active wave tasks using `status.parallel.reservedStatusByTaskId` (i.e., restore each task to its pre-reservation status of `"pending"` or `"failed"`).
 3. Clear `issue.json.status.parallel`.
 4. Append a progress entry indicating the wave was aborted and where worker artifacts are located (do not delete artifacts).
+
+*Between-phases stop* (all `implement_task.done` markers present, but spec-check not started):
+1. Terminate all worker processes (if any running).
+2. Preserve `issue.json.status.parallel` to allow the next run to resume spec-check without re-selecting tasks.
+3. Keep canonical `.jeeves/tasks.json` statuses as `in_progress` (they remain valid per the invariant since `status.parallel` is preserved).
+4. Append a progress entry indicating the wave is between phases and parallel state was preserved for resume.
 
 **Timeout stop (iteration/inactivity)**:
 If the run stops due to `iteration_timeout_sec` or `inactivity_timeout_sec` during an active wave:

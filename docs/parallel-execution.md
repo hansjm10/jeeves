@@ -112,7 +112,8 @@ When merging a passed task's branch into the canonical branch:
    - The conflicting task is marked as `failed`
    - A synthetic feedback file is written to `.jeeves/task-feedback/<taskId>.md` describing the conflict, resolution steps, and artifact locations
    - A progress log entry describes the conflict
-   - The run is marked as **errored** and stops
+   - Canonical status flags are updated (`taskFailed: true`) and the workflow transitions from `task_spec_check` to `implement_task`, leaving the state **resumable**
+   - The run stops as **errored** but the next run can retry the failed task
    - Worker worktrees/branches are retained for debugging
 
 ### Timeout Handling
@@ -233,14 +234,18 @@ Passed tasks are merged even if other tasks in the same wave fail (partial succe
       "taskId": "T1",
       "phase": "implement_task",
       "pid": 12345,
-      "startedAt": "2026-02-03T12:00:00Z",
+      "started_at": "2026-02-03T12:00:00Z",
+      "ended_at": null,
+      "returncode": null,
       "status": "running"
     },
     {
       "taskId": "T2",
       "phase": "implement_task",
       "pid": 12346,
-      "startedAt": "2026-02-03T12:00:01Z",
+      "started_at": "2026-02-03T12:00:01Z",
+      "ended_at": null,
+      "returncode": null,
       "status": "running"
     }
   ],
@@ -273,10 +278,12 @@ Worker logs are prefixed with `[WORKER <taskId>]` to make interleaved output rea
 **Symptom**: Run stops with "Merge conflict on task T2" error.
 
 **Resolution**:
-1. Check `progress.txt` for conflict details
+1. Check `progress.txt` for conflict details and the synthetic feedback at `.jeeves/task-feedback/<taskId>.md`
 2. Inspect the retained worker worktree at `<WORKTREES>/.../T2/`
-3. Resolve conflict manually or adjust task file patterns to reduce overlap
-4. Reset the failed task to `"pending"` and restart
+3. Resolve the conflict by one of:
+   - Resolving manually in the worktree and re-running (the failed task will be retried automatically since the phase transitioned to `implement_task`)
+   - Adjusting task file patterns (`filesAllowed`) to reduce overlap between concurrent tasks
+4. Restart the run—the failed task will be retried in the next wave
 
 ### Stuck in_progress Tasks
 

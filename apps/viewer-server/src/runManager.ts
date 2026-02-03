@@ -468,9 +468,18 @@ export class RunManager {
             effectiveModel,
             viewerLogPath,
             iterStartedAt,
+            iterationTimeoutSec: params.iterationTimeoutSec,
+            inactivityTimeoutSec: params.inactivityTimeoutSec,
           });
           exitCode = parallelResult.exitCode;
           parallelWaveExecuted = parallelResult.waveExecuted;
+
+          // If wave timed out, stop the run with appropriate reason
+          if (parallelResult.timedOut) {
+            this.stopReason = `wave_timeout (parallel ${currentPhase})`;
+            completedNaturally = false;
+            break;
+          }
 
           // If no wave was executed (no ready tasks), treat as success and let workflow transition
           if (!parallelWaveExecuted && exitCode === 0) {
@@ -644,7 +653,9 @@ export class RunManager {
     effectiveModel?: string;
     viewerLogPath: string;
     iterStartedAt: string;
-  }): Promise<{ exitCode: number; waveExecuted: boolean }> {
+    iterationTimeoutSec: number;
+    inactivityTimeoutSec: number;
+  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean }> {
     if (!this.stateDir || !this.workDir || !this.runId || !this.issueRef) {
       return { exitCode: 1, waveExecuted: false };
     }
@@ -697,6 +708,8 @@ export class RunManager {
       spawn: this.spawnImpl,
       runnerBinPath,
       model: params.effectiveModel,
+      iterationTimeoutSec: params.iterationTimeoutSec,
+      inactivityTimeoutSec: params.inactivityTimeoutSec,
     };
 
     const parallelRunner = new ParallelRunner(parallelOptions);
@@ -719,6 +732,10 @@ export class RunManager {
           // No ready tasks to run
           return { exitCode: 0, waveExecuted: false };
         }
+        if (result.timedOut) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave timed out (${result.timeoutType})`);
+          return { exitCode: 1, waveExecuted: true, timedOut: true };
+        }
         if (result.error) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave error: ${result.error}`);
           return { exitCode: 1, waveExecuted: true };
@@ -732,6 +749,10 @@ export class RunManager {
           // No active wave to run spec check
           await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] No active wave state for spec check');
           return { exitCode: 1, waveExecuted: false };
+        }
+        if (result.timedOut) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave timed out (${result.timeoutType})`);
+          return { exitCode: 1, waveExecuted: true, timedOut: true };
         }
         if (result.error) {
           await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave error: ${result.error}`);

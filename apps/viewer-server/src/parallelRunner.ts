@@ -139,6 +139,10 @@ export interface ParallelRunnerOptions {
   runnerBinPath: string;
   /** Optional model override */
   model?: string;
+  /** Iteration timeout in seconds (per §6.2.4) */
+  iterationTimeoutSec?: number;
+  /** Inactivity timeout in seconds (per §6.2.4) */
+  inactivityTimeoutSec?: number;
 }
 
 /** Result of a parallel wave step */
@@ -152,6 +156,10 @@ export interface ParallelWaveStepResult {
   mergeResult?: WaveMergeResult;
   /** True if a merge conflict occurred (run should stop as errored) */
   mergeConflict?: boolean;
+  /** True if wave was stopped due to timeout */
+  timedOut?: boolean;
+  /** Type of timeout that occurred */
+  timeoutType?: 'iteration' | 'inactivity';
 }
 
 /**
@@ -391,6 +399,13 @@ export class ParallelRunner {
   private activeWorkers = new Map<string, WorkerProcess>();
   private stopRequested = false;
   private waveNum = 0;
+  /** Tracks if wave was stopped due to timeout */
+  private timedOut = false;
+  private timeoutType: 'iteration' | 'inactivity' | null = null;
+  /** Timestamp when wave started (for iteration timeout) */
+  private waveStartedAtMs: number | null = null;
+  /** Timestamp of last activity (for inactivity timeout) */
+  private lastActivityAtMs: number | null = null;
 
   constructor(options: ParallelRunnerOptions) {
     this.options = {
@@ -443,6 +458,81 @@ export class ParallelRunner {
         }
       }
     }
+  }
+
+  /**
+   * Records activity (log output, progress) to reset inactivity timer.
+   */
+  private recordActivity(): void {
+    this.lastActivityAtMs = Date.now();
+  }
+
+  /**
+   * Terminates all active workers due to timeout.
+   */
+  private terminateAllWorkersForTimeout(type: 'iteration' | 'inactivity'): void {
+    this.timedOut = true;
+    this.timeoutType = type;
+    for (const worker of this.activeWorkers.values()) {
+      if (worker.proc && worker.proc.exitCode === null) {
+        try {
+          // Use SIGKILL for immediate termination on timeout
+          worker.proc.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+        // Mark worker as timed_out
+        worker.status = 'timed_out';
+      }
+    }
+    // Broadcast updated status showing workers as timed_out
+    this.broadcastRunStatus();
+  }
+
+  /**
+   * Checks if iteration or inactivity timeout has occurred.
+   * Returns true if wave should stop due to timeout.
+   */
+  private checkTimeouts(): { timedOut: boolean; type: 'iteration' | 'inactivity' | null } {
+    if (this.timedOut) {
+      return { timedOut: true, type: this.timeoutType };
+    }
+
+    const now = Date.now();
+    const iterationTimeoutSec = this.options.iterationTimeoutSec;
+    const inactivityTimeoutSec = this.options.inactivityTimeoutSec;
+
+    // Check iteration timeout
+    if (iterationTimeoutSec && this.waveStartedAtMs) {
+      const elapsedSec = (now - this.waveStartedAtMs) / 1000;
+      if (elapsedSec > iterationTimeoutSec) {
+        return { timedOut: true, type: 'iteration' };
+      }
+    }
+
+    // Check inactivity timeout
+    if (inactivityTimeoutSec && this.lastActivityAtMs) {
+      const idleSec = (now - this.lastActivityAtMs) / 1000;
+      if (idleSec > inactivityTimeoutSec) {
+        return { timedOut: true, type: 'inactivity' };
+      }
+    }
+
+    return { timedOut: false, type: null };
+  }
+
+  /**
+   * Returns whether the wave was stopped due to timeout.
+   */
+  wasTimedOut(): boolean {
+    return this.timedOut;
+  }
+
+  /**
+   * Returns the type of timeout that occurred, if any.
+   */
+  getTimeoutType(): 'iteration' | 'inactivity' | null {
+    return this.timeoutType;
   }
 
   /**
@@ -736,6 +826,12 @@ export class ParallelRunner {
     const startedAt = nowIso();
     const sandboxes: WorkerSandbox[] = [];
 
+    // Initialize timeout tracking for this wave
+    this.timedOut = false;
+    this.timeoutType = null;
+    this.waveStartedAtMs = Date.now();
+    this.lastActivityAtMs = Date.now();
+
     // Create sandboxes
     try {
       for (const taskId of taskIds) {
@@ -771,6 +867,7 @@ export class ParallelRunner {
 
         sandboxes.push(sandbox);
         await this.options.appendLog(`[WORKER ${taskId}] Sandbox created: ${sandbox.worktreeDir}`);
+        this.recordActivity();
       }
     } catch (err) {
       // Rollback on sandbox creation failure
@@ -809,8 +906,48 @@ export class ParallelRunner {
       workerPromises.push(this.spawnWorker(sandbox, phase));
     }
 
+    // Start timeout monitoring if timeouts are configured
+    const hasTimeouts = this.options.iterationTimeoutSec || this.options.inactivityTimeoutSec;
+    let timeoutCheckInterval: ReturnType<typeof setInterval> | null = null;
+
+    if (hasTimeouts) {
+      timeoutCheckInterval = setInterval(() => {
+        const { timedOut, type } = this.checkTimeouts();
+        if (timedOut && type && !this.timedOut) {
+          const timeoutSec = type === 'iteration'
+            ? this.options.iterationTimeoutSec
+            : this.options.inactivityTimeoutSec;
+          void this.options.appendLog(
+            `[PARALLEL] Wave ${phase} timed out: ${type}_timeout (${timeoutSec}s)`,
+          );
+          this.terminateAllWorkersForTimeout(type);
+        }
+      }, 500); // Check every 500ms
+    }
+
     // Wait for all workers to complete
-    const outcomes = await Promise.all(workerPromises);
+    let outcomes: WorkerOutcome[];
+    try {
+      outcomes = await Promise.all(workerPromises);
+    } finally {
+      // Clear timeout check interval
+      if (timeoutCheckInterval) {
+        clearInterval(timeoutCheckInterval);
+      }
+    }
+
+    // If wave timed out, mark all tasks as failed with timed_out status
+    if (this.timedOut) {
+      // Update outcomes for any workers that were running when timeout hit
+      for (const outcome of outcomes) {
+        const worker = this.activeWorkers.get(outcome.taskId);
+        if (worker?.status === 'timed_out' || outcome.status === 'running') {
+          outcome.status = 'timed_out';
+          outcome.taskFailed = true;
+          outcome.taskPassed = false;
+        }
+      }
+    }
 
     // Create completion markers
     for (const sandbox of sandboxes) {
@@ -881,20 +1018,45 @@ export class ParallelRunner {
       }
 
       const passedCount = outcomes.filter((o) => o.status === 'passed').length;
-      await this.options.appendLog(
-        `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${mergeResult.mergedCount} merged`,
-      );
+      const timedOutCount = outcomes.filter((o) => o.status === 'timed_out').length;
+      if (timedOutCount > 0) {
+        await this.options.appendLog(
+          `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${timedOutCount} timed out, ${mergeResult.mergedCount} merged`,
+        );
+      } else {
+        await this.options.appendLog(
+          `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${mergeResult.mergedCount} merged`,
+        );
+      }
 
-      return { waveResult, continueExecution: !this.stopRequested, mergeResult };
+      return {
+        waveResult,
+        continueExecution: !this.stopRequested && !this.timedOut,
+        mergeResult,
+        timedOut: this.timedOut,
+        timeoutType: this.timeoutType ?? undefined,
+      };
     }
 
     // For implement_task phase, count by exit code since taskPassed isn't set yet
     const passedCount = outcomes.filter((o) => o.status === 'passed' || o.exitCode === 0).length;
-    await this.options.appendLog(
-      `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed`,
-    );
+    const timedOutCount = outcomes.filter((o) => o.status === 'timed_out').length;
+    if (timedOutCount > 0) {
+      await this.options.appendLog(
+        `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed, ${timedOutCount} timed out`,
+      );
+    } else {
+      await this.options.appendLog(
+        `[PARALLEL] Wave ${phase} completed: ${passedCount}/${outcomes.length} passed`,
+      );
+    }
 
-    return { waveResult, continueExecution: !this.stopRequested };
+    return {
+      waveResult,
+      continueExecution: !this.stopRequested && !this.timedOut,
+      timedOut: this.timedOut,
+      timeoutType: this.timeoutType ?? undefined,
+    };
   }
 
   /**
@@ -957,14 +1119,16 @@ export class ParallelRunner {
     // Broadcast worker spawn - now has 'running' status
     this.broadcastRunStatus();
 
-    // Handle stdout/stderr with taskId prefix
+    // Handle stdout/stderr with taskId prefix and record activity for inactivity timeout
     proc.stdout.on('data', (chunk) => {
+      this.recordActivity();
       const lines = String(chunk).trimEnd().split('\n');
       for (const line of lines) {
         void this.options.appendLog(`[WORKER ${taskId}][STDOUT] ${line}`);
       }
     });
     proc.stderr.on('data', (chunk) => {
+      this.recordActivity();
       const lines = String(chunk).trimEnd().split('\n');
       for (const line of lines) {
         void this.options.appendLog(`[WORKER ${taskId}][STDERR] ${line}`);
@@ -987,7 +1151,10 @@ export class ParallelRunner {
     const taskFailed = workerStatus?.taskFailed === true;
 
     let status: WorkerStatus;
-    if (phase === 'implement_task') {
+    // Check if this worker was terminated due to timeout
+    if (worker.status === 'timed_out' || this.timedOut) {
+      status = 'timed_out';
+    } else if (phase === 'implement_task') {
       // For implement phase, success is based on exit code
       status = exitCode === 0 ? 'passed' : 'failed';
     } else {

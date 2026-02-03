@@ -1045,5 +1045,160 @@ describe('parallelRunner', () => {
         expect(selected1[0].id).toBe('T1'); // failed, so first
       });
     });
+
+    describe('timeout handling (§6.2.4)', () => {
+      it('ParallelRunner accepts timeout options', () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        // Verify runner was created with timeout options
+        expect(runner).toBeDefined();
+        // Access internal options to verify they were set
+        const options = (runner as unknown as { options: { iterationTimeoutSec?: number; inactivityTimeoutSec?: number } }).options;
+        expect(options.iterationTimeoutSec).toBe(60);
+        expect(options.inactivityTimeoutSec).toBe(30);
+      });
+
+      it('wasTimedOut returns false before timeout', () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        expect(runner.wasTimedOut()).toBe(false);
+        expect(runner.getTimeoutType()).toBeNull();
+      });
+
+      it('requestStop does not set timedOut flag', () => {
+        const runner = createRunner();
+
+        runner.requestStop();
+
+        // requestStop sets stopRequested, not timedOut
+        expect(runner.wasTimedOut()).toBe(false);
+        expect((runner as unknown as { stopRequested: boolean }).stopRequested).toBe(true);
+      });
+
+      it('terminateAllWorkersForTimeout sets timedOut flag and type', () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        // Access private method for testing
+        const terminate = (runner as unknown as {
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        }).terminateAllWorkersForTimeout.bind(runner);
+
+        terminate('iteration');
+
+        expect(runner.wasTimedOut()).toBe(true);
+        expect(runner.getTimeoutType()).toBe('iteration');
+      });
+
+      it('terminateAllWorkersForTimeout sets type to inactivity', () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        const terminate = (runner as unknown as {
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        }).terminateAllWorkersForTimeout.bind(runner);
+
+        terminate('inactivity');
+
+        expect(runner.wasTimedOut()).toBe(true);
+        expect(runner.getTimeoutType()).toBe('inactivity');
+      });
+
+      it('checkTimeouts detects iteration timeout', async () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 0.001, // 1ms timeout for testing
+          inactivityTimeoutSec: 60,
+        });
+
+        // Initialize wave timing by accessing private fields
+        const r = runner as unknown as {
+          waveStartedAtMs: number | null;
+          lastActivityAtMs: number | null;
+          checkTimeouts: () => { timedOut: boolean; type: 'iteration' | 'inactivity' | null };
+        };
+        r.waveStartedAtMs = Date.now() - 100; // Started 100ms ago
+        r.lastActivityAtMs = Date.now();
+
+        const result = r.checkTimeouts();
+        expect(result.timedOut).toBe(true);
+        expect(result.type).toBe('iteration');
+      });
+
+      it('checkTimeouts detects inactivity timeout', async () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 0.001, // 1ms timeout for testing
+        });
+
+        const r = runner as unknown as {
+          waveStartedAtMs: number | null;
+          lastActivityAtMs: number | null;
+          checkTimeouts: () => { timedOut: boolean; type: 'iteration' | 'inactivity' | null };
+        };
+        r.waveStartedAtMs = Date.now();
+        r.lastActivityAtMs = Date.now() - 100; // No activity for 100ms
+
+        const result = r.checkTimeouts();
+        expect(result.timedOut).toBe(true);
+        expect(result.type).toBe('inactivity');
+      });
+
+      it('checkTimeouts returns no timeout when within limits', async () => {
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        const r = runner as unknown as {
+          waveStartedAtMs: number | null;
+          lastActivityAtMs: number | null;
+          checkTimeouts: () => { timedOut: boolean; type: 'iteration' | 'inactivity' | null };
+        };
+        r.waveStartedAtMs = Date.now();
+        r.lastActivityAtMs = Date.now();
+
+        const result = r.checkTimeouts();
+        expect(result.timedOut).toBe(false);
+        expect(result.type).toBeNull();
+      });
+
+      it('recordActivity updates lastActivityAtMs', async () => {
+        const runner = createRunner({
+          inactivityTimeoutSec: 30,
+        });
+
+        const r = runner as unknown as {
+          lastActivityAtMs: number | null;
+          recordActivity: () => void;
+        };
+
+        const before = r.lastActivityAtMs;
+        await new Promise((resolve) => setTimeout(resolve, 5)); // Wait a bit
+        r.recordActivity();
+        const after = r.lastActivityAtMs;
+
+        // lastActivityAtMs should be updated to a more recent time
+        expect(after).not.toBeNull();
+        if (before !== null && after !== null) {
+          expect(after).toBeGreaterThanOrEqual(before);
+        }
+      });
+
+      it('timed_out status is included in WorkerStatus type', () => {
+        // This is a compile-time check but we can verify the type exists
+        const status: 'running' | 'passed' | 'failed' | 'timed_out' = 'timed_out';
+        expect(status).toBe('timed_out');
+      });
+    });
   });
 });

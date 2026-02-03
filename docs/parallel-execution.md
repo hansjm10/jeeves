@@ -169,9 +169,9 @@ Each task runs in an isolated sandbox:
 
 - **State directory**: `<STATE>/.runs/<runId>/workers/<taskId>/`
 - **Git worktree**: `<WORKTREES>/<owner>/<repo>/issue-<N>-workers/<runId>/<taskId>/`
-- **Branch**: `issue/<N>-<taskId>-<shortRunId>` (e.g., `issue/78-T1-abc12345`)
+- **Branch**: `issue/<N>-<taskId>-<shortRunId>` (e.g., `issue/78-T1-AbC123`)
 
-The branch name includes a shortened runId (first 8 characters) to ensure uniqueness across runs. This prevents conflicts when a prior run's failed worktree retains its branch checked out while a new run attempts to create a sandbox for the same task.
+The branch name includes a shortened runId (the random suffix from the runId, after the `.`) to ensure uniqueness across runs. This prevents conflicts when a prior run's failed worktree retains its branch checked out while a new run attempts to create a sandbox for the same task.
 
 ### Cleanup Behavior
 

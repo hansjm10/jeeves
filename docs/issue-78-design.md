@@ -127,7 +127,7 @@ Worker initialization steps:
    - `tasks.json`: copy of canonical `.jeeves/tasks.json`.
    - Optional: copy canonical `.jeeves/task-feedback/<taskId>.md` into worker `.jeeves/task-feedback.md` for retries.
 2. Create a worker git worktree:
-   - Branch name: `issue/<N>-<taskId>-<shortRunId>` where `shortRunId` is the first 8 characters of the runId (e.g., `issue/78-T1-abc12345`). Including the runId ensures uniqueness across runs, preventing conflicts when a prior run's failed worktree retains its branch checked out.
+   - Branch name: `issue/<N>-<taskId>-<shortRunId>` where `shortRunId` is the random suffix from the runId (after the `.`), e.g., `issue/78-T1-AbC123`. Including this high-entropy suffix ensures uniqueness across runs, preventing conflicts when a prior run's failed worktree retains its branch checked out.
    - Base ref: the current HEAD of the canonical issue branch (ensures workers include prior merged tasks).
    - Exact commands (from the shared repo clone `REPO`):
      - If the worker worktree dir already exists (e.g., from a prior run), remove it first:

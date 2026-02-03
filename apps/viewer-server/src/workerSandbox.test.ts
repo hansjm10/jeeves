@@ -88,10 +88,11 @@ describe('workerSandbox', () => {
       );
     });
 
-    it('computes correct worker branch name', () => {
+    it('computes correct worker branch name using random suffix from runId', () => {
+      // Use realistic runId format: "20260203T213123Z-12345.ABC123"
       const paths = getWorkerSandboxPaths({
         taskId: 'T1',
-        runId: 'run-123',
+        runId: '20260203T213123Z-12345.ABC123',
         issueNumber: 42,
         owner: 'owner',
         repo: 'repo',
@@ -101,8 +102,62 @@ describe('workerSandbox', () => {
         canonicalBranch: 'issue/42',
       });
 
-      // Branch includes short runId (first 8 chars) for uniqueness across runs
-      expect(paths.branch).toBe('issue/42-T1-run-123');
+      // Branch includes shortRunId (random suffix after '.') for uniqueness across runs
+      expect(paths.branch).toBe('issue/42-T1-ABC123');
+    });
+
+    it('produces unique branch names for different runIds on the same day', () => {
+      // Regression test: Two runs on the same day with same timestamp prefix but different
+      // random suffixes must produce different branch names to avoid worktree conflicts.
+      const runId1 = '20260203T213123Z-12345.ABC123';
+      const runId2 = '20260203T213123Z-12345.XYZ789';
+
+      const paths1 = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: runId1,
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      const paths2 = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: runId2,
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      // Must have different branch names
+      expect(paths1.branch).not.toBe(paths2.branch);
+      expect(paths1.branch).toBe('issue/42-T1-ABC123');
+      expect(paths2.branch).toBe('issue/42-T1-XYZ789');
+    });
+
+    it('falls back to first 8 chars if runId has no dot', () => {
+      // Legacy/non-standard runId format without a dot
+      const paths = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: 'run-12345',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      // Falls back to first 8 chars when no dot is present
+      expect(paths.branch).toBe('issue/42-T1-run-1234');
     });
 
     it('includes all required fields in returned sandbox', () => {

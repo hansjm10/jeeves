@@ -73,6 +73,21 @@ If there are any modified or untracked files that do not match the task’s `fil
 
 Then re-run `git status --porcelain` and proceed only when the remaining changes are within `filesAllowed` (and/or `.jeeves` / `.jeeves/`).
 
+If you had to modify the worktree to resolve unexpected files (stash/clean/restore), then:
+
+- Record what you changed and why in `.jeeves/progress.txt`
+- Update `.jeeves/issue.json` to request a fresh-context restart of this phase by setting:
+
+```json
+{
+  "control": {
+    "restartPhase": true
+  }
+}
+```
+
+- STOP and do not implement anything else in this run. The viewer will rerun the same phase from the top.
+
 If you cannot safely clean/stash the unexpected files → STOP and record the blocker in `.jeeves/progress.txt`.
 
 5. Implement the task (scope is binding)

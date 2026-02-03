@@ -609,6 +609,61 @@ describe('RunManager', () => {
     expect(tasksJson.tasks[0].filesAllowed).toContain('packages/runner/src/__tests__/issueExpand.ts');
   });
 
+  it('restarts implement_task when control.restartPhase is set (skips task_spec_check)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1000;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'default',
+          branch: 'issue/1000',
+          notes: '',
+          control: { restartPhase: true },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.phase).toBe('implement_task');
+    expect((updatedIssue as { control?: unknown } | null)?.control).toBeUndefined();
+  });
+
   it('does not spawn runner when issue phase is terminal', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');

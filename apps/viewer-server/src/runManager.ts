@@ -32,6 +32,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function hasCompletionPromise(content: string): boolean {
   return content.trim() === '<promise>COMPLETE</promise>';
 }
@@ -492,6 +496,13 @@ export class RunManager {
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {
             updatedIssue.phase = nextPhase;
+
+            const control = updatedIssue.control;
+            if (isPlainRecord(control) && control.restartPhase === true) {
+              delete control.restartPhase;
+              if (Object.keys(control).length === 0) delete updatedIssue.control;
+            }
+
             await writeIssueJson(this.stateDir!, updatedIssue);
             if (nextPhase === 'implement_task') {
               await expandTasksFilesAllowedForTests(this.stateDir!);

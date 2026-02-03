@@ -28,6 +28,7 @@ import {
   getWorkerSandboxPaths,
   hasCompletionMarker,
   cleanupWorkerSandboxOnSuccess,
+  validateTaskId,
   type WorkerSandbox,
 } from './workerSandbox.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
@@ -214,6 +215,11 @@ async function writeTasksJson(dir: string, data: TasksFile): Promise<void> {
 
 /**
  * Reads the parallel state from issue.json.
+ *
+ * SECURITY: Validates all taskIds in activeWaveTaskIds and reservedStatusByTaskId
+ * to prevent path traversal attacks when the state is later used to construct paths.
+ *
+ * @throws Error if taskIds contain unsafe characters
  */
 export async function readParallelState(stateDir: string): Promise<ParallelState | null> {
   const issueJson = await readIssueJson(stateDir);
@@ -222,6 +228,33 @@ export async function readParallelState(stateDir: string): Promise<ParallelState
   if (!status) return null;
   const parallel = status.parallel as ParallelState | undefined;
   if (!parallel || !parallel.runId || !parallel.activeWaveId) return null;
+
+  // Validate shape: activeWaveTaskIds must be an array
+  if (!Array.isArray(parallel.activeWaveTaskIds)) {
+    throw new Error('Corrupted parallel state: activeWaveTaskIds is not an array');
+  }
+
+  // Validate shape: reservedStatusByTaskId must be an object
+  if (
+    parallel.reservedStatusByTaskId !== null &&
+    parallel.reservedStatusByTaskId !== undefined &&
+    (typeof parallel.reservedStatusByTaskId !== 'object' || Array.isArray(parallel.reservedStatusByTaskId))
+  ) {
+    throw new Error('Corrupted parallel state: reservedStatusByTaskId is not an object');
+  }
+
+  // SECURITY: Validate all taskIds to prevent path traversal
+  for (const taskId of parallel.activeWaveTaskIds) {
+    validateTaskId(taskId);
+  }
+
+  // Also validate taskIds in reservedStatusByTaskId
+  if (parallel.reservedStatusByTaskId) {
+    for (const taskId of Object.keys(parallel.reservedStatusByTaskId)) {
+      validateTaskId(taskId);
+    }
+  }
+
   return parallel;
 }
 

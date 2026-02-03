@@ -27,6 +27,11 @@ import {
   type ParallelRunnerOptions,
 } from './parallelRunner.js';
 import type { WorkerStatusInfo } from './types.js';
+import {
+  getWorkerSandboxPaths,
+  getImplementDoneMarkerPath,
+  hasCompletionMarker,
+} from './workerSandbox.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -128,6 +133,8 @@ export class RunManager {
   private stopRequested = false;
   private activeParallelRunner: ParallelRunner | null = null;
   private maxParallelTasksOverride: number | null = null;
+  /** Tracks the effective max parallel tasks (override or issue setting) for status reporting */
+  private effectiveMaxParallelTasks: number | null = null;
 
   private status: RunStatus = {
     running: false,
@@ -184,7 +191,9 @@ export class RunManager {
     return {
       ...this.status,
       workers: workerStatusInfo,
-      max_parallel_tasks: this.maxParallelTasksOverride,
+      // Return the effective max_parallel_tasks (override if provided, otherwise issue setting)
+      // This reflects the actual value being used, not just the API override
+      max_parallel_tasks: this.effectiveMaxParallelTasks ?? this.maxParallelTasksOverride,
     };
   }
 
@@ -326,18 +335,77 @@ export class RunManager {
   /**
    * Rolls back reserved task statuses on manual stop per §6.2.8.
    *
-   * If an active wave is in progress (issue.json.status.parallel exists):
-   * 1. Revert canonical .jeeves/tasks.json statuses using reservedStatusByTaskId
-   * 2. Clear issue.json.status.parallel
-   * 3. Append progress entry indicating the wave was aborted
+   * Per design doc §6.2.8 "Orchestration recovery / restart safety":
+   * - Stop mid-implement wave: roll back task statuses, clear parallel state
+   * - Stop between implement/spec-check waves: preserve parallel state for resume
+   *
+   * Detection: If all tasks in activeWaveTaskIds have implement_task.done markers,
+   * the stop is "between phases" and we should preserve parallel state to allow
+   * the next run to resume with spec-check (no reselection).
    */
   private async rollbackActiveWaveOnStop(): Promise<void> {
-    if (!this.stateDir) return;
+    if (!this.stateDir || !this.dataDir) return;
 
     const parallelState = await readParallelState(this.stateDir);
     if (!parallelState) return;
 
-    // Roll back task reservations
+    // Check if we're "between phases": all implement_task.done markers exist
+    // If so, preserve parallel state so next run can resume spec-check
+    const issueJson = await readIssueJson(this.stateDir);
+    if (!issueJson) return;
+
+    const parsed = this.issueRef ? parseIssueRef(this.issueRef) : null;
+    if (!parsed) return;
+
+    // Check if all tasks have completed implement_task
+    let allImplementDone = true;
+    for (const taskId of parallelState.activeWaveTaskIds) {
+      const sandbox = getWorkerSandboxPaths({
+        taskId,
+        runId: parallelState.runId,
+        issueNumber: parsed.issueNumber,
+        owner: parsed.owner,
+        repo: parsed.repo,
+        canonicalStateDir: this.stateDir,
+        repoDir: path.join(this.dataDir, 'repos', parsed.owner, parsed.repo),
+        dataDir: this.dataDir,
+        canonicalBranch: typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${parsed.issueNumber}`,
+      });
+      const markerPath = getImplementDoneMarkerPath(sandbox);
+      const done = await hasCompletionMarker(markerPath);
+      if (!done) {
+        allImplementDone = false;
+        break;
+      }
+    }
+
+    // If stopped between implement/spec-check (all markers exist), preserve parallel state
+    if (allImplementDone && parallelState.activeWavePhase === 'implement_task') {
+      // Append progress entry noting preservation
+      const progressPath = path.join(this.stateDir, 'progress.txt');
+      const progressEntry = `\n## [${nowIso()}] - Manual Stop: Between Implement/Spec-Check\n\n` +
+        `### Wave\n` +
+        `- Wave ID: ${parallelState.activeWaveId}\n` +
+        `- Phase: ${parallelState.activeWavePhase}\n` +
+        `- Tasks: ${parallelState.activeWaveTaskIds.join(', ')}\n\n` +
+        `### Action\n` +
+        `- All implement_task.done markers present; wave is between phases\n` +
+        `- Parallel state preserved for spec-check resume\n` +
+        `- Task statuses NOT rolled back (remain in_progress)\n` +
+        `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
+        `---\n`;
+      await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+
+      if (this.status.viewer_log_file) {
+        await this.appendViewerLog(
+          this.status.viewer_log_file,
+          `[STOP] Preserved parallel state for spec-check resume (all ${parallelState.activeWaveTaskIds.length} implement_task.done markers present)`,
+        );
+      }
+      return;
+    }
+
+    // Mid-phase stop: roll back task reservations and clear parallel state
     await rollbackTaskReservations(this.stateDir, parallelState.reservedStatusByTaskId);
 
     // Append progress entry
@@ -832,6 +900,8 @@ export class RunManager {
 
     // Get max parallel tasks: API override > issue settings > default (1)
     const maxParallelTasks = this.maxParallelTasksOverride ?? await getMaxParallelTasks(this.stateDir);
+    // Track effective value for status reporting (per code review feedback)
+    this.effectiveMaxParallelTasks = maxParallelTasks;
 
     // Get runner binary path
     const runnerBinPath = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');

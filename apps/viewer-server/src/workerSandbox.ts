@@ -10,6 +10,7 @@
  * - On failure: retain both worktree and state dir
  */
 
+import { execFile as execFileCb } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -19,6 +20,138 @@ import { runGit } from './git.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { writeTextAtomicNew } from './textAtomic.js';
+
+/**
+ * Error thrown when a task ID fails validation.
+ */
+export class InvalidTaskIdError extends Error {
+  constructor(
+    message: string,
+    public readonly taskId: string,
+    public readonly reason: string,
+  ) {
+    super(message);
+    this.name = 'InvalidTaskIdError';
+  }
+}
+
+/**
+ * Validates a task ID for safe use in filesystem paths and git refs.
+ *
+ * Security: Task IDs come from .jeeves/tasks.json and are used directly in:
+ * - Filesystem paths (state dir, worktree dir)
+ * - Git branch names (issue/<N>-<taskId>)
+ *
+ * Without validation, a malicious or malformed task ID could:
+ * - Escape intended directories via path traversal (e.g., "../../../etc")
+ * - Create invalid or confusing git refs
+ *
+ * Validation rules:
+ * 1. Must be a non-empty string
+ * 2. Must not contain path separators (/, \)
+ * 3. Must not contain .. sequences
+ * 4. Must not contain null bytes
+ * 5. Must only contain safe characters: alphanumeric, dash, underscore
+ * 6. Must not start with a dash (git ref safety)
+ * 7. Reasonable length limit (1-128 characters)
+ *
+ * @param taskId The task ID to validate
+ * @throws InvalidTaskIdError if validation fails
+ */
+export function validateTaskId(taskId: string): void {
+  // Rule 1: Non-empty string
+  if (typeof taskId !== 'string' || taskId.length === 0) {
+    throw new InvalidTaskIdError(
+      'Task ID must be a non-empty string',
+      String(taskId),
+      'empty',
+    );
+  }
+
+  // Rule 7: Length limit
+  if (taskId.length > 128) {
+    throw new InvalidTaskIdError(
+      `Task ID exceeds maximum length of 128 characters: ${taskId.substring(0, 20)}...`,
+      taskId,
+      'too_long',
+    );
+  }
+
+  // Rule 2: No path separators
+  if (taskId.includes('/') || taskId.includes('\\')) {
+    throw new InvalidTaskIdError(
+      `Task ID contains path separator: ${taskId}`,
+      taskId,
+      'path_separator',
+    );
+  }
+
+  // Rule 3: No .. sequences
+  if (taskId.includes('..')) {
+    throw new InvalidTaskIdError(
+      `Task ID contains path traversal sequence: ${taskId}`,
+      taskId,
+      'path_traversal',
+    );
+  }
+
+  // Rule 4: No null bytes
+  if (taskId.includes('\0')) {
+    throw new InvalidTaskIdError(
+      `Task ID contains null byte`,
+      taskId,
+      'null_byte',
+    );
+  }
+
+  // Rule 5: Only safe characters (alphanumeric, dash, underscore)
+  // This is intentionally restrictive to prevent any filesystem or git ref issues
+  const safePattern = /^[a-zA-Z0-9_-]+$/;
+  if (!safePattern.test(taskId)) {
+    throw new InvalidTaskIdError(
+      `Task ID contains unsafe characters (only alphanumeric, dash, underscore allowed): ${taskId}`,
+      taskId,
+      'unsafe_characters',
+    );
+  }
+
+  // Rule 6: Must not start with a dash (git ref safety)
+  if (taskId.startsWith('-')) {
+    throw new InvalidTaskIdError(
+      `Task ID must not start with a dash: ${taskId}`,
+      taskId,
+      'starts_with_dash',
+    );
+  }
+}
+
+/**
+ * Validates a git branch name using git check-ref-format.
+ *
+ * @param branchName The branch name to validate
+ * @param repoDir The repository directory to run git in
+ * @throws InvalidTaskIdError if the branch name is invalid
+ */
+export async function validateGitBranchName(branchName: string, repoDir: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFileCb(
+      'git',
+      ['check-ref-format', '--branch', branchName],
+      { cwd: repoDir, timeout: 5000 },
+      (err) => {
+        if (err) {
+          reject(new InvalidTaskIdError(
+            `Invalid git branch name derived from task ID: ${branchName}`,
+            branchName,
+            'invalid_git_ref',
+          ));
+        } else {
+          resolve();
+        }
+      },
+    );
+  });
+}
 
 /** Worker sandbox paths and identifiers */
 export interface WorkerSandbox {
@@ -82,6 +215,8 @@ export interface CreateWorkerSandboxResult {
 /**
  * Creates paths for a worker sandbox without creating any files.
  * Useful for computing paths before creation or for cleanup.
+ *
+ * @throws InvalidTaskIdError if taskId contains unsafe characters
  */
 export function getWorkerSandboxPaths(params: {
   taskId: string;
@@ -95,6 +230,10 @@ export function getWorkerSandboxPaths(params: {
   canonicalBranch: string;
 }): WorkerSandbox {
   const { taskId, runId, issueNumber, owner, repo, canonicalStateDir, repoDir, dataDir, canonicalBranch } = params;
+
+  // SECURITY: Validate taskId before using in paths/refs to prevent path traversal
+  // and invalid git refs. This is the centralized validation point for all taskId usage.
+  validateTaskId(taskId);
 
   // Worker state dir: STATE/.runs/<runId>/workers/<taskId>/
   const stateDir = path.join(canonicalStateDir, '.runs', runId, 'workers', taskId);

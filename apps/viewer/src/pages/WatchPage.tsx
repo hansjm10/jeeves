@@ -218,7 +218,7 @@ export function getWorkerStatusColor(status: WorkerStatusInfo['status']): CSSPro
     case 'failed':
       return { background: 'rgba(248, 81, 73, 0.15)', color: 'var(--color-accent-red)' };
     case 'timed_out':
-      return { background: 'rgba(255, 166, 87, 0.15)', color: 'var(--color-accent-orange, #ff9966)' };
+      return { background: 'rgba(255, 166, 87, 0.15)', color: 'var(--color-accent-orange)' };
     default:
       return { background: 'var(--color-surface-2)', color: 'var(--color-text-muted)' };
   }

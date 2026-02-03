@@ -11,6 +11,7 @@ function isValidModel(model: unknown): model is ModelId {
 }
 
 import type { RunStatus } from './types.js';
+import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
@@ -183,6 +184,7 @@ export class RunManager {
     if (!(await pathExists(this.workDir))) {
       throw new Error(`Worktree not found at ${this.workDir}. Run init first.`);
     }
+    await ensureJeevesExcludedFromGitStatus(this.workDir).catch(() => void 0);
 
     const provider = mapProvider(params.provider);
     const maxIterations = Number.isFinite(Number(params.max_iterations)) ? Math.max(1, Number(params.max_iterations)) : 10;

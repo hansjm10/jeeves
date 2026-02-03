@@ -1231,6 +1231,10 @@ describe('viewer-server', () => {
     expect(issue?.title).toBe('My Title');
     expect(issue?.url).toBe(createdIssueUrl);
 
+    const workDir = getWorktreePath('o', 'r', 123, dataDir);
+    const status = await execFileAsync('git', ['status', '--porcelain'], { cwd: workDir });
+    expect(String(status.stdout)).not.toContain('.jeeves');
+
     await app.close();
   });
 

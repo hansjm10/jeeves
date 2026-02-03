@@ -65,7 +65,8 @@ If there are any modified or untracked files that do not match the task’s `fil
 
 - STOP (hard gate) and do not start implementation yet. Treat unexpected files as a warning gate: do not start implementation until resolved.
 - Make the worktree clean first, e.g.:
-  - Prefer: `git stash --include-untracked` (safest default)
+  - Prefer: `git stash push --include-untracked -- <unexpected-paths...>` (avoid stashing `.jeeves/` workflow state)
+  - If you want to stash broadly, first ensure `.jeeves/` is ignored (e.g. add it to `.git/info/exclude`), then run: `git stash push --include-untracked`
   - If the unexpected changes are tracked modifications you want to discard: `git restore --source=HEAD --staged --worktree -- <path>`
   - If the unexpected files are untracked and disposable: `git clean -f -- <path>`
   - If the unexpected files are untracked directories and disposable: `git clean -fd -- <path>`

@@ -526,6 +526,8 @@ export class ParallelRunner {
     phase: WorkerPhase;
     pid: number | null;
     startedAt: string;
+    endedAt: string | null;
+    returncode: number | null;
     status: WorkerStatus;
   }[] {
     return Array.from(this.activeWorkers.values()).map((w) => ({
@@ -533,6 +535,8 @@ export class ParallelRunner {
       phase: w.phase,
       pid: w.pid,
       startedAt: w.startedAt,
+      endedAt: w.endedAt,
+      returncode: w.returncode,
       status: w.status,
     }));
   }

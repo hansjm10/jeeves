@@ -175,6 +175,8 @@ export class RunManager {
           phase: w.phase,
           pid: w.pid,
           started_at: w.startedAt,
+          ended_at: w.endedAt,
+          returncode: w.returncode,
           status: w.status,
         }))
       : null;

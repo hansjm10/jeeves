@@ -59,6 +59,8 @@ export type WorkerStatusInfo = Readonly<{
   phase: 'implement_task' | 'task_spec_check';
   pid: number | null;
   started_at: string;
+  ended_at: string | null;
+  returncode: number | null;
   status: 'running' | 'passed' | 'failed' | 'timed_out';
 }>;
 

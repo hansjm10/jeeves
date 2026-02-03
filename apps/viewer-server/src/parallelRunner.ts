@@ -2150,6 +2150,18 @@ export class ParallelRunner {
       }
     });
 
+    // Handle async spawn errors (e.g., invalid cwd, resource exhaustion, permission errors).
+    // Without this handler, Node would throw on the unhandled 'error' event and crash the server.
+    // The 'exit' event will still fire after 'error', so waitForWorkerCompletion will resolve.
+    proc.once('error', (err) => {
+      void this.options.appendLog(
+        `[WORKER ${taskId}][${phase}] Spawn error: ${err.message}`,
+      );
+      // Mark worker as failed so waitForWorkerCompletion knows this was an error case
+      worker.status = 'failed';
+      worker.returncode = -1; // Synthetic non-zero exit code for spawn failure
+    });
+
     return worker;
   }
 

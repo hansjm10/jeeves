@@ -475,7 +475,24 @@ export class RunManager {
     });
 
     const exitCode = await new Promise<number>((resolve) => {
-      proc.once('exit', (code, signal) => resolve(exitCodeFromExitEvent(code, signal)));
+      let resolved = false;
+
+      // Handle async spawn errors (e.g., invalid cwd, resource exhaustion, permission errors).
+      // Without this handler, Node would throw on the unhandled 'error' event and crash the server.
+      proc.once('error', async (err) => {
+        await this.appendViewerLog(viewerLogPath, `[RUNNER] Spawn error: ${err.message}`);
+        if (!resolved) {
+          resolved = true;
+          resolve(-1); // Synthetic non-zero exit code for spawn failure
+        }
+      });
+
+      proc.once('exit', (code, signal) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(exitCodeFromExitEvent(code, signal));
+        }
+      });
     });
     return exitCode;
   }

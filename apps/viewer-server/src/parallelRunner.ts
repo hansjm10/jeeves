@@ -1019,6 +1019,18 @@ export class ParallelRunner {
       };
     }
 
+    // Check for activeWavePhase mismatch per §6.2.8 resume corruption handling
+    // If canonical phase is task_spec_check but parallel state says implement_task, warn and fix
+    if (state.activeWavePhase !== 'task_spec_check') {
+      // Phase mismatch: canonical phase is task_spec_check but parallel state says implement_task
+      // Per §6.2.8 resume corruption handling: treat as state corruption, fix and warn
+      await this.handleActiveWavePhaseMismatch(
+        state,
+        'task_spec_check',
+        state.activeWavePhase,
+      );
+    }
+
     // Update phase to spec_check
     const updatedState: ParallelState = {
       ...state,
@@ -1284,6 +1296,7 @@ export class ParallelRunner {
     } catch (err) {
       // Rollback on sandbox creation failure
       const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
       await this.options.appendLog(`[PARALLEL] Sandbox creation failed: ${errMsg}`);
       await rollbackTaskReservations(this.options.canonicalStateDir, reservedStatusByTaskId);
 
@@ -1302,6 +1315,7 @@ export class ParallelRunner {
       const setupFailureDetails = {
         ...failedWave,
         error: errMsg,
+        errorStack: errStack,
         state: 'setup_failed',
         partialSetup: {
           createdSandboxes: sandboxes.map((s) => ({
@@ -1325,7 +1339,9 @@ export class ParallelRunner {
         phase,
         taskIds,
         sandboxes,
+        [] as string[], // No workers started yet (sandbox creation phase)
         errMsg,
+        errStack,
       );
 
       return {
@@ -1335,12 +1351,97 @@ export class ParallelRunner {
       };
     }
 
-    // Spawn workers
-    const workerPromises: Promise<WorkerOutcome>[] = [];
-    for (const sandbox of sandboxes) {
-      if (this.stopRequested) break;
-      workerPromises.push(this.spawnWorker(sandbox, phase));
+    // Phase 1: Spawn workers synchronously - this allows catching spawn failures
+    // We spawn all workers first, tracking which ones started, before awaiting any of them.
+    // This enables proper rollback if a spawn fails midway through.
+    const startedWorkers: { sandbox: WorkerSandbox; worker: WorkerProcess }[] = [];
+    try {
+      for (const sandbox of sandboxes) {
+        if (this.stopRequested) break;
+        const worker = this.startWorkerProcess(sandbox, phase);
+        startedWorkers.push({ sandbox, worker });
+      }
+    } catch (err) {
+      // Worker spawn failed - handle rollback per §6.2.8 "Wave setup failure"
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
+      await this.options.appendLog(`[PARALLEL] Worker spawn failed: ${errMsg}`);
+
+      const startedWorkerTaskIds = startedWorkers.map(sw => sw.sandbox.taskId);
+
+      // Best-effort terminate any already-started workers
+      for (const { sandbox, worker } of startedWorkers) {
+        if (worker.proc && worker.proc.exitCode === null) {
+          try {
+            worker.proc.kill('SIGKILL');
+            await this.options.appendLog(`[WORKER ${sandbox.taskId}] Terminated due to spawn failure`);
+          } catch {
+            // Ignore kill errors
+          }
+        }
+        this.activeWorkers.delete(sandbox.taskId);
+      }
+
+      // Wait briefly for terminated processes to exit
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Rollback task reservations
+      await rollbackTaskReservations(this.options.canonicalStateDir, reservedStatusByTaskId);
+
+      // Write failed wave summary with spawn failure details (§6.2.8 AC3)
+      const failedWave: WaveResult = {
+        waveId,
+        phase,
+        taskIds,
+        startedAt,
+        endedAt: nowIso(),
+        workers: [],
+        allPassed: false,
+        anyFailed: true,
+      };
+      const setupFailureDetails = {
+        ...failedWave,
+        error: errMsg,
+        errorStack: errStack,
+        state: 'setup_failed',
+        partialSetup: {
+          createdSandboxes: sandboxes.map((s) => ({
+            taskId: s.taskId,
+            stateDir: s.stateDir,
+            worktreeDir: s.worktreeDir,
+            branch: s.branch,
+          })),
+          startedWorkers: startedWorkerTaskIds,
+        },
+      };
+      await writeWaveSummary(
+        this.options.canonicalStateDir,
+        this.options.runId,
+        setupFailureDetails as WaveResult & { error: string; state: string },
+      );
+
+      // Append progress entry for spawn setup failure (§6.2.8 step 5, AC2)
+      await this.appendSetupFailureProgressEntry(
+        waveId,
+        phase,
+        taskIds,
+        sandboxes,
+        startedWorkerTaskIds,
+        errMsg,
+        errStack,
+      );
+
+      return {
+        waveResult: failedWave,
+        continueExecution: false,
+        error: `Worker spawn failed: ${errMsg}`,
+      };
     }
+
+    // Phase 2: Create completion promises for all started workers
+    const workerPromises = startedWorkers.map(({ sandbox, worker }) =>
+      this.waitForWorkerCompletion(sandbox, worker, phase)
+    );
 
     // Start timeout monitoring if timeouts are configured
     const hasTimeouts = this.options.iterationTimeoutSec || this.options.inactivityTimeoutSec;
@@ -1785,15 +1886,22 @@ export class ParallelRunner {
    *
    * Per design §6.2.8 "Wave setup failure", step 5:
    * - Append a progress entry describing the setup failure, rollback, and artifact location
+   *
+   * Handles both sandbox creation failures and worker spawn failures.
    */
   private async appendSetupFailureProgressEntry(
     waveId: string,
     phase: WorkerPhase,
     taskIds: string[],
     createdSandboxes: WorkerSandbox[],
+    startedWorkerTaskIds: string[],
     errorMessage: string,
+    errorStack?: string,
   ): Promise<void> {
     const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
+    const failureStage = startedWorkerTaskIds.length > 0
+      ? 'worker spawn'
+      : 'sandbox creation';
     const progressEntry = `\n## [${nowIso()}] - Parallel Wave Setup Failure\n\n` +
       `### Wave\n` +
       `- Wave ID: ${waveId}\n` +
@@ -1801,13 +1909,23 @@ export class ParallelRunner {
       `- Selected Tasks: ${taskIds.join(', ')}\n\n` +
       `### Error\n` +
       `\`\`\`\n${errorMessage}\n\`\`\`\n\n` +
+      (errorStack
+        ? `### Stack Trace\n\`\`\`\n${errorStack}\n\`\`\`\n\n`
+        : '') +
       `### Partial Setup State\n` +
       `- Sandboxes created: ${createdSandboxes.length}/${taskIds.length}\n` +
       (createdSandboxes.length > 0
         ? `- Created sandbox tasks: ${createdSandboxes.map((s) => s.taskId).join(', ')}\n`
         : '') +
-      `- Worker processes started: 0 (failure occurred during sandbox creation)\n\n` +
-      `### Rollback Action\n` +
+      `- Worker processes started: ${startedWorkerTaskIds.length}/${taskIds.length}` +
+      (startedWorkerTaskIds.length === 0
+        ? ` (failure occurred during ${failureStage})\n`
+        : `\n`) +
+      (startedWorkerTaskIds.length > 0
+        ? `- Started worker tasks: ${startedWorkerTaskIds.join(', ')}\n` +
+          `- Started workers terminated: best-effort SIGKILL sent\n`
+        : '') +
+      `\n### Rollback Action\n` +
       `- Task statuses restored to pre-reservation values via reservedStatusByTaskId\n` +
       `- Parallel state cleared from issue.json\n` +
       `- No taskFailed/taskPassed flags updated (setup failure ≠ task failure)\n\n` +
@@ -1852,9 +1970,12 @@ export class ParallelRunner {
   }
 
   /**
-   * Spawns a single worker process and waits for completion.
+   * Starts a worker process synchronously (spawns the process, sets up tracking).
+   * This method is synchronous so spawn failures can be caught with try/catch.
+   *
+   * @throws {Error} if spawn fails
    */
-  private async spawnWorker(sandbox: WorkerSandbox, phase: WorkerPhase): Promise<WorkerOutcome> {
+  private startWorkerProcess(sandbox: WorkerSandbox, phase: WorkerPhase): WorkerProcess {
     const startedAt = nowIso();
     const taskId = sandbox.taskId;
 
@@ -1886,8 +2007,10 @@ export class ParallelRunner {
       env.JEEVES_MODEL = this.options.model;
     }
 
-    await this.options.appendLog(`[WORKER ${taskId}][${phase}] Starting...`);
+    // Log synchronously (fire-and-forget) to avoid making this method async
+    void this.options.appendLog(`[WORKER ${taskId}][${phase}] Starting...`);
 
+    // This spawn call can throw synchronously - that's the key behavior we need
     const proc = this.spawn(process.execPath, args, {
       cwd: sandbox.worktreeDir,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -1926,6 +2049,36 @@ export class ParallelRunner {
         void this.options.appendLog(`[WORKER ${taskId}][STDERR] ${line}`);
       }
     });
+
+    return worker;
+  }
+
+  /**
+   * Waits for a worker process to complete and returns the outcome.
+   * This is the async part of worker execution, separated from spawn for error handling.
+   */
+  private async waitForWorkerCompletion(
+    sandbox: WorkerSandbox,
+    worker: WorkerProcess,
+    phase: WorkerPhase,
+  ): Promise<WorkerOutcome> {
+    const taskId = sandbox.taskId;
+    const proc = worker.proc;
+
+    if (!proc) {
+      // Worker was never properly started
+      return {
+        taskId,
+        phase,
+        status: 'failed',
+        exitCode: -1,
+        taskPassed: false,
+        taskFailed: true,
+        startedAt: worker.startedAt,
+        endedAt: nowIso(),
+        branch: sandbox.branch,
+      };
+    }
 
     // Wait for exit
     const exitCode = await new Promise<number>((resolve) => {
@@ -1974,7 +2127,7 @@ export class ParallelRunner {
       exitCode,
       taskPassed,
       taskFailed,
-      startedAt,
+      startedAt: worker.startedAt,
       endedAt,
       branch: sandbox.branch,
     };

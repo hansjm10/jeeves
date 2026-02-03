@@ -1368,6 +1368,17 @@ export class ParallelRunner {
 
     // If this is spec_check phase, update canonical statuses and merge passed branches
     if (phase === 'task_spec_check') {
+      // If wave timed out, handle cleanup per §6.2.8 "Timeout stop" (no merging)
+      if (this.timedOut) {
+        await this.handleSpecCheckWaveTimeout(waveId, outcomes);
+        return {
+          waveResult,
+          continueExecution: false,
+          timedOut: true,
+          timeoutType: this.timeoutType ?? undefined,
+        };
+      }
+
       await updateCanonicalTaskStatuses(this.options.canonicalStateDir, outcomes);
 
       // Copy worker task-feedback.md to canonical for failed tasks (§6.2.5)
@@ -1384,31 +1395,6 @@ export class ParallelRunner {
                 `[WORKER ${outcome.taskId}] Copied task feedback to canonical: ${copied}`,
               );
             }
-          }
-        }
-      }
-
-      // Write synthetic feedback for timed-out tasks (§6.2.5)
-      if (this.timedOut) {
-        for (const outcome of outcomes) {
-          if (outcome.status === 'timed_out') {
-            const timeoutType = this.timeoutType ?? 'unknown';
-            await writeCanonicalFeedback(
-              this.options.canonicalStateDir,
-              outcome.taskId,
-              `Task timed out during ${phase}`,
-              `The task was terminated due to ${timeoutType}_timeout during the ${phase} phase.\n\n` +
-              `## Wave Details\n` +
-              `- Wave ID: ${waveId}\n` +
-              `- Run ID: ${this.options.runId}\n` +
-              `- Timeout Type: ${timeoutType}\n\n` +
-              `## Artifacts Location\n` +
-              `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n\n` +
-              `The task is eligible for retry in the next wave.`,
-            );
-            await this.options.appendLog(
-              `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
-            );
           }
         }
       }
@@ -1578,26 +1564,31 @@ export class ParallelRunner {
       );
     }
 
-    // 2. Write synthetic feedback for each timed-out task
+    // 2. Write synthetic feedback for ALL wave tasks (per §6.2.8 "Timeout stop")
+    // Per design: "Mark all tasks in activeWaveTaskIds as status='failed' and write synthetic feedback"
     for (const outcome of outcomes) {
-      if (outcome.status === 'timed_out') {
-        await writeCanonicalFeedback(
-          this.options.canonicalStateDir,
-          outcome.taskId,
-          `Task timed out during implement_task`,
-          `The task was terminated due to ${timeoutType}_timeout during the implement_task phase.\n\n` +
-          `## Wave Details\n` +
-          `- Wave ID: ${waveId}\n` +
-          `- Run ID: ${this.options.runId}\n` +
-          `- Timeout Type: ${timeoutType}\n\n` +
-          `## Artifacts Location\n` +
-          `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n\n` +
-          `The task is eligible for retry in the next wave.`,
-        );
-        await this.options.appendLog(
-          `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
-        );
-      }
+      const workerStatus = outcome.status === 'timed_out' ? 'terminated due to timeout' :
+        outcome.status === 'passed' ? 'completed before wave timeout' :
+        outcome.status === 'failed' ? 'failed before wave timeout' : 'interrupted by timeout';
+      await writeCanonicalFeedback(
+        this.options.canonicalStateDir,
+        outcome.taskId,
+        `Task affected by wave timeout during implement_task`,
+        `The wave was terminated due to ${timeoutType}_timeout during the implement_task phase.\n\n` +
+        `## Worker Status\n` +
+        `- Status at timeout: ${workerStatus}\n` +
+        `- Exit code: ${outcome.exitCode ?? 'N/A'}\n\n` +
+        `## Wave Details\n` +
+        `- Wave ID: ${waveId}\n` +
+        `- Run ID: ${this.options.runId}\n` +
+        `- Timeout Type: ${timeoutType}\n\n` +
+        `## Artifacts Location\n` +
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n\n` +
+        `The task is eligible for retry in the next wave.`,
+      );
+      await this.options.appendLog(
+        `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
+      );
     }
 
     // 3. Update canonical status flags (so workflow returns to implement_task for retries)
@@ -1618,6 +1609,130 @@ export class ParallelRunner {
         `[PARALLEL] Cleared parallel state and updated canonical status flags`,
       );
     }
+
+    // 5. Write progress entry for timeout
+    await this.appendTimeoutProgressEntry(waveId, 'implement_task', outcomes);
+  }
+
+  /**
+   * Handles timeout during task_spec_check wave.
+   *
+   * Per §6.2.8 "Timeout stop":
+   * - Mark all tasks in activeWaveTaskIds as status="failed" (regardless of individual outcomes)
+   * - Write synthetic feedback for each wave task explaining the timeout
+   * - Clear issue.json.status.parallel
+   * - Update canonical status flags (taskFailed=true, hasMoreTasks=true)
+   * - Skip merging (per design: timeout = failed, no integration)
+   */
+  private async handleSpecCheckWaveTimeout(
+    waveId: string,
+    outcomes: WorkerOutcome[],
+  ): Promise<void> {
+    const timeoutType = this.timeoutType ?? 'unknown';
+
+    // 1. Mark ALL wave tasks as failed in canonical tasks.json (not based on individual outcomes)
+    const tasksPath = path.join(this.options.canonicalStateDir, 'tasks.json');
+    try {
+      const tasksRaw = await fs.readFile(tasksPath, 'utf-8');
+      const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+
+      for (const outcome of outcomes) {
+        const task = tasksJson.tasks.find((t) => t.id === outcome.taskId);
+        if (task) {
+          task.status = 'failed';
+        }
+      }
+
+      await writeJsonAtomic(tasksPath, tasksJson);
+      await this.options.appendLog(
+        `[PARALLEL] Marked ${outcomes.length} task(s) as failed due to timeout`,
+      );
+    } catch (err) {
+      await this.options.appendLog(
+        `[PARALLEL] Warning: Could not update tasks.json: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // 2. Write synthetic feedback for ALL wave tasks (per §6.2.8)
+    for (const outcome of outcomes) {
+      const workerStatus = outcome.status === 'timed_out' ? 'terminated due to timeout' :
+        outcome.status === 'passed' ? 'completed before wave timeout' :
+        outcome.status === 'failed' ? 'failed before wave timeout' : 'interrupted by timeout';
+      const specCheckResult = outcome.taskPassed ? 'passed spec-check before timeout' :
+        outcome.taskFailed ? 'failed spec-check before timeout' : 'spec-check interrupted by timeout';
+      await writeCanonicalFeedback(
+        this.options.canonicalStateDir,
+        outcome.taskId,
+        `Task affected by wave timeout during task_spec_check`,
+        `The wave was terminated due to ${timeoutType}_timeout during the task_spec_check phase.\n\n` +
+        `## Worker Status\n` +
+        `- Status at timeout: ${workerStatus}\n` +
+        `- Spec-check result: ${specCheckResult}\n` +
+        `- Exit code: ${outcome.exitCode ?? 'N/A'}\n\n` +
+        `## Wave Details\n` +
+        `- Wave ID: ${waveId}\n` +
+        `- Run ID: ${this.options.runId}\n` +
+        `- Timeout Type: ${timeoutType}\n\n` +
+        `## Note\n` +
+        `Because the wave timed out, no branches were merged. The task is marked as failed ` +
+        `and is eligible for retry in the next wave.\n\n` +
+        `## Artifacts Location\n` +
+        `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.options.runId}/workers/${outcome.taskId}/\n`,
+      );
+      await this.options.appendLog(
+        `[WORKER ${outcome.taskId}] Wrote synthetic timeout feedback`,
+      );
+    }
+
+    // 3. Update canonical status flags (so workflow returns to implement_task for retries)
+    const issueJson = await readIssueJson(this.options.canonicalStateDir);
+    if (issueJson) {
+      const status = (issueJson.status as Record<string, unknown>) ?? {};
+      status.taskPassed = false;
+      status.taskFailed = true;
+      status.hasMoreTasks = true;
+      status.allTasksComplete = false;
+
+      // 4. Clear parallel state
+      delete status.parallel;
+
+      issueJson.status = status;
+      await writeIssueJson(this.options.canonicalStateDir, issueJson);
+      await this.options.appendLog(
+        `[PARALLEL] Cleared parallel state and updated canonical status flags`,
+      );
+    }
+
+    // 5. Write combined wave progress entry for timeout
+    await this.appendTimeoutProgressEntry(waveId, 'task_spec_check', outcomes);
+  }
+
+  /**
+   * Appends a progress entry for wave timeout.
+   */
+  private async appendTimeoutProgressEntry(
+    waveId: string,
+    phase: WorkerPhase,
+    outcomes: WorkerOutcome[],
+  ): Promise<void> {
+    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
+    const timeoutType = this.timeoutType ?? 'unknown';
+    const progressEntry = `\n## [${nowIso()}] - Parallel Wave Timeout\n\n` +
+      `### Wave\n` +
+      `- Wave ID: ${waveId}\n` +
+      `- Phase: ${phase}\n` +
+      `- Tasks: ${outcomes.map((o) => o.taskId).join(', ')}\n` +
+      `- Timeout Type: ${timeoutType}\n\n` +
+      `### Worker Statuses at Timeout\n` +
+      outcomes.map((o) => `- ${o.taskId}: ${o.status} (exit code: ${o.exitCode ?? 'N/A'})`).join('\n') + '\n\n' +
+      `### Action\n` +
+      `- All wave tasks marked as failed\n` +
+      `- Synthetic feedback written for each task\n` +
+      `- Parallel state cleared from issue.json\n` +
+      `- No branches merged (due to timeout)\n` +
+      `- Run ended as failed (eligible for retry)\n\n` +
+      `---\n`;
+    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
   }
 
   /**
@@ -1856,13 +1971,14 @@ export async function handleWaveTimeoutCleanup(
   const { activeWaveTaskIds, activeWaveId } = parallelState;
 
   // 1. Mark all activeWaveTaskIds as failed in canonical tasks.json
+  // Per §6.2.8: ALL wave tasks should be marked failed on timeout, regardless of their individual outcomes
   const tasksPath = path.join(stateDir, 'tasks.json');
   try {
     const tasksRaw = await fs.readFile(tasksPath, 'utf-8');
     const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
 
     for (const task of tasksJson.tasks) {
-      if (activeWaveTaskIds.includes(task.id) && task.status === 'in_progress') {
+      if (activeWaveTaskIds.includes(task.id)) {
         task.status = 'failed';
         result.tasksMarkedFailed.push(task.id);
       }

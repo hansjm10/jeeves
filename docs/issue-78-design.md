@@ -1,0 +1,314 @@
+# Design Document: Enable Parallel Task Execution for Independent Tasks (Issue #78)
+
+## Document Control
+- **Title**: Enable parallel task execution for independent tasks
+- **Authors**: Jeeves Agent (Codex CLI)
+- **Reviewers**: TBD
+- **Status**: Draft
+- **Last Updated**: 2026-02-03
+- **Related Issues**: https://github.com/hansjm10/jeeves/issues/78
+- **Execution Mode**: AI-led
+
+## 1. Summary
+Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 → T3…`) even when tasks are independent, increasing wall-clock time and iteration counts (as observed in Issue #68). This design adds deterministic dependency tracking (`dependsOn`) and enables bounded parallel execution of unblocked tasks by running each task in an isolated worker worktree/state sandbox, then merging successful results back into the canonical issue branch/state.
+
+## 2. Context & Problem Statement
+- **Background**:
+  - The default workflow (`workflows/default.yaml`) decomposes tasks into `.jeeves/tasks.json` and then runs a task loop via `implement_task` and `task_spec_check`.
+  - Task progression is currently driven by prompts: `prompts/task.spec_check.md` updates `.jeeves/issue.json.status.currentTaskId` and advances to the “next” task, which effectively enforces sequential ordering.
+  - Viewer-server orchestration (`apps/viewer-server/src/runManager.ts`) runs exactly one runner subprocess per iteration and phase.
+- **Problem**:
+  - Independent tasks cannot run concurrently, even when there are no code dependencies.
+  - Large task lists (5–15 tasks) can dominate iteration count and wall-clock time because each task requires at least one implementation iteration and one spec-check iteration.
+- **Forces**:
+  - Concurrency must not introduce filesystem races: multiple writers cannot safely operate in the same git worktree/state directory concurrently.
+  - Task results must be merged deterministically into a single issue branch suitable for a final PR.
+  - Failure handling must be clear: partial success should not corrupt global state, and failures must be retryable.
+
+## 3. Goals & Non-Goals
+- **Goals**:
+  1. Respect explicit task dependencies using `dependsOn` in `.jeeves/tasks.json`.
+  2. Identify “ready” tasks (no unmet dependencies) and execute up to `maxParallelTasks` concurrently.
+  3. Isolate concurrent task execution to avoid state/log races by using per-task worker sandboxes.
+  4. Merge successful task results into the canonical issue branch in a deterministic, auditable way.
+  5. Provide clear observability for concurrent task runs (task IDs, PIDs, statuses, logs).
+- **Non-Goals**:
+  - Perfect, always-conflict-free merging of parallel work. Merge conflicts are expected in some cases and will fall back to manual intervention or sequential reruns.
+  - Automatic inference of dependencies from code; dependencies remain explicit in the task definition (`dependsOn`).
+  - Running parallel tasks that write to the same files safely without merge/conflict risk; the system will be conservative where possible.
+
+## 4. Stakeholders, Agents & Impacted Surfaces
+- **Primary Stakeholders**: Maintainers running Jeeves workflows via the viewer.
+- **Agent Roles**:
+  - Task Decomposition Agent (`prompts/task.decompose.md`): produces `.jeeves/tasks.json` including `dependsOn`.
+  - Implementation Agent (`prompts/task.implement.md`): implements one task per worker sandbox.
+  - Spec Check Agent (`prompts/task.spec_check.md`): verifies one task per worker sandbox and records pass/fail and feedback.
+  - Viewer-server Orchestrator (code): schedules ready tasks, manages worker sandboxes, and merges results.
+- **Affected Packages/Services**:
+  - Viewer-server: `apps/viewer-server` (run orchestration, process management, API/status streaming).
+  - Runner: `packages/runner` (CLI/args for running phases against explicit state/work directories).
+  - Core: `packages/core` (optional: helper paths/types for worker sandboxes).
+  - Viewer UI: `apps/viewer` (optional/MVP-scope: surface multiple concurrent task runs).
+- **Compatibility Considerations**:
+  - `.jeeves/tasks.json` already includes `dependsOn` in the task decomposition prompt; this design makes `dependsOn` operational.
+  - Parallel execution should be opt-in (configuration) to preserve existing sequential semantics and reduce rollout risk.
+
+## 5. Current State
+- Task loop is sequential and prompt-driven:
+  - `.jeeves/tasks.json` contains `tasks[].status` and `tasks[].dependsOn`, but `dependsOn` is not used by scheduling logic.
+  - `prompts/task.spec_check.md` advances `.jeeves/issue.json.status.currentTaskId` after a pass.
+- Viewer-server runs one subprocess at a time:
+  - `apps/viewer-server/src/runManager.ts` has a single `proc` and a single `RunStatus` representing one in-flight runner process.
+  - Logs and SDK output are single-stream (`.jeeves/last-run.log`, `.jeeves/sdk-output.json`, `.jeeves/viewer-run.log`).
+
+## 6. Proposed Solution
+### 6.1 Architecture Overview
+- Add a deterministic task scheduler in viewer-server that:
+  - parses `.jeeves/tasks.json`,
+  - validates `dependsOn` as a DAG (no missing IDs, no cycles),
+  - computes the ready set (`status=pending` and all dependencies `status=passed`),
+  - selects up to `maxParallelTasks` to execute concurrently.
+- Execute each selected task inside a worker sandbox:
+  - a dedicated git worktree on a dedicated branch,
+  - a dedicated `.jeeves/` state directory containing copies of `issue.json`, `tasks.json`, and per-task logs/feedback.
+- For each worker task:
+  1. Run `implement_task` once (execute).
+  2. Run `task_spec_check` once (evaluate).
+  3. Determine pass/fail from worker `.jeeves/issue.json.status.taskPassed/taskFailed` and capture `.jeeves/task-feedback.md` on failure.
+- After all workers in a wave complete:
+  - merge successful worker branches into the canonical issue branch,
+  - update canonical `.jeeves/tasks.json` statuses and canonical `.jeeves/progress.txt`,
+  - persist a wave summary artifact for audit/debug.
+
+### 6.2 Detailed Design
+#### 6.2.1 Configuration
+- Add an opt-in configuration to `.jeeves/issue.json`:
+  - `settings.taskExecution.mode`: `"sequential"` (default) or `"parallel"`.
+  - `settings.taskExecution.maxParallelTasks`: integer ≥ 1 (default `1`).
+- Add a run-time override in `POST /api/run` body:
+  - `max_parallel_tasks?: number` (optional; overrides `settings.taskExecution.maxParallelTasks` for this run only).
+  - If omitted, use issue settings; if neither present, default to `1`.
+
+#### 6.2.2 Task Graph and Readiness
+- Treat `.jeeves/tasks.json.tasks` as the source of truth for task definitions.
+- Validation rules (hard fail before starting parallel execution):
+  1. Task IDs are unique.
+  2. `dependsOn` entries reference existing task IDs.
+  3. Dependency graph is acyclic (detect cycles via DFS/Kahn’s algorithm).
+  4. A task is “ready” iff:
+     - `task.status === "pending"` (or `"failed"` if retry mode is enabled; see Open Questions),
+     - and for every `depId` in `dependsOn`, the referenced task has `status === "passed"`.
+- Selection rules:
+  - Prefer stable ordering for determinism (e.g., by task list order, then task ID).
+  - Do not schedule tasks whose dependencies are failed or in_progress.
+
+#### 6.2.3 Worker Sandbox Layout
+For a canonical issue state directory `STATE` and worktree `WORK`, create worker sandboxes under a run-scoped directory:
+- Worker state dir: `STATE/.runs/<runId>/workers/<taskId>/`
+- Worker worktree dir: `WORK/.runs/<runId>/workers/<taskId>/`
+
+Worker initialization steps:
+1. Create the worker state directory and write:
+   - `issue.json`: copy of canonical `.jeeves/issue.json` with:
+     - `status.currentTaskId = <taskId>`
+     - clear task-loop flags that can be stale (`taskPassed/taskFailed/commitFailed/pushFailed/hasMoreTasks/allTasksComplete`).
+   - `tasks.json`: copy of canonical `.jeeves/tasks.json`.
+   - Optional: copy canonical `.jeeves/task-feedback/<taskId>.md` into worker `.jeeves/task-feedback.md` for retries.
+2. Create a worker git worktree:
+   - Branch name: `issue/<N>-<taskId>` (e.g., `issue/78-T1`).
+   - Base ref: the current HEAD of the canonical issue worktree branch (ensures workers include prior merged tasks).
+3. Create a `.jeeves` symlink in the worker worktree pointing to the worker state directory (same pattern as `apps/viewer-server/src/init.ts`).
+
+Cleanup behavior:
+- On success: remove worker worktree and worker state directory after merge and archival.
+- On failure: keep worker directories by default for debugging (configurable; see Open Questions).
+
+#### 6.2.4 Parallel Process Management
+- Extend viewer-server orchestration to manage multiple runner subprocesses concurrently:
+  - Track a map of active worker processes keyed by `taskId`.
+  - For each worker, run two subprocesses in sequence (implement then spec check), but run workers in parallel.
+- Logging requirements:
+  - Prefix viewer-run log lines with taskId to make interleaving readable:
+    - Example: `[WORKER T1][STDOUT] ...`
+  - Persist per-worker `last-run.log` and `sdk-output.json` under the worker state dir for drill-down.
+
+Timeouts:
+- Apply `iteration_timeout_sec` per worker phase invocation.
+- Apply `inactivity_timeout_sec` per worker based on that worker’s `last-run.log` growth.
+- If a worker times out, mark it failed with a deterministic reason and stop scheduling additional tasks in the wave.
+
+#### 6.2.5 Result Aggregation and Merge
+After a wave completes:
+1. Read each worker’s verdict:
+   - `taskPassed === true` → passed
+   - `taskFailed === true` → failed
+   - Otherwise → treat as failed (unverifiable).
+2. Merge passed worker branches into canonical issue branch deterministically:
+   - Merge order: stable sort by task ID.
+   - Merge strategy (MVP): fast-forward is not required; use a normal merge or cherry-pick to keep task commits attributable.
+   - If a merge conflict occurs:
+     - Abort the merge (`git merge --abort`),
+     - mark the overall run as errored,
+     - write a clear remediation message to `.jeeves/progress.txt` including the conflicting task IDs and branches.
+3. Update canonical `.jeeves/tasks.json`:
+   - Set `task.status = "passed"` or `"failed"` for each task in the wave.
+4. Persist a wave summary artifact in canonical state:
+   - `STATE/.runs/<runId>/waves/<waveId>.json` containing:
+     - scheduled task IDs, start/end timestamps,
+     - per-task verdict, worker branch, exit codes, timeout flags,
+     - merge result and merge order.
+
+Failure propagation:
+- If any task in the wave fails:
+  - do not schedule new tasks until failures are addressed,
+  - copy worker `.jeeves/task-feedback.md` into canonical `STATE/task-feedback/<taskId>.md` for later retries,
+  - expose failed tasks in UI/status for operator action.
+
+#### 6.2.6 API and Status Contracts
+If the viewer UI needs to show concurrent tasks, extend the run status payload (broadcast via websocket/SSE):
+- `run.workers`: array of:
+  - `taskId: string`
+  - `phase: "implement_task" | "task_spec_check"`
+  - `pid: number | null`
+  - `started_at: string`
+  - `ended_at: string | null`
+  - `returncode: number | null`
+  - `status: "running" | "passed" | "failed" | "timed_out"`
+
+`POST /api/run` additions:
+- Request:
+  - `max_parallel_tasks?: number`
+- Response:
+  - unchanged schema, but `run.max_parallel_tasks` is included for observability (optional).
+Status codes:
+- `200` on successful start.
+- `400` for invalid `max_parallel_tasks` (non-integer, < 1, too large).
+- `409` if a run is already active.
+- `500` for orchestration failures (e.g., worker sandbox creation errors).
+
+### 6.3 Operational Considerations
+- **Deployment**:
+  - No external services required; feature ships as code changes to viewer-server/runner and (optionally) viewer UI.
+  - Keep feature behind opt-in config during rollout.
+- **Telemetry & Observability**:
+  - Persist wave summaries and worker logs for auditability.
+  - Ensure viewer-run.log prefixes include taskId for interleaving clarity.
+- **Security & Compliance**:
+  - Do not log secrets from environment variables or provider credentials.
+  - Worker state dirs may contain model outputs; keep them under the existing `.jeeves` state directory and respect existing data retention expectations.
+
+## 7. Work Breakdown & Delivery Plan
+### 7.1 Issue Map
+| Issue Title | Scope Summary | Proposed Assignee/Agent | Dependencies | Acceptance Criteria |
+|-------------|---------------|-------------------------|--------------|---------------------|
+| feat(viewer-server): add deterministic task dependency scheduler | Parse/validate `.jeeves/tasks.json`, build DAG, compute ready set | Runtime Implementation Agent | Design approval | Scheduler rejects cycles/missing IDs; ready selection deterministic; unit tests added |
+| feat(viewer-server): add worker sandbox creation utilities | Create per-task state/worktree, `.jeeves` link, branch naming | Runtime Implementation Agent | Scheduler utilities | Worker dirs created/cleaned correctly; branch based on canonical HEAD; unit tests where feasible |
+| feat(viewer-server): execute tasks in parallel waves | Run implement/spec phases concurrently with max concurrency and timeouts | Runtime Implementation Agent | Sandbox utilities | Up to N workers run; logs are prefixed; timeouts fail deterministically |
+| feat(viewer-server): merge worker results into canonical branch | Merge passed branches; update canonical tasks state and wave summaries | Runtime Implementation Agent | Parallel execution | Passed tasks merged in stable order; conflicts abort cleanly; canonical tasks.json updated |
+| feat(api/viewer): surface worker status and configuration | API param `max_parallel_tasks` and run status includes workers | Viewer + API Agent | Parallel execution | API validates param; viewer shows active workers and statuses |
+| test: cover parallel scheduling and merge failure modes | Add tests for DAG validation, selection, worker lifecycle, merge errors | Test Agent | All above | `pnpm test` passes; new tests cover cycles, timeouts, merge conflicts |
+
+### 7.2 Milestones
+- **Phase 1**: Deterministic scheduling + worker sandbox execution (no UI)
+  - Gating: unit tests for scheduler; parallel worker logs prefixed; feature behind config.
+- **Phase 2**: UI and API surfacing
+  - Gating: viewer shows worker list/status; operator can diagnose failures.
+
+### 7.3 Coordination Notes
+- **Hand-off Package**:
+  - Key files: `apps/viewer-server/src/runManager.ts`, `apps/viewer-server/src/init.ts`, `packages/runner/src/cli.ts`, prompt files under `prompts/`.
+  - Artifacts: `.jeeves/tasks.json`, `.jeeves/issue.json`, `.jeeves/progress.txt`.
+- **Communication Cadence**:
+  - Review checkpoint after Phase 1 to validate concurrency/merge semantics before UI changes.
+
+## 8. Agent Guidance & Guardrails
+- **Context Packets**:
+  - Read and understand `.jeeves/tasks.json` schema and existing prompts (`prompts/task.decompose.md`, `prompts/task.implement.md`, `prompts/task.spec_check.md`).
+  - Inspect `apps/viewer-server/src/runManager.ts` process lifecycle and logging patterns.
+- **Prompting & Constraints**:
+  - Keep parallel execution opt-in and bounded (`maxParallelTasks`).
+  - Prefer deterministic, conservative behavior over “smart” heuristics in scheduling/merging.
+- **Safety Rails**:
+  - Never run multiple agents in the same worktree/state directory concurrently.
+  - Abort safely on merge conflicts; do not attempt auto-resolution.
+  - Do not delete worker artifacts on failure unless explicitly configured.
+- **Validation Hooks**:
+  - `pnpm lint && pnpm typecheck && pnpm test`
+  - Manual sanity: start viewer-server, run a small multi-task issue with `max_parallel_tasks=2`, confirm logs and branch merges.
+
+## 9. Alternatives Considered
+1. **In-place parallelism in a single worktree**: rejected due to unavoidable filesystem and `.jeeves/*` races.
+2. **Prompt-only scheduling (agents pick tasks with locks)**: rejected because it makes orchestration non-deterministic and harder to test.
+3. **Parallelizing only evaluation phases**: insufficient; implementation time dominates for many tasks.
+4. **Always create a PR per task and merge via GitHub**: higher overhead; requires GitHub API integration and complicates local runs.
+
+## 10. Testing & Validation Plan
+- **Unit / Integration**:
+  - DAG validation:
+    - missing dependency ID fails
+    - cycle fails with clear message
+    - ready-set computation matches expected tasks for mixed statuses
+  - Wave selection:
+    - stable ordering
+    - max concurrency respected
+  - Worker lifecycle:
+    - worker dirs created, `.jeeves` link present, cleanup on success
+  - Merge handling:
+    - successful merge updates canonical tasks.json
+    - merge conflict aborts and writes progress entry
+- **Performance**:
+  - Smoke benchmark: run with 2–3 independent tasks and confirm wall-clock reduction vs sequential.
+- **Tooling / A11y**:
+  - If UI is added: verify Watch page shows worker list and is navigable without relying on color alone.
+
+## 11. Risks & Mitigations
+- **Merge conflicts reduce value of parallelism**:
+  - Mitigation: default to conservative concurrency; prefer tasks with disjoint `filesAllowed` patterns when selecting a wave (optional enhancement).
+- **Complexity in orchestration and debug**:
+  - Mitigation: persist wave summaries and keep per-worker artifacts on failure.
+- **Stale or conflicting status flags**:
+  - Mitigation: worker issue.json initialization must clear task-loop flags; canonical state updates happen only in orchestrator code.
+- **Provider cost increases**:
+  - Mitigation: cap `maxParallelTasks`, and optionally limit parallelism for expensive phases (Open Questions).
+
+## 12. Rollout Plan
+- **Milestones**:
+  1. Ship behind opt-in config in `.jeeves/issue.json.settings.taskExecution.mode="parallel"`.
+  2. Add API override parameter and basic UI surfacing.
+  3. Consider making parallel the default once stable.
+- **Migration Strategy**:
+  - No migration required; existing task lists continue to work. `dependsOn` remains optional.
+- **Communication**:
+  - Document usage in `docs/` and add a brief note to viewer-server API docs if the API changes ship.
+
+## 13. Open Questions
+1. Should failed tasks be eligible for automatic retry scheduling (`status="failed"` treated as runnable) or require manual operator reset to `"pending"`?
+2. Should successful worker artifacts be deleted by default or retained under `.jeeves/.runs/` for auditing?
+3. Should merge strategy be `merge`, `rebase`, or `cherry-pick` (and should we enforce “one commit per task”)?
+4. Should the scheduler consider `filesAllowed` overlap heuristics to avoid parallelizing likely-conflicting tasks?
+5. Do we want to expose `max_parallel_tasks` in the UI, the API only, or also via environment variables?
+
+## 14. Follow-Up Work
+- Add a dedicated UI for per-task logs and SDK outputs (drill-down by taskId).
+- Add a “dry run” mode that computes the parallel schedule without executing tasks.
+- Add optional task metadata for conflict avoidance (e.g., `exclusivePaths`, `parallelSafe`).
+
+## 15. References
+- `apps/viewer-server/src/runManager.ts`
+- `apps/viewer-server/src/init.ts`
+- `packages/runner/src/cli.ts`
+- `prompts/task.decompose.md`
+- `prompts/task.implement.md`
+- `prompts/task.spec_check.md`
+- GitHub Issue #78: https://github.com/hansjm10/jeeves/issues/78
+
+## Appendix A — Glossary
+- **Canonical state/worktree**: The primary `.jeeves/` state directory and issue worktree used to produce the final PR branch.
+- **Worker sandbox**: Per-task isolated state directory + git worktree/branch used to run a task concurrently without races.
+- **Wave**: A batch of concurrently executed tasks selected from the ready set (bounded by `maxParallelTasks`).
+
+## Appendix B — Change Log
+| Date       | Author | Change Summary |
+|------------|--------|----------------|
+| 2026-02-03 | Jeeves Agent (Codex CLI) | Initial draft |
+

@@ -66,7 +66,7 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
 - Add a deterministic task scheduler in viewer-server that:
   - parses `.jeeves/tasks.json`,
   - validates `dependsOn` as a DAG (no missing IDs, no cycles),
-  - computes the ready set (`status=pending` and all dependencies `status=passed`),
+  - computes the ready set (`status ∈ {"pending","failed"}` and all dependencies `status="passed"`),
   - selects up to `maxParallelTasks` to execute concurrently.
 - Execute each selected task inside a worker sandbox:
   - a dedicated git worktree on a dedicated branch,
@@ -101,8 +101,13 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
      - `task.status` is `"pending"` or `"failed"` (both are retryable),
      - and for every `depId` in `dependsOn`, the referenced task has `status === "passed"`.
 - Selection rules:
-  - Prefer stable ordering for determinism (e.g., by task list order, then task ID).
-  - Prefer retries first: schedule `"failed"` tasks before `"pending"` tasks when both are ready.
+  - Deterministic ordering (no examples; implementations MUST match):
+    1. Build the ready list by filtering `.jeeves/tasks.json.tasks` with the “ready to implement” predicate above.
+    2. Sort the ready list by the following tie-breakers, in order:
+       - `task.status` rank: `"failed"` before `"pending"`.
+       - task list index in `.jeeves/tasks.json.tasks` (ascending).
+       - `task.id` lexicographic ascending using a strict, locale-independent string compare (no numeric collation).
+    3. Select the first `maxParallelTasks` tasks in that sorted order.
   - Do not schedule tasks whose dependencies are `"failed"` or `"in_progress"`.
   - When a task is selected for an `implement_task` wave, update canonical `.jeeves/tasks.json` immediately to set `task.status = "in_progress"` (reservation) before spawning worker processes.
   - Retry semantics are automatic (aligned with the existing task loop): a task that fails `task_spec_check` becomes `"failed"` and is eligible to be re-scheduled in a later `implement_task` wave without manual operator edits.
@@ -181,7 +186,7 @@ After a wave completes:
    - `taskFailed === true` → failed
    - Otherwise → treat as failed (unverifiable).
 2. Merge passed worker branches into canonical issue branch deterministically:
-   - Merge order: stable sort by task ID.
+   - Merge order: `taskId` lexicographic ascending using a strict, locale-independent string compare (no numeric collation).
    - Merge strategy: `git merge --no-ff` (one merge commit per task branch; preserves task commit history and makes attribution clear).
    - Passed tasks are merged even if other tasks in the same wave fail; partial successes are preserved.
    - If a merge conflict occurs while merging a passed task:
@@ -266,10 +271,54 @@ Required canonical status fields after a `task_spec_check` wave (to satisfy `wor
 
 Wave linkage across canonical phases:
 - Persist the active wave selection in canonical `issue.json.status.parallel` so the following canonical phase is deterministic:
+  - `status.parallel.runId: string`
   - `status.parallel.activeWaveId: string`
+  - `status.parallel.activeWavePhase: "implement_task" | "task_spec_check"`
   - `status.parallel.activeWaveTaskIds: string[]`
+  - `status.parallel.reservedStatusByTaskId: Record<string, "pending" | "failed">`
+  - `status.parallel.reservedAt: string` (ISO timestamp)
 - In canonical `implement_task`: populate `activeWave*` immediately after selecting tasks (before spawning workers).
 - In canonical `task_spec_check`: consume `activeWaveTaskIds`, then clear `status.parallel` after the wave is summarized/merged.
+
+#### 6.2.8 Crash/Stop/Resume Semantics (Parallel Mode)
+Parallel mode MUST be restart-safe and MUST not leave canonical tasks permanently stuck in `status="in_progress"`.
+
+**Invariant**: A canonical task may be `status="in_progress"` only when `issue.json.status.parallel` is present and the task ID is listed in `status.parallel.activeWaveTaskIds`.
+
+**Start-of-run recovery (before scheduling any new work)**:
+1. Load canonical `.jeeves/issue.json` and `.jeeves/tasks.json`.
+2. If any task has `status="in_progress"` and either:
+   - `issue.json.status.parallel` is missing, or
+   - the task ID is not in `status.parallel.activeWaveTaskIds`,
+   then deterministically recover it by:
+   - setting `task.status = "failed"`,
+   - writing a synthetic canonical feedback file `.jeeves/task-feedback/<taskId>.md` that states the task was recovered from an orphaned `in_progress` reservation,
+   - leaving any existing worker artifacts untouched.
+
+**Resume an active wave**:
+If `issue.json.status.parallel` is present at run start, the orchestrator MUST resume that exact wave (no new ready-task selection):
+- If `issue.json.phase === "implement_task"`:
+  - Require `status.parallel.activeWavePhase === "implement_task"` (if not, treat as state corruption and set `activeWavePhase` to `"implement_task"` and append a warning to `.jeeves/progress.txt`).
+  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker implement process unless a worker “implement done” marker already exists in `STATE/.runs/<runId>/workers/<taskId>/` (marker format is an implementation detail; it MUST be deterministic and written only after the worker exits).
+  - Do not change canonical `.jeeves/tasks.json` statuses during resume; tasks remain `in_progress` until spec-check completes.
+- If `issue.json.phase === "task_spec_check"`:
+  - Require `status.parallel.activeWavePhase === "task_spec_check"` (same corruption handling as above).
+  - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker spec-check process unless a worker “spec-check done” marker already exists in `STATE/.runs/<runId>/workers/<taskId>/`.
+  - After all spec checks complete, run the merge/update routine (§6.2.5) and clear `issue.json.status.parallel`.
+
+**Manual stop**:
+If the operator stops a run while a wave is active:
+1. Terminate all worker processes.
+2. Revert canonical `.jeeves/tasks.json` for the active wave tasks using `status.parallel.reservedStatusByTaskId` (i.e., restore each task to its pre-reservation status of `"pending"` or `"failed"`).
+3. Clear `issue.json.status.parallel`.
+4. Append a progress entry indicating the wave was aborted and where worker artifacts are located (do not delete artifacts).
+
+**Timeout stop (iteration/inactivity)**:
+If the run stops due to `iteration_timeout_sec` or `inactivity_timeout_sec` during an active wave:
+1. Terminate all worker processes.
+2. Mark all tasks in `status.parallel.activeWaveTaskIds` as `status="failed"` and write synthetic feedback explaining the timeout type and wave phase.
+3. Clear `issue.json.status.parallel`.
+4. End the run as failed (so the workflow returns to `implement_task` for retries).
 
 ### 6.3 Operational Considerations
 - **Deployment**:
@@ -286,11 +335,11 @@ Wave linkage across canonical phases:
 ### 7.1 Issue Map
 | Issue Title | Scope Summary | Proposed Assignee/Agent | Dependencies | Acceptance Criteria |
 |-------------|---------------|-------------------------|--------------|---------------------|
-| feat(viewer-server): add deterministic task dependency scheduler | Parse/validate `.jeeves/tasks.json`, build DAG, compute ready set | Runtime Implementation Agent | Design approval | Scheduler rejects cycles/missing IDs; ready selection deterministic; unit tests added |
-| feat(viewer-server): add worker sandbox creation utilities | Create per-task state/worktree, `.jeeves` link, branch naming | Runtime Implementation Agent | Scheduler utilities | Worker dirs created/cleaned correctly; branch based on canonical HEAD; unit tests where feasible |
+| feat(viewer-server): add deterministic task dependency scheduler | Parse/validate `.jeeves/tasks.json`, build DAG, compute ready set | Runtime Implementation Agent | Design approval | Scheduler rejects cycles/missing IDs; ready selection matches §6.2.2 ordering; unit tests added |
+| feat(viewer-server): add worker sandbox creation utilities | Create per-task state/worktree, `.jeeves` link, branch naming | Runtime Implementation Agent | Scheduler utilities | Worker dirs created/cleaned correctly; branch based on canonical HEAD; unit tests cover path selection + cleanup/retention rules |
 | feat(viewer-server): execute tasks in parallel waves | Run implement/spec phases concurrently with max concurrency and timeouts | Runtime Implementation Agent | Sandbox utilities | Up to N workers run; logs are prefixed; timeouts fail deterministically |
 | feat(viewer-server): merge worker results into canonical branch | Merge passed branches; update canonical tasks state and wave summaries | Runtime Implementation Agent | Parallel execution | Passed tasks merged in stable order; conflicts abort cleanly; canonical tasks.json updated |
-| feat(api/viewer): surface worker status and configuration | API param `max_parallel_tasks` and run status includes workers | Viewer + API Agent | Parallel execution | API validates param; viewer shows active workers and statuses |
+| feat(api/viewer): surface worker status and configuration | API param `max_parallel_tasks` and run status includes workers | Viewer + API Agent | Parallel execution | API validates param; viewer Watch page lists active workers (taskId, phase, status) and updates live |
 | test: cover parallel scheduling and merge failure modes | Add tests for DAG validation, selection, worker lifecycle, merge errors | Test Agent | All above | `pnpm test` passes; new tests cover cycles, timeouts, merge conflicts |
 
 ### 7.2 Milestones
@@ -341,6 +390,11 @@ Wave linkage across canonical phases:
   - Merge handling:
     - successful merge updates canonical tasks.json
     - merge conflict aborts and writes progress entry
+  - Orchestration recovery / restart safety:
+    - spawn failure after reservation: reserved tasks are recovered deterministically (no permanent `in_progress`) and `status.parallel` is cleared
+    - stop mid-implement wave: worker processes are terminated; active-wave tasks are restored using `reservedStatusByTaskId`; artifacts are retained
+    - stop between implement/spec-check waves: resume runs spec-check for the recorded `activeWaveTaskIds` (no reselection) and merges/updates canonical state
+    - resume after server restart: starting a new run with `status.parallel` present resumes the wave and produces the same canonical merge/task-status results as an uninterrupted run (using deterministic worker outputs in tests)
 - **Performance**:
   - Smoke benchmark: run with 2–3 independent tasks and confirm wall-clock reduction vs sequential.
 - **Tooling / A11y**:

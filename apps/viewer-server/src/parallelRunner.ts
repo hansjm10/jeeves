@@ -1826,7 +1826,7 @@ export class ParallelRunner {
         `- Exit code: ${outcome.exitCode ?? 'N/A'}\n\n` +
         `## Wave Details\n` +
         `- Wave ID: ${waveId}\n` +
-        `- Run ID: ${this.options.runId}\n` +
+        `- Run ID: ${this.effectiveRunId}\n` +
         `- Timeout Type: ${timeoutType}\n\n` +
         `## Artifacts Location\n` +
         `- Worker state: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/workers/${outcome.taskId}/\n\n` +
@@ -1917,7 +1917,7 @@ export class ParallelRunner {
         `- Exit code: ${outcome.exitCode ?? 'N/A'}\n\n` +
         `## Wave Details\n` +
         `- Wave ID: ${waveId}\n` +
-        `- Run ID: ${this.options.runId}\n` +
+        `- Run ID: ${this.effectiveRunId}\n` +
         `- Timeout Type: ${timeoutType}\n\n` +
         `## Note\n` +
         `Because the wave timed out, no branches were merged. The task is marked as failed ` +
@@ -2192,9 +2192,25 @@ export class ParallelRunner {
       };
     }
 
-    // Wait for exit
+    // Wait for exit or close. When spawn() fails asynchronously (e.g., invalid cwd,
+    // resource exhaustion), Node emits 'error' and then 'close' but NOT 'exit'.
+    // We must handle both to avoid hanging indefinitely.
     const exitCode = await new Promise<number>((resolve) => {
-      proc.once('exit', (code, signal) => resolve(exitCodeFromExitEvent(code, signal)));
+      let resolved = false;
+      const resolveOnce = (code: number) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(code);
+        }
+      };
+      proc.once('exit', (code, signal) => resolveOnce(exitCodeFromExitEvent(code, signal)));
+      // 'close' fires after 'exit' in normal cases, but is the only event in spawn-error cases.
+      // Use the already-set worker.returncode from the 'error' handler if available.
+      proc.once('close', (code, signal) => {
+        // If worker already has a returncode from 'error' handler, use that; otherwise compute from close event
+        const closeCode = worker.returncode !== null ? worker.returncode : exitCodeFromExitEvent(code, signal);
+        resolveOnce(closeCode);
+      });
     });
 
     const endedAt = nowIso();

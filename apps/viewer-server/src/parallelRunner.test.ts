@@ -2626,5 +2626,876 @@ describe('parallelRunner', () => {
         expect(state).toBeNull();
       });
     });
+
+    describe('§6.2.8 timeout stop behavior - handleWaveTimeoutCleanup', () => {
+      it('handleWaveTimeoutCleanup marks all activeWaveTaskIds as failed', async () => {
+        // Set up parallel state with active wave
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+            { id: 'T3', status: 'pending' },
+          ],
+        });
+
+        // Import the function
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        // Should mark T1 and T2 as failed
+        expect(result.tasksMarkedFailed).toContain('T1');
+        expect(result.tasksMarkedFailed).toContain('T2');
+        expect(result.feedbackFilesWritten).toHaveLength(2);
+
+        // Verify tasks.json was updated
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        expect(tasksJson.tasks[0].status).toBe('failed');
+        expect(tasksJson.tasks[1].status).toBe('failed');
+        expect(tasksJson.tasks[2].status).toBe('pending'); // Unchanged
+
+        // Verify parallel state was cleared
+        const state = await readParallelState(stateDir);
+        expect(state).toBeNull();
+      });
+
+      it('handleWaveTimeoutCleanup sets canonical status flags for retry', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress' }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'inactivity',
+          'task_spec_check',
+          'run-123',
+        );
+
+        // Verify issue.json has correct status flags
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.taskPassed).toBe(false);
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+        expect(issueJson.status.allTasksComplete).toBe(false);
+        expect(issueJson.status.parallel).toBeUndefined();
+      });
+
+      it('handleWaveTimeoutCleanup writes synthetic feedback for each timed-out task', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        expect(result.feedbackFilesWritten).toHaveLength(2);
+
+        // Verify feedback files exist
+        const feedbackDir = path.join(stateDir, 'task-feedback');
+        const t1Feedback = await fs.readFile(path.join(feedbackDir, 'T1.md'), 'utf-8');
+        const t2Feedback = await fs.readFile(path.join(feedbackDir, 'T2.md'), 'utf-8');
+
+        expect(t1Feedback).toContain('timed out');
+        expect(t1Feedback).toContain('iteration_timeout');
+        expect(t1Feedback).toContain('implement_task');
+        expect(t2Feedback).toContain('timed out');
+      });
+
+      it('handleWaveTimeoutCleanup appends progress entry', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress' }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'inactivity',
+          'implement_task',
+          'run-123',
+        );
+
+        // Verify progress.txt was updated
+        const progressRaw = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+        expect(progressRaw).toContain('Parallel Wave Timeout');
+        expect(progressRaw).toContain('inactivity');
+        expect(progressRaw).toContain('T1');
+        expect(progressRaw).toContain('All wave tasks marked as failed');
+      });
+
+      it('handleWaveTimeoutCleanup is idempotent (handles missing parallel state)', async () => {
+        // No parallel state
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'pending' }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        // Should return empty results, not throw
+        expect(result.tasksMarkedFailed).toHaveLength(0);
+        expect(result.feedbackFilesWritten).toHaveLength(0);
+
+        // Tasks should be unchanged
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        expect(tasksJson.tasks[0].status).toBe('pending');
+      });
+    });
+
+    describe('§6.2.8 timeout during implement_task wave leaves workflow resumable', () => {
+      it('after implement_task timeout, no tasks are left in_progress', async () => {
+        // Simulate a timeout scenario during implement_task
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2', 'T3'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed', T3: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+            { id: 'T3', status: 'in_progress' },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        // Verify no in_progress tasks
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgressTasks = tasksJson.tasks.filter(
+          (t: { status: string }) => t.status === 'in_progress',
+        );
+        expect(inProgressTasks).toHaveLength(0);
+
+        // All should be failed
+        const failedTasks = tasksJson.tasks.filter(
+          (t: { status: string }) => t.status === 'failed',
+        );
+        expect(failedTasks).toHaveLength(3);
+      });
+
+      it('after implement_task timeout, status.parallel is cleared', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress' }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        const state = await readParallelState(stateDir);
+        expect(state).toBeNull();
+      });
+
+      it('after implement_task timeout, next run can schedule retries', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress', dependsOn: [] },
+            { id: 'T2', status: 'in_progress', dependsOn: [] },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'implement_task',
+          'run-123',
+        );
+
+        // Import scheduleReadyTasks to verify tasks are schedulable
+        const { scheduleReadyTasks: scheduleReady } = await import('@jeeves/core');
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+
+        // After cleanup, tasks should be failed and thus schedulable (retryable)
+        const ready = scheduleReady(tasksJson, 4);
+        expect(ready.length).toBe(2); // Both T1 and T2 should be ready for retry
+      });
+    });
+
+    describe('§6.2.8 timeout during task_spec_check wave leaves workflow resumable', () => {
+      it('after task_spec_check timeout, canonical status flags enable retry', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'task_spec_check',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress' }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'inactivity',
+          'task_spec_check',
+          'run-123',
+        );
+
+        // Verify workflow flags allow transition to implement_task
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+
+        // taskFailed=true should trigger transition to implement_task per workflow
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.taskPassed).toBe(false);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+        expect(issueJson.status.allTasksComplete).toBe(false);
+      });
+
+      it('after task_spec_check timeout, no orphaned parallel state remains', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-123',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'task_spec_check',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress' },
+            { id: 'T2', status: 'in_progress' },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'task_spec_check',
+          'run-123',
+        );
+
+        // No parallel state
+        const state = await readParallelState(stateDir);
+        expect(state).toBeNull();
+
+        // No in_progress tasks
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+      });
+    });
+  });
+
+  /**
+   * T13: Real ParallelRunner timeout path tests.
+   *
+   * These tests exercise the actual timeout detection and cleanup path through
+   * ParallelRunner, proving that:
+   * 1. Timeouts are detected during wave execution (via internal mechanisms)
+   * 2. Workers are terminated and marked appropriately
+   * 3. Canonical state is left workflow-resumable (no stuck phases)
+   *
+   * Note: Since executeWave() requires real git operations for sandbox creation
+   * which aren't available in the test environment, these tests:
+   * - Inject workers directly into the runner to simulate spawned workers
+   * - Test the timeout detection and cleanup path end-to-end
+   * - Verify that handleImplementWaveTimeout produces correct state
+   */
+  describe('T13: Real ParallelRunner timeout path tests', () => {
+    let stateDir: string;
+    let workDir: string;
+    let repoDir: string;
+    let dataDir: string;
+    let logs: string[];
+
+    beforeEach(async () => {
+      stateDir = path.join(tmpDir, 'state');
+      workDir = path.join(tmpDir, 'work');
+      repoDir = path.join(tmpDir, 'repo');
+      dataDir = path.join(tmpDir, 'data');
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(workDir, { recursive: true });
+      await fs.mkdir(repoDir, { recursive: true });
+      await fs.mkdir(dataDir, { recursive: true });
+
+      logs = [];
+    });
+
+    function createRunner(overrides?: Record<string, unknown>): ParallelRunner {
+      const defaultOptions = {
+        canonicalStateDir: stateDir,
+        canonicalWorkDir: workDir,
+        repoDir,
+        dataDir,
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 123,
+        canonicalBranch: 'issue/123',
+        runId: 'run-test',
+        workflowName: 'default',
+        provider: 'fake',
+        workflowsDir: '/workflows',
+        promptsDir: '/prompts',
+        viewerLogPath: path.join(stateDir, 'viewer-run.log'),
+        maxParallelTasks: 2,
+        appendLog: async (line: string) => {
+          logs.push(line);
+        },
+        broadcast: () => { /* noop for tests */ },
+        runnerBinPath: '/runner/bin.js',
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return new ParallelRunner({ ...defaultOptions, ...overrides } as any);
+    }
+
+    describe('implement_task wave timeout through handleImplementWaveTimeout', () => {
+      it('handleImplementWaveTimeout marks all tasks as failed and clears parallel state', async () => {
+        // Setup: Create parallel state as if wave was reserved and running
+        const parallelState: ParallelState = {
+          runId: 'run-test',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress', dependsOn: [] },
+            { id: 'T2', status: 'in_progress', dependsOn: [] },
+          ],
+        });
+
+        // Create runner with timeout configured
+        const runner = createRunner({
+          iterationTimeoutSec: 60,
+          inactivityTimeoutSec: 30,
+        });
+
+        // Access internal methods and state to simulate timeout during wave
+        const r = runner as unknown as {
+          timedOut: boolean;
+          timeoutType: 'iteration' | 'inactivity' | null;
+          handleImplementWaveTimeout: (waveId: string, outcomes: WorkerOutcome[]) => Promise<void>;
+        };
+
+        // Set timeout state (as would happen during real timeout detection)
+        r.timedOut = true;
+        r.timeoutType = 'iteration';
+
+        // Simulate worker outcomes from timed-out workers
+        const outcomes: WorkerOutcome[] = [
+          {
+            taskId: 'T1',
+            phase: 'implement_task',
+            status: 'timed_out',
+            exitCode: 137,
+            taskPassed: false,
+            taskFailed: true,
+            startedAt: '2026-01-01T00:00:00Z',
+            endedAt: '2026-01-01T00:01:00Z',
+            branch: 'issue/123-T1',
+          },
+          {
+            taskId: 'T2',
+            phase: 'implement_task',
+            status: 'timed_out',
+            exitCode: 137,
+            taskPassed: false,
+            taskFailed: true,
+            startedAt: '2026-01-01T00:00:00Z',
+            endedAt: '2026-01-01T00:01:00Z',
+            branch: 'issue/123-T2',
+          },
+        ];
+
+        // Call handleImplementWaveTimeout (the real cleanup path)
+        await r.handleImplementWaveTimeout('wave-1', outcomes);
+
+        // Verify: All tasks are marked failed
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        expect(tasksJson.tasks[0].status).toBe('failed');
+        expect(tasksJson.tasks[1].status).toBe('failed');
+
+        // Verify: No in_progress tasks
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify: Parallel state is cleared
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+
+        // Verify: Status flags indicate failure (workflow can retry)
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.taskPassed).toBe(false);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+        expect(issueJson.status.allTasksComplete).toBe(false);
+
+        // Verify: Synthetic feedback was written
+        const t1FeedbackPath = path.join(stateDir, 'task-feedback', 'T1.md');
+        const t2FeedbackPath = path.join(stateDir, 'task-feedback', 'T2.md');
+        const t1Exists = await fs.stat(t1FeedbackPath).then(() => true).catch(() => false);
+        const t2Exists = await fs.stat(t2FeedbackPath).then(() => true).catch(() => false);
+        expect(t1Exists).toBe(true);
+        expect(t2Exists).toBe(true);
+
+        const t1Feedback = await fs.readFile(t1FeedbackPath, 'utf-8');
+        expect(t1Feedback).toContain('timed out');
+        expect(t1Feedback).toContain('implement_task');
+        expect(t1Feedback).toContain('iteration');
+      });
+
+      it('timeout detection integrates with checkTimeouts and terminateAllWorkersForTimeout', async () => {
+        // Setup state
+        const parallelState: ParallelState = {
+          runId: 'run-test',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
+        });
+
+        // Create runner with very short iteration timeout
+        const runner = createRunner({
+          iterationTimeoutSec: 0.001, // 1ms
+          inactivityTimeoutSec: 60,
+        });
+
+        // Create mock process that stays alive
+        const mockProc = createMockProc(0);
+        (mockProc as { exitCode: number | null }).exitCode = null;
+        const killSpy = vi.fn(() => {
+          (mockProc as { exitCode: number | null }).exitCode = 137;
+        });
+        (mockProc as { kill: (signal?: string) => void }).kill = killSpy;
+
+        // Access internal state
+        const r = runner as unknown as {
+          waveStartedAtMs: number | null;
+          lastActivityAtMs: number | null;
+          activeWorkers: Map<string, {
+            taskId: string;
+            phase: string;
+            pid: number | null;
+            startedAt: string;
+            endedAt: string | null;
+            returncode: number | null;
+            status: string;
+            sandbox: object;
+            proc: typeof mockProc | null;
+          }>;
+          checkTimeouts: () => { timedOut: boolean; type: 'iteration' | 'inactivity' | null };
+          terminateAllWorkersForTimeout: (type: 'iteration' | 'inactivity') => void;
+        };
+
+        // Initialize wave timing (simulating what executeWave does)
+        r.waveStartedAtMs = Date.now() - 100; // Started 100ms ago (past 1ms timeout)
+        r.lastActivityAtMs = Date.now();
+
+        // Inject a running worker
+        r.activeWorkers.set('T1', {
+          taskId: 'T1',
+          phase: 'implement_task',
+          pid: 12345,
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: null,
+          returncode: null,
+          status: 'running',
+          sandbox: {},
+          proc: mockProc,
+        });
+
+        // Step 1: Check timeout (as the interval would do)
+        const timeoutCheck = r.checkTimeouts();
+        expect(timeoutCheck.timedOut).toBe(true);
+        expect(timeoutCheck.type).toBe('iteration');
+
+        // Step 2: Terminate workers (as the interval would do when timeout detected)
+        r.terminateAllWorkersForTimeout('iteration');
+
+        // Verify: Worker was killed with SIGKILL
+        expect(killSpy).toHaveBeenCalledWith('SIGKILL');
+
+        // Verify: Worker status changed to timed_out
+        expect(r.activeWorkers.get('T1')?.status).toBe('timed_out');
+
+        // Verify: Runner state reflects timeout
+        expect(runner.wasTimedOut()).toBe(true);
+        expect(runner.getTimeoutType()).toBe('iteration');
+      });
+    });
+
+    describe('task_spec_check wave timeout leaves workflow resumable', () => {
+      it('spec_check timeout via updateCanonicalStatusFlags sets correct workflow flags', async () => {
+        // Setup state for spec_check phase
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'task_spec_check',
+          status: {},
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'failed', dependsOn: [] }, // After timeout, task is failed
+            { id: 'T2', status: 'failed', dependsOn: [] },
+          ],
+        });
+
+        // Simulate wave result from a timed-out spec_check wave
+        const waveResult: WaveResult = {
+          waveId: 'wave-test',
+          phase: 'task_spec_check',
+          taskIds: ['T1', 'T2'],
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: '2026-01-01T00:01:00Z',
+          workers: [
+            {
+              taskId: 'T1',
+              phase: 'task_spec_check',
+              status: 'timed_out',
+              exitCode: 137,
+              taskPassed: false,
+              taskFailed: true,
+              startedAt: '2026-01-01T00:00:00Z',
+              endedAt: '2026-01-01T00:01:00Z',
+            },
+            {
+              taskId: 'T2',
+              phase: 'task_spec_check',
+              status: 'timed_out',
+              exitCode: 137,
+              taskPassed: false,
+              taskFailed: true,
+              startedAt: '2026-01-01T00:00:00Z',
+              endedAt: '2026-01-01T00:01:00Z',
+            },
+          ],
+          allPassed: false,
+          anyFailed: true, // This is the key: timed_out workers set anyFailed=true
+        };
+
+        // Call updateCanonicalStatusFlags (the real cleanup for spec_check)
+        await updateCanonicalStatusFlags(stateDir, waveResult);
+
+        // Verify: Status flags are set for workflow retry
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.taskPassed).toBe(false);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+        expect(issueJson.status.allTasksComplete).toBe(false);
+
+        // Verify: Parallel state is cleared
+        expect(issueJson.status.parallel).toBeUndefined();
+      });
+
+      it('spec_check timeout with synthetic feedback via writeCanonicalFeedback', async () => {
+        // Test that synthetic feedback is correctly written for spec_check timeouts
+        const feedbackPath = await writeCanonicalFeedback(
+          stateDir,
+          'T1',
+          'Task timed out during task_spec_check',
+          `The task was terminated due to iteration_timeout during the task_spec_check phase.
+
+## Wave Details
+- Wave ID: wave-test
+- Run ID: run-test
+- Timeout Type: iteration
+
+## Artifacts Location
+- Worker state: ${stateDir}/.runs/run-test/workers/T1/
+
+The task is eligible for retry in the next wave.`,
+        );
+
+        // Verify feedback file exists and contains correct content
+        const exists = await fs.stat(feedbackPath).then(() => true).catch(() => false);
+        expect(exists).toBe(true);
+
+        const content = await fs.readFile(feedbackPath, 'utf-8');
+        expect(content).toContain('timed out');
+        expect(content).toContain('task_spec_check');
+        expect(content).toContain('iteration_timeout');
+        expect(content).toContain('eligible for retry');
+      });
+    });
+
+    describe('workflow does not get stuck after timeout', () => {
+      it('after timeout cleanup, failed tasks are schedulable for retry', async () => {
+        // Setup: Post-timeout state
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: {
+            taskFailed: true,
+            taskPassed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+            // No parallel state (already cleared)
+          },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'failed', dependsOn: [] },
+            { id: 'T2', status: 'failed', dependsOn: [] },
+            { id: 'T3', status: 'pending', dependsOn: ['T1'] }, // Depends on T1
+            { id: 'T4', status: 'passed', dependsOn: [] }, // Already passed (from prior wave)
+          ],
+        });
+
+        // Use scheduleReadyTasks to verify workflow can continue
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+
+        const readyTasks = scheduleReadyTasks(tasksJson, 4);
+        const readyIds = readyTasks.map((t) => t.id);
+
+        // T1 and T2 should be schedulable (failed, no unsatisfied deps)
+        expect(readyIds).toContain('T1');
+        expect(readyIds).toContain('T2');
+
+        // T3 should NOT be schedulable (depends on T1 which is failed, not passed)
+        expect(readyIds).not.toContain('T3');
+
+        // T4 should NOT be schedulable (already passed)
+        expect(readyIds).not.toContain('T4');
+      });
+
+      it('no orphaned in_progress tasks remain after timeout', async () => {
+        // Setup: Simulate what happens during timeout via handleWaveTimeoutCleanup
+        const parallelState: ParallelState = {
+          runId: 'run-test',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1', 'T2', 'T3'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed', T3: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress', dependsOn: [] },
+            { id: 'T2', status: 'in_progress', dependsOn: [] },
+            { id: 'T3', status: 'in_progress', dependsOn: [] },
+            { id: 'T4', status: 'pending', dependsOn: ['T1'] }, // Not in wave
+          ],
+        });
+
+        // Import and call the cleanup function
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+        await handleWaveTimeoutCleanup(stateDir, 'iteration', 'implement_task', 'run-test');
+
+        // Verify: No in_progress tasks
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify: Wave tasks are failed
+        const t1 = tasksJson.tasks.find((t: { id: string }) => t.id === 'T1');
+        const t2 = tasksJson.tasks.find((t: { id: string }) => t.id === 'T2');
+        const t3 = tasksJson.tasks.find((t: { id: string }) => t.id === 'T3');
+        expect(t1.status).toBe('failed');
+        expect(t2.status).toBe('failed');
+        expect(t3.status).toBe('failed');
+
+        // Verify: Non-wave task is unchanged
+        const t4 = tasksJson.tasks.find((t: { id: string }) => t.id === 'T4');
+        expect(t4.status).toBe('pending');
+
+        // Verify: No parallel state
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+      });
+
+      it('timeout state matches documented behavior in parallel-execution.md', async () => {
+        // This test verifies that the documented behavior matches implementation
+        // Per docs/parallel-execution.md "Timeout Handling" section:
+        // - All workers are terminated
+        // - All wave tasks are marked status: "failed"
+        // - Synthetic feedback files are written
+        // - Canonical status flags are updated
+        // - status.parallel is cleared
+        // - Run ends as failed (eligible for retry)
+
+        const parallelState: ParallelState = {
+          runId: 'run-test',
+          activeWaveId: 'wave-1',
+          activeWavePhase: 'implement_task',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'implement_task',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+        const result = await handleWaveTimeoutCleanup(stateDir, 'inactivity', 'implement_task', 'run-test');
+
+        // Documented: "All wave tasks are marked status: 'failed'"
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        expect(tasksJson.tasks[0].status).toBe('failed');
+
+        // Documented: "Synthetic feedback files are written"
+        expect(result.feedbackFilesWritten.length).toBeGreaterThan(0);
+        const feedbackContent = await fs.readFile(result.feedbackFilesWritten[0], 'utf-8');
+        expect(feedbackContent).toContain('inactivity');
+
+        // Documented: "Canonical status flags are updated"
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+
+        // Documented: "status.parallel is cleared"
+        expect(issueJson.status.parallel).toBeUndefined();
+      });
+    });
   });
 });

@@ -545,9 +545,23 @@ export class RunManager {
           exitCode = parallelResult.exitCode;
           parallelWaveExecuted = parallelResult.waveExecuted;
 
-          // If wave timed out, stop the run with appropriate reason
+          // If wave timed out, handle cleanup and stop the run
           if (parallelResult.timedOut) {
             this.stopReason = `wave_timeout (parallel ${currentPhase})`;
+
+            // Per §6.2.8: After timeout, evaluate workflow transitions so next run can proceed
+            // The canonical status flags have already been updated by ParallelRunner
+            const timeoutIssue = await readIssueJson(this.stateDir!);
+            if (timeoutIssue) {
+              const nextPhase = engine.evaluateTransitions(currentPhase, timeoutIssue);
+              if (nextPhase && nextPhase !== currentPhase) {
+                timeoutIssue.phase = nextPhase;
+                await writeIssueJson(this.stateDir!, timeoutIssue);
+                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
+                this.broadcast('state', await this.getStateSnapshot());
+              }
+            }
+
             completedNaturally = false;
             break;
           }

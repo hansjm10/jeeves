@@ -15,6 +15,8 @@ import {
   hasCompletionMarker,
   readWorkerIssueJson,
   readWorkerTasksJson,
+  reuseWorkerSandbox,
+  WorkerSandboxReuseError,
   type WorkerSandbox,
 } from './workerSandbox.js';
 
@@ -590,6 +592,217 @@ describe('workerSandbox', () => {
 
       // Should not have called git at all
       expect(mockRunGit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reuseWorkerSandbox', () => {
+    it('throws WorkerSandboxReuseError if state directory does not exist', async () => {
+      const { runGit } = await import('./git.js');
+      const mockRunGit = vi.mocked(runGit);
+      mockRunGit.mockClear();
+
+      const error = await reuseWorkerSandbox({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(WorkerSandboxReuseError);
+      expect((error as WorkerSandboxReuseError).reason).toBe('state_dir_missing');
+    });
+
+    it('throws WorkerSandboxReuseError if branch does not exist', async () => {
+      const { runGit } = await import('./git.js');
+      const mockRunGit = vi.mocked(runGit);
+      mockRunGit.mockClear();
+
+      // Mock git to fail rev-parse (branch doesn't exist)
+      mockRunGit.mockRejectedValueOnce(new Error('fatal: Needed a single revision'));
+
+      // Create state directory
+      const sandbox = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+      await fs.mkdir(sandbox.stateDir, { recursive: true });
+
+      await expect(
+        reuseWorkerSandbox({
+          taskId: 'T1',
+          runId: 'run-123',
+          issueNumber: 42,
+          owner: 'owner',
+          repo: 'repo',
+          canonicalStateDir,
+          repoDir,
+          dataDir,
+          canonicalBranch: 'issue/42',
+        }),
+      ).rejects.toThrow(WorkerSandboxReuseError);
+    });
+
+    it('re-attaches worktree without -B flag when worktree is missing but branch exists', async () => {
+      const { runGit } = await import('./git.js');
+      const mockRunGit = vi.mocked(runGit);
+      mockRunGit.mockClear();
+
+      // Create state directory
+      const sandbox = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+      await fs.mkdir(sandbox.stateDir, { recursive: true });
+
+      // Mock git rev-parse to succeed (branch exists)
+      mockRunGit.mockResolvedValueOnce({ stdout: 'abc123', stderr: '' });
+      // Mock git worktree add to succeed - note: this creates the worktree dir
+      mockRunGit.mockImplementationOnce(async (args) => {
+        // Simulate git worktree add creating the directory
+        if (args.includes('worktree') && args.includes('add')) {
+          await fs.mkdir(sandbox.worktreeDir, { recursive: true });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      // Do NOT create worktree directory - let the function detect it's missing and re-attach
+
+      const result = await reuseWorkerSandbox({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      // Verify git worktree add was called WITHOUT -B flag
+      const worktreeAddCall = mockRunGit.mock.calls.find(
+        (call) => call[0].includes('worktree') && call[0].includes('add'),
+      );
+      expect(worktreeAddCall).toBeDefined();
+
+      const args = worktreeAddCall![0];
+      expect(args).not.toContain('-B');
+      expect(args).toContain('worktree');
+      expect(args).toContain('add');
+      expect(args).toContain(sandbox.worktreeDir);
+      expect(args).toContain(sandbox.branch);
+
+      expect(result.taskId).toBe('T1');
+      expect(result.branch).toBe('issue/42-T1');
+    });
+
+    it('reuses existing worktree when both worktree and branch exist', async () => {
+      const { runGit } = await import('./git.js');
+      const mockRunGit = vi.mocked(runGit);
+      mockRunGit.mockClear();
+
+      // Create state directory
+      const sandbox = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+      await fs.mkdir(sandbox.stateDir, { recursive: true });
+
+      // Create worktree directory (simulating existing worktree)
+      await fs.mkdir(sandbox.worktreeDir, { recursive: true });
+
+      // Mock git rev-parse to succeed (branch exists)
+      mockRunGit.mockResolvedValueOnce({ stdout: 'abc123', stderr: '' });
+
+      const result = await reuseWorkerSandbox({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      // Should NOT call git worktree add since worktree already exists
+      const worktreeAddCall = mockRunGit.mock.calls.find(
+        (call) => call[0].includes('worktree') && call[0].includes('add'),
+      );
+      expect(worktreeAddCall).toBeUndefined();
+
+      expect(result.taskId).toBe('T1');
+      expect(result.branch).toBe('issue/42-T1');
+    });
+
+    it('creates .jeeves symlink pointing to state directory', async () => {
+      const { runGit } = await import('./git.js');
+      const mockRunGit = vi.mocked(runGit);
+      mockRunGit.mockClear();
+
+      // Create state directory
+      const sandbox = getWorkerSandboxPaths({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+      await fs.mkdir(sandbox.stateDir, { recursive: true });
+
+      // Create worktree directory
+      await fs.mkdir(sandbox.worktreeDir, { recursive: true });
+
+      // Mock git rev-parse to succeed (branch exists)
+      mockRunGit.mockResolvedValueOnce({ stdout: 'abc123', stderr: '' });
+
+      await reuseWorkerSandbox({
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 42,
+        owner: 'owner',
+        repo: 'repo',
+        canonicalStateDir,
+        repoDir,
+        dataDir,
+        canonicalBranch: 'issue/42',
+      });
+
+      // Verify .jeeves symlink exists and points to state dir
+      const linkPath = path.join(sandbox.worktreeDir, '.jeeves');
+      const linkTarget = await fs.readlink(linkPath);
+      expect(linkTarget).toBe(sandbox.stateDir);
     });
   });
 });

@@ -486,3 +486,135 @@ export async function readWorkerTasksJson(sandbox: WorkerSandbox): Promise<Recor
     return null;
   }
 }
+
+/** Error thrown when worker sandbox cannot be reused */
+export class WorkerSandboxReuseError extends Error {
+  constructor(
+    message: string,
+    public readonly taskId: string,
+    public readonly reason: 'state_dir_missing' | 'worktree_missing' | 'branch_missing' | 'worktree_attach_failed',
+  ) {
+    super(message);
+    this.name = 'WorkerSandboxReuseError';
+  }
+}
+
+/** Options for reusing an existing worker sandbox */
+export interface ReuseWorkerSandboxOptions {
+  /** Task ID to reuse sandbox for */
+  taskId: string;
+  /** Run ID for this execution wave */
+  runId: string;
+  /** Issue number */
+  issueNumber: number;
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  repo: string;
+  /** Canonical issue state directory */
+  canonicalStateDir: string;
+  /** Path to shared repo clone directory */
+  repoDir: string;
+  /** Jeeves data directory */
+  dataDir: string;
+  /** Canonical issue branch (e.g., issue/78) */
+  canonicalBranch: string;
+}
+
+/**
+ * Reuses an existing worker sandbox for spec-check phase.
+ *
+ * This function verifies that the worker sandbox created during implement_task
+ * still exists and is usable, then ensures the .jeeves symlink is in place.
+ * Unlike createWorkerSandbox(), this function does NOT reset the worker branch -
+ * the spec-check phase must see the changes made during implement_task.
+ *
+ * Per reviewer feedback: spec-check must reuse the existing worker branch/worktree
+ * created during implement. If the worktree needs to be re-attached, use
+ * `git worktree add <dir> <existingWorkerBranch>` (never `-B`).
+ *
+ * @throws WorkerSandboxReuseError if sandbox cannot be reused
+ */
+export async function reuseWorkerSandbox(options: ReuseWorkerSandboxOptions): Promise<WorkerSandbox> {
+  const sandbox = getWorkerSandboxPaths({
+    taskId: options.taskId,
+    runId: options.runId,
+    issueNumber: options.issueNumber,
+    owner: options.owner,
+    repo: options.repo,
+    canonicalStateDir: options.canonicalStateDir,
+    repoDir: options.repoDir,
+    dataDir: options.dataDir,
+    canonicalBranch: options.canonicalBranch,
+  });
+
+  // 1. Verify worker state directory exists
+  const stateDirExists = await fs
+    .stat(sandbox.stateDir)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+
+  if (!stateDirExists) {
+    throw new WorkerSandboxReuseError(
+      `Worker state directory does not exist: ${sandbox.stateDir}`,
+      options.taskId,
+      'state_dir_missing',
+    );
+  }
+
+  // 2. Check if worktree exists
+  const worktreeExists = await fs
+    .stat(sandbox.worktreeDir)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+
+  // 3. Check if worker branch exists in git
+  const branchExists = await runGit(['-C', sandbox.repoDir, 'rev-parse', '--verify', `refs/heads/${sandbox.branch}`])
+    .then(() => true)
+    .catch(() => false);
+
+  if (!branchExists) {
+    throw new WorkerSandboxReuseError(
+      `Worker branch does not exist: ${sandbox.branch}`,
+      options.taskId,
+      'branch_missing',
+    );
+  }
+
+  // 4. If worktree doesn't exist but branch does, re-attach the worktree
+  //    IMPORTANT: Use `git worktree add <dir> <branch>` (without -B) to avoid resetting the branch
+  if (!worktreeExists) {
+    // Ensure parent directory exists
+    await fs.mkdir(path.dirname(sandbox.worktreeDir), { recursive: true });
+
+    try {
+      // Re-attach worktree to existing branch (DO NOT use -B which would reset the branch)
+      await runGit([
+        '-C',
+        sandbox.repoDir,
+        'worktree',
+        'add',
+        sandbox.worktreeDir,
+        sandbox.branch,
+      ]);
+    } catch (err) {
+      throw new WorkerSandboxReuseError(
+        `Failed to re-attach worktree for branch ${sandbox.branch}: ${err instanceof Error ? err.message : String(err)}`,
+        options.taskId,
+        'worktree_attach_failed',
+      );
+    }
+  }
+
+  // 5. Ensure .jeeves symlink exists and points to worker state dir
+  const linkPath = path.join(sandbox.worktreeDir, '.jeeves');
+  await fs.rm(linkPath, { recursive: true, force: true }).catch(() => void 0);
+
+  const type: 'dir' | 'junction' = process.platform === 'win32' ? 'junction' : 'dir';
+  await fs.symlink(sandbox.stateDir, linkPath, type);
+
+  // 6. Ensure .jeeves is excluded from git status in worker worktree
+  await ensureJeevesExcludedFromGitStatus(sandbox.worktreeDir).catch(() => void 0);
+
+  return sandbox;
+}

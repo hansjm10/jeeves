@@ -23,6 +23,7 @@ import {
 import {
   createCompletionMarker,
   createWorkerSandbox,
+  reuseWorkerSandbox,
   getImplementDoneMarkerPath,
   getSpecCheckDoneMarkerPath,
   getWorkerSandboxPaths,
@@ -1289,41 +1290,64 @@ export class ParallelRunner {
     this.waveStartedAtMs = Date.now();
     this.lastActivityAtMs = Date.now();
 
-    // Create sandboxes
+    // Create or reuse sandboxes based on phase
+    // - implement_task: Create fresh sandboxes (may reset branch from canonical)
+    // - task_spec_check: Reuse existing sandboxes from implement_task (DO NOT reset branch)
     try {
       for (const taskId of taskIds) {
         if (this.stopRequested) break;
 
-        const canonicalIssueJson = await readIssueJson(this.options.canonicalStateDir);
-        const canonicalTasksJson = await readTasksJson(this.options.canonicalStateDir);
-        if (!canonicalIssueJson || !canonicalTasksJson) {
-          throw new Error('Cannot read canonical state files');
+        let sandbox: WorkerSandbox;
+
+        if (phase === 'implement_task') {
+          // For implement_task: create fresh sandbox
+          const canonicalIssueJson = await readIssueJson(this.options.canonicalStateDir);
+          const canonicalTasksJson = await readTasksJson(this.options.canonicalStateDir);
+          if (!canonicalIssueJson || !canonicalTasksJson) {
+            throw new Error('Cannot read canonical state files');
+          }
+
+          // Check for task feedback for retries
+          const taskFeedbackPath = path.join(
+            this.options.canonicalStateDir,
+            'task-feedback',
+            `${taskId}.md`,
+          );
+
+          const result = await createWorkerSandbox({
+            taskId,
+            runId: this.options.runId,
+            issueNumber: this.options.issueNumber,
+            owner: this.options.owner,
+            repo: this.options.repo,
+            canonicalStateDir: this.options.canonicalStateDir,
+            repoDir: this.options.repoDir,
+            dataDir: this.options.dataDir,
+            canonicalBranch: this.options.canonicalBranch,
+            canonicalIssueJson,
+            canonicalTasksJson: canonicalTasksJson as unknown as Record<string, unknown>,
+            taskFeedbackPath,
+          });
+          sandbox = result.sandbox;
+          await this.options.appendLog(`[WORKER ${taskId}] Sandbox created: ${sandbox.worktreeDir}`);
+        } else {
+          // For task_spec_check: reuse existing sandbox from implement_task
+          // This ensures spec-check runs against the worker's implemented changes, not canonical
+          sandbox = await reuseWorkerSandbox({
+            taskId,
+            runId: this.options.runId,
+            issueNumber: this.options.issueNumber,
+            owner: this.options.owner,
+            repo: this.options.repo,
+            canonicalStateDir: this.options.canonicalStateDir,
+            repoDir: this.options.repoDir,
+            dataDir: this.options.dataDir,
+            canonicalBranch: this.options.canonicalBranch,
+          });
+          await this.options.appendLog(`[WORKER ${taskId}] Sandbox reused for spec-check: ${sandbox.worktreeDir}`);
         }
 
-        // Check for task feedback for retries
-        const taskFeedbackPath = path.join(
-          this.options.canonicalStateDir,
-          'task-feedback',
-          `${taskId}.md`,
-        );
-
-        const { sandbox } = await createWorkerSandbox({
-          taskId,
-          runId: this.options.runId,
-          issueNumber: this.options.issueNumber,
-          owner: this.options.owner,
-          repo: this.options.repo,
-          canonicalStateDir: this.options.canonicalStateDir,
-          repoDir: this.options.repoDir,
-          dataDir: this.options.dataDir,
-          canonicalBranch: this.options.canonicalBranch,
-          canonicalIssueJson,
-          canonicalTasksJson: canonicalTasksJson as unknown as Record<string, unknown>,
-          taskFeedbackPath,
-        });
-
         sandboxes.push(sandbox);
-        await this.options.appendLog(`[WORKER ${taskId}] Sandbox created: ${sandbox.worktreeDir}`);
         this.recordActivity();
       }
     } catch (err) {

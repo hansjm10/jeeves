@@ -228,28 +228,34 @@ Passed tasks are merged even if other tasks in the same wave fail (partial succe
 
 ```json
 {
-  "running": true,
-  "workers": [
-    {
-      "taskId": "T1",
-      "phase": "implement_task",
-      "pid": 12345,
-      "started_at": "2026-02-03T12:00:00Z",
-      "ended_at": null,
-      "returncode": null,
-      "status": "running"
-    },
-    {
-      "taskId": "T2",
-      "phase": "implement_task",
-      "pid": 12346,
-      "started_at": "2026-02-03T12:00:01Z",
-      "ended_at": null,
-      "returncode": null,
-      "status": "running"
-    }
-  ],
-  "max_parallel_tasks": 4
+  "run": {
+    "running": true,
+    "pid": 12345,
+    "started_at": "2026-02-03T12:00:00Z",
+    "ended_at": null,
+    "returncode": null,
+    "workers": [
+      {
+        "taskId": "T1",
+        "phase": "implement_task",
+        "pid": 12345,
+        "started_at": "2026-02-03T12:00:00Z",
+        "ended_at": null,
+        "returncode": null,
+        "status": "running"
+      },
+      {
+        "taskId": "T2",
+        "phase": "implement_task",
+        "pid": 12346,
+        "started_at": "2026-02-03T12:00:01Z",
+        "ended_at": null,
+        "returncode": null,
+        "status": "running"
+      }
+    ],
+    "max_parallel_tasks": 4
+  }
 }
 ```
 

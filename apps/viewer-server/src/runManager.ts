@@ -693,6 +693,7 @@ export class RunManager {
       broadcast: (event: string, data: unknown) => {
         this.broadcast(event, data);
       },
+      getRunStatus: () => this.getStatus(),
       spawn: this.spawnImpl,
       runnerBinPath,
       model: params.effectiveModel,

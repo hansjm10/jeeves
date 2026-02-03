@@ -131,6 +131,8 @@ export interface ParallelRunnerOptions {
   appendLog: (line: string) => Promise<void>;
   /** Callback for broadcasting status updates */
   broadcast: (event: string, data: unknown) => void;
+  /** Callback to get the current full run status (for broadcasting) */
+  getRunStatus?: () => unknown;
   /** Spawn implementation (for testing) */
   spawn?: typeof spawnDefault;
   /** Path to runner binary */
@@ -415,6 +417,16 @@ export class ParallelRunner {
       startedAt: w.startedAt,
       status: w.status,
     }));
+  }
+
+  /**
+   * Broadcasts the current run status including active workers.
+   * Called when worker state changes (spawn, exit, status update).
+   */
+  private broadcastRunStatus(): void {
+    if (this.options.getRunStatus) {
+      this.options.broadcast('run', { run: this.options.getRunStatus() });
+    }
   }
 
   /**
@@ -942,6 +954,9 @@ export class ParallelRunner {
     };
     this.activeWorkers.set(taskId, worker);
 
+    // Broadcast worker spawn - now has 'running' status
+    this.broadcastRunStatus();
+
     // Handle stdout/stderr with taskId prefix
     proc.stdout.on('data', (chunk) => {
       const lines = String(chunk).trimEnd().split('\n');
@@ -981,11 +996,17 @@ export class ParallelRunner {
     }
     worker.status = status;
 
+    // Broadcast worker status update - now has final status (passed/failed)
+    this.broadcastRunStatus();
+
     await this.options.appendLog(
       `[WORKER ${taskId}][${phase}] Completed with exit code ${exitCode}, status=${status}`,
     );
 
     this.activeWorkers.delete(taskId);
+
+    // Broadcast worker removal
+    this.broadcastRunStatus();
 
     return {
       taskId,

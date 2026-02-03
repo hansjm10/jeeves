@@ -96,11 +96,12 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
   2. `dependsOn` entries reference existing task IDs.
   3. Dependency graph is acyclic (detect cycles via DFS/Kahn’s algorithm).
   4. A task is “ready” iff:
-     - `task.status === "pending"` (or `"failed"` if retry mode is enabled; see Open Questions),
+     - `task.status === "pending"`,
      - and for every `depId` in `dependsOn`, the referenced task has `status === "passed"`.
 - Selection rules:
   - Prefer stable ordering for determinism (e.g., by task list order, then task ID).
   - Do not schedule tasks whose dependencies are failed or in_progress.
+  - Failed tasks are never scheduled automatically. To retry a failed task, an operator must reset `task.status` back to `"pending"` in `.jeeves/tasks.json` and re-run.
 
 #### 6.2.3 Worker Sandbox Layout
 For a canonical issue state directory `STATE` and worktree `WORK`, create worker sandboxes under a run-scoped directory:
@@ -120,8 +121,14 @@ Worker initialization steps:
 3. Create a `.jeeves` symlink in the worker worktree pointing to the worker state directory (same pattern as `apps/viewer-server/src/init.ts`).
 
 Cleanup behavior:
-- On success: remove worker worktree and worker state directory after merge and archival.
-- On failure: keep worker directories by default for debugging (configurable; see Open Questions).
+- “Archival” means retaining the canonical run directory `STATE/.runs/<runId>/...` (including per-worker logs/artifacts) for observability and post-mortems.
+- On success:
+  - Delete the worker git worktree directory (`WORK/.runs/<runId>/workers/<taskId>/`) after a successful merge.
+  - Delete the worker branch after a successful merge (to reduce repo clutter).
+  - Retain the worker state directory under `STATE/.runs/<runId>/workers/<taskId>/` (do not delete).
+- On failure/timeout:
+  - Retain the worker state directory under `STATE/.runs/<runId>/workers/<taskId>/`.
+  - Retain the worker git worktree directory and branch by default to support debugging and manual remediation.
 
 #### 6.2.4 Parallel Process Management
 - Extend viewer-server orchestration to manage multiple runner subprocesses concurrently:
@@ -135,7 +142,7 @@ Cleanup behavior:
 Timeouts:
 - Apply `iteration_timeout_sec` per worker phase invocation.
 - Apply `inactivity_timeout_sec` per worker based on that worker’s `last-run.log` growth.
-- If a worker times out, mark it failed with a deterministic reason and stop scheduling additional tasks in the wave.
+- If a worker times out, mark it failed with a deterministic reason and do not schedule any additional waves after the current wave completes.
 
 #### 6.2.5 Result Aggregation and Merge
 After a wave completes:
@@ -145,13 +152,17 @@ After a wave completes:
    - Otherwise → treat as failed (unverifiable).
 2. Merge passed worker branches into canonical issue branch deterministically:
    - Merge order: stable sort by task ID.
-   - Merge strategy (MVP): fast-forward is not required; use a normal merge or cherry-pick to keep task commits attributable.
-   - If a merge conflict occurs:
+   - Merge strategy: `git merge --no-ff` (one merge commit per task branch; preserves task commit history and makes attribution clear).
+   - Passed tasks are merged even if other tasks in the same wave fail; partial successes are preserved.
+   - If a merge conflict occurs while merging a passed task:
      - Abort the merge (`git merge --abort`),
-     - mark the overall run as errored,
-     - write a clear remediation message to `.jeeves/progress.txt` including the conflicting task IDs and branches.
-3. Update canonical `.jeeves/tasks.json`:
-   - Set `task.status = "passed"` or `"failed"` for each task in the wave.
+     - mark the run as errored and stop (do not attempt to merge any remaining tasks),
+     - treat the conflicted task as failed-to-integrate (see canonical status update below),
+     - retain all worker worktrees/branches for debugging/remediation.
+3. Update canonical `.jeeves/tasks.json` after merges (canonical status is “integrated + verified”):
+   - For tasks that failed spec check or timed out: set `task.status = "failed"`.
+   - For tasks that passed spec check and merged cleanly: set `task.status = "passed"`.
+   - For tasks that passed spec check but hit a merge conflict: set `task.status = "failed"` and record merge-conflict details in the wave summary and `.jeeves/progress.txt`.
 4. Persist a wave summary artifact in canonical state:
    - `STATE/.runs/<runId>/waves/<waveId>.json` containing:
      - scheduled task IDs, start/end timestamps,
@@ -159,10 +170,21 @@ After a wave completes:
      - merge result and merge order.
 
 Failure propagation:
-- If any task in the wave fails:
-  - do not schedule new tasks until failures are addressed,
-  - copy worker `.jeeves/task-feedback.md` into canonical `STATE/task-feedback/<taskId>.md` for later retries,
-  - expose failed tasks in UI/status for operator action.
+- Wave execution is non-cancelling by default for determinism and maximum salvage:
+  - If one worker fails/times out, other workers in the same wave continue to completion.
+  - No additional waves are scheduled after the current wave completes if any worker failed/timed out.
+- Overall run verdict:
+  - `failed` if any worker failed spec check or timed out (even if other tasks in the wave pass and are merged).
+  - `errored` if orchestration fails (sandbox creation, process spawn) or if a merge conflict occurs.
+- Required ordering of canonical updates after a wave:
+  1. Ensure all worker processes have exited (or been marked timed out).
+  2. Write the wave summary artifact to `STATE/.runs/<runId>/waves/<waveId>.json`.
+  3. Merge passed task branches in deterministic order.
+  4. Update canonical `.jeeves/tasks.json` statuses (per rules above).
+  5. Persist failure details for retry:
+     - If worker `.jeeves/task-feedback.md` exists, copy it into canonical `.jeeves/task-feedback/<taskId>.md`.
+     - If the failure reason is merge conflict or timeout, write a synthetic feedback file under `.jeeves/task-feedback/<taskId>.md` describing the reason and pointers to `STATE/.runs/<runId>/...`.
+  6. Append a single wave summary entry to canonical `.jeeves/progress.txt` including the run verdict and next steps.
 
 #### 6.2.6 API and Status Contracts
 If the viewer UI needs to show concurrent tasks, extend the run status payload (broadcast via websocket/SSE):
@@ -282,11 +304,9 @@ Status codes:
   - Document usage in `docs/` and add a brief note to viewer-server API docs if the API changes ship.
 
 ## 13. Open Questions
-1. Should failed tasks be eligible for automatic retry scheduling (`status="failed"` treated as runnable) or require manual operator reset to `"pending"`?
-2. Should successful worker artifacts be deleted by default or retained under `.jeeves/.runs/` for auditing?
-3. Should merge strategy be `merge`, `rebase`, or `cherry-pick` (and should we enforce “one commit per task”)?
-4. Should the scheduler consider `filesAllowed` overlap heuristics to avoid parallelizing likely-conflicting tasks?
-5. Do we want to expose `max_parallel_tasks` in the UI, the API only, or also via environment variables?
+1. Should the scheduler consider `filesAllowed` overlap heuristics to avoid parallelizing likely-conflicting tasks?
+2. Do we want to expose `max_parallel_tasks` in the UI, the API only, or also via environment variables?
+3. Do we want phase-specific parallelism caps (e.g., allow higher parallelism for spec-check than implementation) to manage cost?
 
 ## 14. Follow-Up Work
 - Add a dedicated UI for per-task logs and SDK outputs (drill-down by taskId).
@@ -311,4 +331,3 @@ Status codes:
 | Date       | Author | Change Summary |
 |------------|--------|----------------|
 | 2026-02-03 | Jeeves Agent (Codex CLI) | Initial draft |
-

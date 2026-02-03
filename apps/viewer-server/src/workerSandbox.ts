@@ -1,0 +1,349 @@
+/**
+ * Worker sandbox creation and cleanup for parallel task execution.
+ *
+ * This module implements §6.2.3 of the parallel execution design (Issue #78):
+ * - Worker state dir: STATE/.runs/<runId>/workers/<taskId>/
+ * - Worker worktree dir: WORKTREES/<owner>/<repo>/issue-<N>-workers/<runId>/<taskId>/
+ * - .jeeves symlink in worktree pointing to worker state dir
+ * - Completion marker files for deterministic resume
+ * - Cleanup on success: delete worktree + branch, retain state dir
+ * - On failure: retain both worktree and state dir
+ */
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import { getWorktreesDir } from '@jeeves/core';
+
+import { runGit } from './git.js';
+import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
+import { writeJsonAtomic } from './jsonAtomic.js';
+import { writeTextAtomicNew } from './textAtomic.js';
+
+/** Worker sandbox paths and identifiers */
+export interface WorkerSandbox {
+  /** Task ID this worker is executing */
+  taskId: string;
+  /** Run ID this worker belongs to */
+  runId: string;
+  /** Issue number */
+  issueNumber: number;
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  repo: string;
+  /** Worker state directory (STATE/.runs/<runId>/workers/<taskId>/) */
+  stateDir: string;
+  /** Worker git worktree directory */
+  worktreeDir: string;
+  /** Worker branch name (issue/<N>-<taskId>) */
+  branch: string;
+  /** Path to shared repo clone directory */
+  repoDir: string;
+  /** Canonical issue branch (e.g., issue/78) */
+  canonicalBranch: string;
+}
+
+/** Options for creating a worker sandbox */
+export interface CreateWorkerSandboxOptions {
+  /** Task ID to create sandbox for */
+  taskId: string;
+  /** Run ID for this execution wave */
+  runId: string;
+  /** Issue number */
+  issueNumber: number;
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  repo: string;
+  /** Canonical issue state directory */
+  canonicalStateDir: string;
+  /** Path to shared repo clone directory */
+  repoDir: string;
+  /** Jeeves data directory */
+  dataDir: string;
+  /** Canonical issue branch (e.g., issue/78) */
+  canonicalBranch: string;
+  /** Canonical issue.json content to copy (with modifications) */
+  canonicalIssueJson: Record<string, unknown>;
+  /** Canonical tasks.json content to copy */
+  canonicalTasksJson: Record<string, unknown>;
+  /** Optional: path to task feedback file for retry */
+  taskFeedbackPath?: string;
+}
+
+/** Result of worker sandbox creation */
+export interface CreateWorkerSandboxResult {
+  sandbox: WorkerSandbox;
+  /** Whether the worktree was created fresh (vs reused from prior run) */
+  createdFresh: boolean;
+}
+
+/**
+ * Creates paths for a worker sandbox without creating any files.
+ * Useful for computing paths before creation or for cleanup.
+ */
+export function getWorkerSandboxPaths(params: {
+  taskId: string;
+  runId: string;
+  issueNumber: number;
+  owner: string;
+  repo: string;
+  canonicalStateDir: string;
+  repoDir: string;
+  dataDir: string;
+  canonicalBranch: string;
+}): WorkerSandbox {
+  const { taskId, runId, issueNumber, owner, repo, canonicalStateDir, repoDir, dataDir, canonicalBranch } = params;
+
+  // Worker state dir: STATE/.runs/<runId>/workers/<taskId>/
+  const stateDir = path.join(canonicalStateDir, '.runs', runId, 'workers', taskId);
+
+  // Worker worktree dir: WORKTREES/<owner>/<repo>/issue-<N>-workers/<runId>/<taskId>/
+  const worktreesDir = getWorktreesDir(dataDir);
+  const worktreeDir = path.join(worktreesDir, owner, repo, `issue-${issueNumber}-workers`, runId, taskId);
+
+  // Worker branch name: issue/<N>-<taskId>
+  const branch = `issue/${issueNumber}-${taskId}`;
+
+  return {
+    taskId,
+    runId,
+    issueNumber,
+    owner,
+    repo,
+    stateDir,
+    worktreeDir,
+    branch,
+    repoDir,
+    canonicalBranch,
+  };
+}
+
+/**
+ * Creates a worker sandbox for parallel task execution.
+ *
+ * Per §6.2.3:
+ * 1. Create worker state directory with:
+ *    - issue.json (copy with currentTaskId set, task-loop flags cleared)
+ *    - tasks.json (copy of canonical)
+ *    - Optional: task-feedback.md for retries
+ * 2. Create worker git worktree:
+ *    - Branch: issue/<N>-<taskId>
+ *    - Based on canonical issue branch HEAD
+ * 3. Create .jeeves symlink in worktree pointing to worker state dir
+ */
+export async function createWorkerSandbox(options: CreateWorkerSandboxOptions): Promise<CreateWorkerSandboxResult> {
+  const sandbox = getWorkerSandboxPaths({
+    taskId: options.taskId,
+    runId: options.runId,
+    issueNumber: options.issueNumber,
+    owner: options.owner,
+    repo: options.repo,
+    canonicalStateDir: options.canonicalStateDir,
+    repoDir: options.repoDir,
+    dataDir: options.dataDir,
+    canonicalBranch: options.canonicalBranch,
+  });
+
+  // 1. Create worker state directory
+  await fs.mkdir(sandbox.stateDir, { recursive: true });
+
+  // 1a. Create worker issue.json with currentTaskId set and task-loop flags cleared
+  const workerIssueJson = createWorkerIssueJson(options.canonicalIssueJson, options.taskId);
+  await writeJsonAtomic(path.join(sandbox.stateDir, 'issue.json'), workerIssueJson);
+
+  // 1b. Copy canonical tasks.json
+  await writeJsonAtomic(path.join(sandbox.stateDir, 'tasks.json'), options.canonicalTasksJson);
+
+  // 1c. Copy progress.txt (empty or initial)
+  await fs.writeFile(path.join(sandbox.stateDir, 'progress.txt'), '', 'utf-8');
+
+  // 1d. Optional: copy task feedback for retries
+  if (options.taskFeedbackPath) {
+    const feedbackExists = await fs
+      .stat(options.taskFeedbackPath)
+      .then((s) => s.isFile())
+      .catch(() => false);
+    if (feedbackExists) {
+      const feedback = await fs.readFile(options.taskFeedbackPath, 'utf-8');
+      await fs.writeFile(path.join(sandbox.stateDir, 'task-feedback.md'), feedback, 'utf-8');
+    }
+  }
+
+  // 2. Create worker git worktree
+  const createdFresh = true;
+
+  // Check if worktree already exists (from prior run)
+  const worktreeExists = await fs
+    .stat(sandbox.worktreeDir)
+    .then(() => true)
+    .catch(() => false);
+
+  if (worktreeExists) {
+    // Remove existing worktree (force removal from prior run)
+    await runGit(['-C', sandbox.repoDir, 'worktree', 'remove', '--force', sandbox.worktreeDir]).catch(() => {
+      // Worktree may not be registered, try rm directly
+    });
+    await fs.rm(sandbox.worktreeDir, { recursive: true, force: true });
+  }
+
+  // Ensure parent directory exists
+  await fs.mkdir(path.dirname(sandbox.worktreeDir), { recursive: true });
+
+  // Create worktree on a new branch based on canonical branch
+  // git -C <REPO> worktree add -B <workerBranch> <workerWorktreeDir> <canonicalBranch>
+  await runGit([
+    '-C',
+    sandbox.repoDir,
+    'worktree',
+    'add',
+    '-B',
+    sandbox.branch,
+    sandbox.worktreeDir,
+    sandbox.canonicalBranch,
+  ]);
+
+  // 3. Create .jeeves symlink in worktree pointing to worker state dir
+  const linkPath = path.join(sandbox.worktreeDir, '.jeeves');
+  await fs.rm(linkPath, { recursive: true, force: true }).catch(() => void 0);
+
+  const type: 'dir' | 'junction' = process.platform === 'win32' ? 'junction' : 'dir';
+  await fs.symlink(sandbox.stateDir, linkPath, type);
+
+  // 4. Ensure .jeeves is excluded from git status in worker worktree
+  await ensureJeevesExcludedFromGitStatus(sandbox.worktreeDir).catch(() => void 0);
+
+  return { sandbox, createdFresh };
+}
+
+/**
+ * Creates worker issue.json with currentTaskId set and task-loop flags cleared.
+ *
+ * Per §6.2.3:
+ * - status.currentTaskId = <taskId>
+ * - Clear task-loop flags: taskPassed, taskFailed, commitFailed, pushFailed, hasMoreTasks, allTasksComplete
+ */
+function createWorkerIssueJson(canonicalIssueJson: Record<string, unknown>, taskId: string): Record<string, unknown> {
+  // Deep clone to avoid mutating the original
+  const workerIssue = JSON.parse(JSON.stringify(canonicalIssueJson)) as Record<string, unknown>;
+
+  // Ensure status object exists
+  if (!workerIssue.status || typeof workerIssue.status !== 'object') {
+    workerIssue.status = {};
+  }
+
+  const status = workerIssue.status as Record<string, unknown>;
+
+  // Set currentTaskId
+  status.currentTaskId = taskId;
+
+  // Clear task-loop flags that can be stale
+  delete status.taskPassed;
+  delete status.taskFailed;
+  delete status.commitFailed;
+  delete status.pushFailed;
+  delete status.hasMoreTasks;
+  delete status.allTasksComplete;
+
+  return workerIssue;
+}
+
+/**
+ * Path to the implement_task completion marker file.
+ */
+export function getImplementDoneMarkerPath(sandbox: WorkerSandbox): string {
+  return path.join(sandbox.stateDir, 'implement_task.done');
+}
+
+/**
+ * Path to the task_spec_check completion marker file.
+ */
+export function getSpecCheckDoneMarkerPath(sandbox: WorkerSandbox): string {
+  return path.join(sandbox.stateDir, 'task_spec_check.done');
+}
+
+/**
+ * Creates a completion marker file atomically.
+ *
+ * Per §6.2.3: A marker file is a zero-byte file created atomically
+ * (write temp + rename) so existence is a reliable signal.
+ */
+export async function createCompletionMarker(markerPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(markerPath), { recursive: true });
+  await writeTextAtomicNew(markerPath, '');
+}
+
+/**
+ * Checks if a completion marker exists.
+ */
+export async function hasCompletionMarker(markerPath: string): Promise<boolean> {
+  return fs
+    .stat(markerPath)
+    .then(() => true)
+    .catch(() => false);
+}
+
+/**
+ * Cleans up a worker sandbox after successful completion.
+ *
+ * Per §6.2.3:
+ * - On success: Delete worker git worktree and branch, retain state dir
+ */
+export async function cleanupWorkerSandboxOnSuccess(sandbox: WorkerSandbox): Promise<void> {
+  // 1. Remove the git worktree
+  await runGit(['-C', sandbox.repoDir, 'worktree', 'remove', '--force', sandbox.worktreeDir]).catch(() => {
+    // Worktree may not exist or already removed
+  });
+
+  // 2. Clean up worktree directory if still exists
+  await fs.rm(sandbox.worktreeDir, { recursive: true, force: true }).catch(() => void 0);
+
+  // 3. Delete the worker branch (to reduce repo clutter)
+  await runGit(['-C', sandbox.repoDir, 'branch', '-D', sandbox.branch]).catch(() => {
+    // Branch may not exist or already deleted
+  });
+
+  // 4. State dir is retained for observability (do not delete)
+}
+
+/**
+ * Cleanup behavior for worker sandbox after failure or timeout.
+ *
+ * Per §6.2.3:
+ * - On failure/timeout: Retain both worktree and state dir for debugging
+ *
+ * This is a no-op function that documents the retention policy.
+ * The caller already has the sandbox reference and should simply not clean it up.
+ */
+export function cleanupWorkerSandboxOnFailure(): void {
+  // This function intentionally does nothing.
+  // Worker state directory is retained for debugging.
+  // Worker git worktree directory and branch are retained for debugging/manual remediation.
+}
+
+/**
+ * Gets the worker's issue.json from its state directory.
+ */
+export async function readWorkerIssueJson(sandbox: WorkerSandbox): Promise<Record<string, unknown> | null> {
+  const issueFile = path.join(sandbox.stateDir, 'issue.json');
+  try {
+    const raw = await fs.readFile(issueFile, 'utf-8');
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gets the worker's tasks.json from its state directory.
+ */
+export async function readWorkerTasksJson(sandbox: WorkerSandbox): Promise<Record<string, unknown> | null> {
+  const tasksFile = path.join(sandbox.stateDir, 'tasks.json');
+  try {
+    const raw = await fs.readFile(tasksFile, 'utf-8');
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}

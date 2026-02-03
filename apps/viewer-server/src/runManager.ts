@@ -575,11 +575,44 @@ export class RunManager {
           }
 
           // If merge conflict occurred, stop the run as errored (§6.2.5)
+          // Per T15: Ensure the workflow is left in a resumable state
           if (parallelResult.mergeConflict) {
             this.stopReason = `merge_conflict (parallel ${currentPhase})`;
             this.status = { ...this.status, last_error: `Merge conflict during ${currentPhase}` };
             this.broadcast('run', { run: this.status });
             await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to merge conflict during ${currentPhase}`);
+
+            // T15: Ensure issue.json is left in a resumable state (phase != task_spec_check when
+            // status.parallel is cleared). The merge conflict handler in ParallelRunner already:
+            // - Marks the conflicted task as 'failed' in tasks.json
+            // - Writes canonical feedback pointing to retained artifacts
+            // - Clears status.parallel via updateCanonicalStatusFlags
+            //
+            // However, it does NOT set status.taskFailed=true (which updateCanonicalStatusFlags
+            // only sets based on spec-check outcomes, not merge outcomes). We need to:
+            // 1. Ensure status.taskFailed=true so the workflow transition guard is satisfied
+            // 2. Evaluate workflow transitions to move phase from task_spec_check to implement_task
+            const conflictIssue = await readIssueJson(this.stateDir!);
+            if (conflictIssue) {
+              const conflictStatus = (conflictIssue.status as Record<string, unknown>) ?? {};
+              // Set taskFailed=true to satisfy the workflow transition guard (task_spec_check -> implement_task)
+              conflictStatus.taskFailed = true;
+              conflictStatus.taskPassed = false;
+              conflictStatus.hasMoreTasks = true;
+              conflictStatus.allTasksComplete = false;
+              conflictIssue.status = conflictStatus;
+
+              // Evaluate workflow transitions to move phase back to implement_task
+              const nextPhase = engine.evaluateTransitions(currentPhase, conflictIssue);
+              if (nextPhase && nextPhase !== currentPhase) {
+                conflictIssue.phase = nextPhase;
+                await this.appendViewerLog(viewerLogPath, `[MERGE_CONFLICT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
+              }
+
+              await writeIssueJson(this.stateDir!, conflictIssue);
+              this.broadcast('state', await this.getStateSnapshot());
+            }
+
             completedNaturally = false;
             break;
           }

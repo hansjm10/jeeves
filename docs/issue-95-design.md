@@ -412,7 +412,126 @@ These side-effects are part of the feature contract because they impact how user
 15) **Versioning?** No version bump required. If future breaking changes are needed, introduce new endpoints (e.g. `/api/v2/...`) rather than changing payload shapes in-place.
 
 ## 4. Data
-[To be completed in design_data phase]
+
+This feature introduces **issue-scoped secret storage** for a Sonar authentication token plus **non-secret sync metadata** for safely materializing that token into a worktree.
+
+### Schema Changes
+| Location | Field | Type | Required | Default | Constraints |
+|----------|-------|------|----------|---------|-------------|
+| `.jeeves/issue.json` | `status.sonarToken` | object | no | `{}` | if present, MUST be an object |
+| `.jeeves/issue.json` | `status.sonarToken.sync_status` | string | no | `"never_attempted"` | enum: `in_sync`, `deferred_worktree_absent`, `failed_exclude`, `failed_env_write`, `failed_env_delete`, `never_attempted` |
+| `.jeeves/issue.json` | `status.sonarToken.last_attempt_at` | string \| null | no | `null` | ISO-8601 UTC string ending in `Z` |
+| `.jeeves/issue.json` | `status.sonarToken.last_success_at` | string \| null | no | `null` | ISO-8601 UTC string ending in `Z` |
+| `.jeeves/issue.json` | `status.sonarToken.last_error` | string \| null | no | `null` | sanitized; max 2048 chars; MUST NOT include token; MUST NOT include `\0`, `\n`, `\r` |
+| `.jeeves/.secrets/sonar-token.json` | `schemaVersion` | number | yes | `1` | literal `1` |
+| `.jeeves/.secrets/sonar-token.json` | `token` | string | yes | n/a | trimmed; length `1..1024`; MUST NOT include `\0`, `\n`, `\r` |
+| `.jeeves/.secrets/sonar-token.json` | `updated_at` | string | yes | n/a | ISO-8601 UTC string ending in `Z` |
+
+**Secret storage invariant**:
+- The token value MUST NOT be stored anywhere in `.jeeves/issue.json` (because `.jeeves/issue.json` is streamed to the viewer via `issue_json` in `IssueStateSnapshot`).
+
+### Field Definitions
+
+**`status.sonarToken.sync_status`**
+- Purpose: Persist the last-known worktree reconciliation outcome for the selected issue without storing any secrets.
+- Type: `SonarSyncStatus` (string enum)
+- Set by: Viewer-server token operations (PUT/DELETE/RECONCILE) after attempting reconciliation.
+- Read by: `GET /api/issue/sonar-token` and `sonar-token-status` event emission.
+- Default when absent: `"never_attempted"`.
+- Constraints:
+  - Allowed values: `in_sync`, `deferred_worktree_absent`, `failed_exclude`, `failed_env_write`, `failed_env_delete`, `never_attempted`.
+  - MUST be updated in the same request that performs reconciliation attempts.
+- Relationships:
+  - References: none (pure status).
+  - Deletion behavior: when issue state is deleted, this field disappears with it; no cascading effects required.
+  - If the worktree is deleted/missing: next status read MUST report `worktree_present=false` and set `sync_status` to `deferred_worktree_absent` when `has_token=true`, else `in_sync` when `has_token=false`.
+  - Ordering dependencies: updated only after secret persistence and any worktree side-effects are attempted.
+- Migration notes:
+  - Not breaking: existing issue states will not have this field.
+  - Existing records: treat missing as `"never_attempted"`.
+  - Migration script: not required.
+  - Rollback: remove this field; interpret as default.
+- Derivation:
+  - Not derived from other stored fields; set on write as the result of the reconcile attempt.
+  - If worktree state changes externally, `sync_status` may become stale until the next reconcile (manual or on init/select).
+
+**`status.sonarToken.last_attempt_at` / `status.sonarToken.last_success_at`**
+- Purpose: Provide stable UX and diagnostics across restarts for when reconcile was last tried and last succeeded.
+- Type: `string | null` (ISO-8601 UTC timestamp)
+- Required: optional.
+- Default when absent: `null`.
+- Constraints:
+  - MUST be a `Date.toISOString()`-formatted UTC timestamp (e.g., `2026-02-04T17:58:44.956Z`) when present.
+  - `last_success_at` MUST be `<= last_attempt_at` when both are present.
+- Relationships: none.
+- Migration notes: missing fields treated as `null`; no script required; rollback by deleting the fields.
+- Derivation:
+  - Computed on write:
+    - `last_attempt_at` is set each time a reconcile is attempted.
+    - `last_success_at` is set only when reconciliation fully succeeds (`sync_status=in_sync`).
+
+**`status.sonarToken.last_error`**
+- Purpose: Persist a sanitized, non-secret error string for the last reconcile attempt (for UI display and debugging).
+- Type: `string | null`
+- Required: optional.
+- Default when absent: `null`.
+- Constraints:
+  - Max length: 2048 characters (truncate beyond this).
+  - MUST NOT contain the token value, request bodies, or file contents.
+  - MUST NOT contain `\0`, `\n`, or `\r` (replace with spaces before persisting if needed).
+- Relationships: none.
+- Migration notes: missing treated as `null`; rollback by deleting the field.
+- Derivation:
+  - Computed on write from caught errors (sanitized) during reconcile attempts.
+  - If subsequent attempts succeed, this SHOULD be cleared (`null`) to avoid stale error banners.
+
+**`.jeeves/.secrets/sonar-token.json`**
+- Purpose: Store the Sonar token value issue-scoped, outside the git worktree, without ever streaming it to the viewer.
+- Location: `<issueStateDir>/.secrets/sonar-token.json` (reachable as `.jeeves/.secrets/sonar-token.json` from within the worktree due to the `.jeeves` symlink).
+- Type: JSON object with exact fields below.
+- Required: only exists when a token is configured; absence means `has_token=false`.
+- Fields:
+  - `schemaVersion`: `1` (number literal)
+  - `token`: `string` (trimmed, length `1..1024`, MUST NOT include `\0`, `\n`, `\r`)
+  - `updated_at`: `string` (ISO-8601 UTC ending in `Z`)
+- Constraints:
+  - The file MUST be written atomically (write temp + rename).
+  - The file MUST be written with restrictive permissions (target `0600` where supported).
+- Relationships:
+  - References: implicitly tied to the current issue’s state directory; no foreign keys.
+  - Deletion behavior:
+    - On `DELETE /api/issue/sonar-token`, the file MUST be removed if present (idempotent).
+    - If the issue state directory is deleted, the token is deleted with it.
+  - Ordering dependencies:
+    - On PUT, secret file write MUST succeed before attempting any worktree materialization (because worktree writes depend on the token).
+- Migration notes:
+  - Not breaking: existing issues will not have the file; treat as no token.
+  - Migration script: not required.
+  - Rollback: delete `.jeeves/.secrets/sonar-token.json` and ignore `.jeeves/issue.json.status.sonarToken.*` fields.
+- Derivation:
+  - `has_token` is derived from file existence (and successful JSON parse) at request time; it is not persisted elsewhere.
+
+### Migrations
+| Change | Existing Data | Migration | Rollback |
+|--------|---------------|-----------|----------|
+| Add non-secret reconcile metadata under `status.sonarToken.*` | Fields absent | Treat absent as defaults (`sync_status="never_attempted"`, timestamps/error `null`) until first write | Remove the fields |
+| Add `.jeeves/.secrets/sonar-token.json` secret file | File absent | No-op until token is saved; on first PUT create file atomically with `0600` perms | Delete the file |
+
+### Artifacts
+| Artifact | Location | Created | Updated | Deleted |
+|----------|----------|---------|---------|---------|
+| Issue-scoped token secret | `.jeeves/.secrets/sonar-token.json` | On successful PUT (if absent) | On successful PUT (rewrite) | On successful DELETE (idempotent) |
+| Non-secret sync metadata | `.jeeves/issue.json` (`status.sonarToken.*`) | On first PUT/DELETE/RECONCILE that records status | After each reconcile attempt | When issue state is deleted (never explicitly) |
+| Worktree env file | `<worktreeRoot>/.env.jeeves` | When `has_token=true` and worktree present | Rewritten on PUT/RECONCILE when `has_token=true` | Removed when `has_token=false` and worktree present |
+| Worktree env temp file | `<worktreeRoot>/.env.jeeves.tmp` | During atomic writes | Rewritten per attempt | Removed after rename; cleaned on startup/reconcile if leftover |
+| Git ignore entries | `<worktreeRoot>/.git/info/exclude` | On first reconcile attempt with worktree present | Appended/deduped idempotently | Never (lines may remain even after token removal) |
+
+### Artifact Lifecycle
+| Scenario | Artifact Behavior |
+|----------|-------------------|
+| Success | Secret file reflects desired token state; `.env.jeeves` converges to desired (present/absent); `.git/info/exclude` includes `.env.jeeves` and `.env.jeeves.tmp`; `status.sonarToken.*` updated with `sync_status=in_sync` and timestamps. |
+| Failure | If issue-scoped secret persistence fails, do not attempt worktree writes; return `500` and do not mutate worktree. If worktree writes fail after secret persistence, keep the secret file and record `sync_status=failed_*`, `last_error` (sanitized), and timestamps; return `200` with `warnings[]`. |
+| Crash recovery | All file writes are atomic (temp + rename). On startup/reconcile, remove any leftover `<worktreeRoot>/.env.jeeves.tmp`, re-ensure `.git/info/exclude` lines (deduped), and retry reconcile to converge worktree state; `has_token` is derived from the secret file. |
 
 ## 5. Tasks
 [To be completed in design_plan phase]

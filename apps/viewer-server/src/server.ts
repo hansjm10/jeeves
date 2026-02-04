@@ -418,6 +418,61 @@ export async function buildServer(config: ViewerServerConfig) {
     broadcast: (event, data) => hub.broadcast(event, data),
   });
 
+  // ============================================================================
+  // Sonar Token Mutex (must be declared early for startup reconcile)
+  // ============================================================================
+
+  /** Mutex timeout for sonar token operations (ms). */
+  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = config.sonarTokenMutexTimeoutMs ?? 1500;
+
+  /** Per-issue mutex map for sonar token operations. */
+  const sonarTokenMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
+
+  /** Acquire mutex for issue - returns true if acquired, false if timed out. */
+  async function acquireSonarTokenMutex(issueRef: string): Promise<boolean> {
+    let mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) {
+      mutex = { locked: false, waiters: [] };
+      sonarTokenMutexes.set(issueRef, mutex);
+    }
+
+    if (!mutex.locked) {
+      mutex.locked = true;
+      return true;
+    }
+
+    // Wait for mutex with timeout
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        // Remove ourselves from the waiter queue
+        const idx = mutex!.waiters.indexOf(waiterCallback);
+        if (idx !== -1) mutex!.waiters.splice(idx, 1);
+        resolve(false);
+      }, SONAR_TOKEN_MUTEX_TIMEOUT_MS);
+
+      const waiterCallback = (acquired: boolean) => {
+        clearTimeout(timer);
+        resolve(acquired);
+      };
+
+      mutex!.waiters.push(waiterCallback);
+    });
+  }
+
+  /** Release mutex for issue. */
+  function releaseSonarTokenMutex(issueRef: string): void {
+    const mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) return;
+
+    if (mutex.waiters.length > 0) {
+      // Pass to next waiter
+      const next = mutex.waiters.shift();
+      if (next) next(true);
+    } else {
+      mutex.locked = false;
+    }
+  }
+
   const logTailer = new LogTailer();
   const viewerLogTailer = new LogTailer();
   const sdkTailer = new SdkOutputTailer();
@@ -1333,57 +1388,6 @@ export async function buildServer(config: ViewerServerConfig) {
   // Sonar Token Endpoints
   // ============================================================================
 
-  /** Mutex timeout for sonar token operations (ms). */
-  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = config.sonarTokenMutexTimeoutMs ?? 1500;
-
-  /** Per-issue mutex map for sonar token operations. */
-  const sonarTokenMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
-
-  /** Acquire mutex for issue - returns true if acquired, false if timed out. */
-  async function acquireSonarTokenMutex(issueRef: string): Promise<boolean> {
-    let mutex = sonarTokenMutexes.get(issueRef);
-    if (!mutex) {
-      mutex = { locked: false, waiters: [] };
-      sonarTokenMutexes.set(issueRef, mutex);
-    }
-
-    if (!mutex.locked) {
-      mutex.locked = true;
-      return true;
-    }
-
-    // Wait for mutex with timeout
-    return new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => {
-        // Remove ourselves from the waiter queue
-        const idx = mutex!.waiters.indexOf(waiterCallback);
-        if (idx !== -1) mutex!.waiters.splice(idx, 1);
-        resolve(false);
-      }, SONAR_TOKEN_MUTEX_TIMEOUT_MS);
-
-      const waiterCallback = (acquired: boolean) => {
-        clearTimeout(timer);
-        resolve(acquired);
-      };
-
-      mutex!.waiters.push(waiterCallback);
-    });
-  }
-
-  /** Release mutex for issue. */
-  function releaseSonarTokenMutex(issueRef: string): void {
-    const mutex = sonarTokenMutexes.get(issueRef);
-    if (!mutex) return;
-
-    if (mutex.waiters.length > 0) {
-      // Pass to next waiter
-      const next = mutex.waiters.shift();
-      if (next) next(true);
-    } else {
-      mutex.locked = false;
-    }
-  }
-
   /** Build SonarTokenStatus from current state (never includes token value). */
   async function buildSonarTokenStatus(
     issueRef: string,
@@ -1489,8 +1493,36 @@ export async function buildServer(config: ViewerServerConfig) {
    *
    * This ensures that on startup or issue select, any leftover artifacts from
    * previous runs are cleaned up, regardless of whether a token is configured.
+   *
+   * MUTEX: This function acquires the per-issue Sonar token mutex to prevent
+   * concurrent writes with PUT/DELETE/RECONCILE endpoints. If the mutex cannot
+   * be acquired (busy), reconcile is skipped as a best-effort no-op.
    */
   async function autoReconcileSonarToken(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    // Acquire mutex to prevent concurrent writes with PUT/DELETE/RECONCILE
+    // If busy, skip reconcile as best-effort no-op (do not block or deadlock)
+    const acquired = await acquireSonarTokenMutex(issueRef);
+    if (!acquired) {
+      // Mutex is busy - another operation is in progress. Skip reconcile.
+      // This is fine for auto-reconcile since it's best-effort.
+      return;
+    }
+
+    try {
+      await autoReconcileSonarTokenCore(issueRef, stateDir, workDir);
+    } finally {
+      releaseSonarTokenMutex(issueRef);
+    }
+  }
+
+  /**
+   * Core implementation of auto-reconcile (called with mutex held).
+   */
+  async function autoReconcileSonarTokenCore(
     issueRef: string,
     stateDir: string,
     workDir: string | null,

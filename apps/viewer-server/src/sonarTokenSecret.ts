@@ -211,15 +211,25 @@ export async function writeSonarTokenSecret(
  *
  * This operation is idempotent - it succeeds even if the file doesn't exist.
  *
+ * On delete, also cleans up ALL unique temp files (sonar-token.json.<pid>.<timestamp>.tmp)
+ * that could have been left behind by crashed atomic writes. This ensures that
+ * even if a process crashed mid-write, the token value won't persist in temp files.
+ *
  * @param issueStateDir - The issue state directory containing .secrets/
  * @returns true if a file was deleted, false if it didn't exist
  */
 export async function deleteSonarTokenSecret(issueStateDir: string): Promise<boolean> {
+  const secretsDir = getSecretsDir(issueStateDir);
   const secretPath = getSonarTokenSecretPath(issueStateDir);
   const tempPath = getTempFilePath(secretPath);
 
-  // Clean up any leftover temp file
+  // Clean up any leftover legacy temp file (sonar-token.json.tmp)
   await cleanupTempFile(tempPath);
+
+  // Clean up ALL unique temp files (sonar-token.json.<pid>.<timestamp>.tmp)
+  // On delete, we remove ALL temp files immediately (not just stale ones)
+  // to ensure no token values persist in crash-temp files after DELETE.
+  await cleanupAllUniqueTempFiles(secretsDir, SECRET_FILE_NAME);
 
   try {
     await fs.rm(secretPath, { force: false });
@@ -305,6 +315,27 @@ async function cleanupStaleTemps(secretsDir: string, baseName: string): Promise<
           const fileTimestamp = parseInt(match[2], 10);
           return now - fileTimestamp > staleThresholdMs;
         })
+        .map((entry) => fs.rm(path.join(secretsDir, entry), { force: true }).catch(() => void 0)),
+    );
+  } catch {
+    // Directory may not exist or be readable; ignore
+  }
+}
+
+/**
+ * Clean up ALL unique temp files (not just stale ones).
+ * Used on DELETE to ensure no token values persist in crash-temp files.
+ * Matches files like: sonar-token.json.<pid>.<timestamp>.tmp
+ */
+async function cleanupAllUniqueTempFiles(secretsDir: string, baseName: string): Promise<void> {
+  try {
+    const entries = await fs.readdir(secretsDir);
+    // Escape baseName for regex (e.g., "sonar-token.json" has a literal dot)
+    const tempPattern = new RegExp(`^${escapeRegex(baseName)}\\.(\\d+)\\.(\\d+)\\.tmp$`);
+
+    await Promise.all(
+      entries
+        .filter((entry) => tempPattern.test(entry))
         .map((entry) => fs.rm(path.join(secretsDir, entry), { force: true }).catch(() => void 0)),
     );
   } catch {

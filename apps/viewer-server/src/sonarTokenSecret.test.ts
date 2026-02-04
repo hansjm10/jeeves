@@ -284,6 +284,54 @@ describe('sonarTokenSecret', () => {
       await expect(fs.stat(tempPath)).rejects.toThrow();
       await expect(fs.stat(secretPath)).rejects.toThrow();
     });
+
+    it('cleans up unique temp files from crashed atomic writes', async () => {
+      // Simulate leftover unique temp files (sonar-token.json.<pid>.<timestamp>.tmp)
+      // that could be left behind if a process crashed during writeSonarTokenSecret()
+      const secretsDir = getSecretsDir(tempDir);
+      const secretPath = getSonarTokenSecretPath(tempDir);
+      await fs.mkdir(secretsDir, { recursive: true });
+
+      // Create the actual secret file
+      await writeSonarTokenSecret(tempDir, 'token-to-delete');
+
+      // Simulate crashed atomic writes with unique temp file names
+      const uniqueTempPath1 = `${secretPath}.12345.1700000000000.tmp`;
+      const uniqueTempPath2 = `${secretPath}.67890.1700000001000.tmp`;
+      await fs.writeFile(uniqueTempPath1, JSON.stringify({ schemaVersion: 1, token: 'leaked-token-1', updated_at: '2023-01-01' }));
+      await fs.writeFile(uniqueTempPath2, JSON.stringify({ schemaVersion: 1, token: 'leaked-token-2', updated_at: '2023-01-01' }));
+
+      // Verify temp files exist before delete
+      await expect(fs.stat(uniqueTempPath1)).resolves.toBeDefined();
+      await expect(fs.stat(uniqueTempPath2)).resolves.toBeDefined();
+
+      // Delete should clean up ALL unique temp files
+      const deleted = await deleteSonarTokenSecret(tempDir);
+
+      expect(deleted).toBe(true);
+      await expect(fs.stat(secretPath)).rejects.toThrow();
+      await expect(fs.stat(uniqueTempPath1)).rejects.toThrow();
+      await expect(fs.stat(uniqueTempPath2)).rejects.toThrow();
+    });
+
+    it('cleans up unique temp files even when no secret file exists', async () => {
+      // Simulate leftover unique temp files without a corresponding secret file
+      // This could happen if a process crashed right after renaming temp to final,
+      // then someone calls DELETE
+      const secretsDir = getSecretsDir(tempDir);
+      const secretPath = getSonarTokenSecretPath(tempDir);
+      await fs.mkdir(secretsDir, { recursive: true });
+
+      // Simulate crashed atomic write with unique temp file name
+      const uniqueTempPath = `${secretPath}.99999.1700000002000.tmp`;
+      await fs.writeFile(uniqueTempPath, JSON.stringify({ schemaVersion: 1, token: 'orphaned-token', updated_at: '2023-01-01' }));
+
+      // Delete should clean up the unique temp file and return false (no actual secret)
+      const deleted = await deleteSonarTokenSecret(tempDir);
+
+      expect(deleted).toBe(false);
+      await expect(fs.stat(uniqueTempPath)).rejects.toThrow();
+    });
   });
 
   describe('hasToken', () => {

@@ -94,22 +94,22 @@ const rawPhaseSchema = z
 
 const rawWorkflowSchema = z
   .object({
-    workflow: z
-      .object({
-        name: z.string().optional(),
-        version: z.number().int().optional().default(1),
-        start: z.string().optional().default('design_draft'),
-        default_provider: z.unknown().optional(),
-        default_model: z.unknown().optional(),
-        default_reasoning_effort: z.unknown().optional(),
-        default_thinking_budget: z.unknown().optional(),
+	    workflow: z
+	      .object({
+	        name: z.string().optional(),
+	        version: z.number().int().optional().default(1),
+	        start: z.string().optional().default('design_classify'),
+	        default_provider: z.unknown().optional(),
+	        default_model: z.unknown().optional(),
+	        default_reasoning_effort: z.unknown().optional(),
+	        default_thinking_budget: z.unknown().optional(),
       })
-      .passthrough()
-      .optional()
-      .default(() => ({ version: 1, start: 'design_draft' })),
-    phases: z.record(z.string(), rawPhaseSchema).optional().default({}),
-  })
-  .passthrough();
+	      .passthrough()
+	      .optional()
+	      .default(() => ({ version: 1, start: 'design_classify' })),
+	    phases: z.record(z.string(), rawPhaseSchema).optional().default({}),
+	  })
+	  .passthrough();
 
 function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: string): Workflow {
   validateModel(raw.workflow.default_model, 'Workflow default_model');
@@ -147,15 +147,15 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
     };
   }
 
-  const workflowName = raw.workflow.name ?? sourceName;
-  const workflow: Workflow = {
-    name: workflowName,
-    version: raw.workflow.version ?? 1,
-    start: raw.workflow.start ?? 'design_draft',
-    phases,
-    defaultProvider: typeof raw.workflow.default_provider === 'string' ? raw.workflow.default_provider : undefined,
-    defaultModel: typeof raw.workflow.default_model === 'string' ? raw.workflow.default_model : undefined,
-    defaultReasoningEffort,
+	  const workflowName = raw.workflow.name ?? sourceName;
+	  const workflow: Workflow = {
+	    name: workflowName,
+	    version: raw.workflow.version ?? 1,
+	    start: raw.workflow.start ?? 'design_classify',
+	    phases,
+	    defaultProvider: typeof raw.workflow.default_provider === 'string' ? raw.workflow.default_provider : undefined,
+	    defaultModel: typeof raw.workflow.default_model === 'string' ? raw.workflow.default_model : undefined,
+	    defaultReasoningEffort,
     defaultThinkingBudget,
   };
 

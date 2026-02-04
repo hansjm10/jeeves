@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
-import { useInitIssueMutation, useSelectIssueMutation, useSetIssuePhaseMutation, useStartRunMutation, useStopRunMutation } from '../features/mutations.js';
+import type { TaskExecutionMode } from '../api/types.js';
+import { useInitIssueMutation, useSelectIssueMutation, useSetIssuePhaseMutation, useSetTaskExecutionMutation, useStartRunMutation, useStopRunMutation } from '../features/mutations.js';
 import { useIssuesQuery } from '../features/issues/queries.js';
 import { groupForPhase, pickGroupTarget, type GroupPhase } from '../features/workflow/phaseGroups.js';
 import { useWorkflowQuery } from '../features/workflow/queries.js';
@@ -12,6 +13,7 @@ const PROVIDERS = ['claude', 'codex', 'fake'] as const;
 type Provider = (typeof PROVIDERS)[number];
 const PROVIDER_STORAGE_KEY = 'jeeves.provider';
 export const ITERATIONS_STORAGE_KEY = 'jeeves.iterations';
+export const MAX_PARALLEL_TASKS = 8;
 
 function normalizeProvider(value: unknown): Provider {
   if (value === 'claude' || value === 'codex' || value === 'fake') return value;
@@ -34,6 +36,31 @@ export function validateIterations(input: string): { value: number } | { error: 
   return { value: num };
 }
 
+export function validateMaxParallelTasks(input: string): { value: number } | { error: string } | null {
+  const trimmed = input.trim();
+  if (trimmed === '') return null; // blank is valid (omit from request; server will default)
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) return { error: 'Must be a number' };
+  if (!Number.isInteger(num)) return { error: 'Must be a whole number' };
+  if (num < 1 || num > MAX_PARALLEL_TASKS) return { error: `Must be between 1 and ${MAX_PARALLEL_TASKS}` };
+  return { value: num };
+}
+
+function extractTaskExecutionFromIssueJson(issueJson: Record<string, unknown> | null | undefined): { mode: TaskExecutionMode; maxParallelTasks: number } {
+  if (!issueJson) return { mode: 'sequential', maxParallelTasks: 1 };
+  const settings = issueJson.settings;
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { mode: 'sequential', maxParallelTasks: 1 };
+  const taskExecution = (settings as Record<string, unknown>).taskExecution;
+  if (!taskExecution || typeof taskExecution !== 'object' || Array.isArray(taskExecution)) return { mode: 'sequential', maxParallelTasks: 1 };
+  const modeRaw = (taskExecution as Record<string, unknown>).mode;
+  const maxRaw = (taskExecution as Record<string, unknown>).maxParallelTasks;
+  const mode: TaskExecutionMode = modeRaw === 'parallel' ? 'parallel' : 'sequential';
+  const maxParallelTasks = typeof maxRaw === 'number' && Number.isInteger(maxRaw) && maxRaw >= 1
+    ? Math.min(maxRaw, MAX_PARALLEL_TASKS)
+    : 1;
+  return { mode, maxParallelTasks };
+}
+
 export function Sidebar() {
   const baseUrl = useViewerServerBaseUrl();
   const { pushToast } = useToast();
@@ -47,19 +74,34 @@ export function Sidebar() {
   const startRun = useStartRunMutation(baseUrl);
   const stopRun = useStopRunMutation(baseUrl);
   const setIssuePhase = useSetIssuePhaseMutation(baseUrl);
+  const setTaskExecution = useSetTaskExecutionMutation(baseUrl);
 
   const run = stream.state?.run ?? null;
   const activeIssue = stream.state?.issue_ref ?? null;
+  const issueJson = (stream.state?.issue_json ?? null) as Record<string, unknown> | null;
   const currentPhase = workflowQuery.data?.current_phase ?? null;
   const currentGroup = groupForPhase(currentPhase);
 
   const [provider, setProvider] = useState<Provider>(() => normalizeProvider(localStorage.getItem(PROVIDER_STORAGE_KEY)));
   const [iterationsInput, setIterationsInput] = useState<string>(() => localStorage.getItem(ITERATIONS_STORAGE_KEY) ?? '');
 
+  const canonicalTaskExecution = extractTaskExecutionFromIssueJson(issueJson);
+  const [taskExecutionMode, setTaskExecutionMode] = useState<TaskExecutionMode>(canonicalTaskExecution.mode);
+  const [maxParallelTasksInput, setMaxParallelTasksInput] = useState<string>(String(canonicalTaskExecution.maxParallelTasks));
+
+  useEffect(() => {
+    setTaskExecutionMode(canonicalTaskExecution.mode);
+    setMaxParallelTasksInput(String(canonicalTaskExecution.maxParallelTasks));
+  }, [activeIssue, canonicalTaskExecution.mode, canonicalTaskExecution.maxParallelTasks]);
+
   // Validate iterations input
   const iterationsValidation = validateIterations(iterationsInput);
   const iterationsError = iterationsValidation !== null && 'error' in iterationsValidation ? iterationsValidation.error : null;
   const validIterations = iterationsValidation !== null && 'value' in iterationsValidation ? iterationsValidation.value : undefined;
+
+  const maxParallelValidation = validateMaxParallelTasks(maxParallelTasksInput);
+  const maxParallelError = maxParallelValidation !== null && 'error' in maxParallelValidation ? maxParallelValidation.error : null;
+  const validMaxParallel = maxParallelValidation !== null && 'value' in maxParallelValidation ? maxParallelValidation.value : undefined;
 
   const issues = issuesQuery.data?.issues ?? [];
   const issueListEmpty = issuesQuery.isSuccess && issues.length === 0;
@@ -92,6 +134,18 @@ export function Sidebar() {
     } catch {
       // ignore
     }
+  }
+
+  function handleSetMaxParallelTasks(value: string) {
+    setMaxParallelTasksInput(value);
+  }
+
+  async function handleSaveTaskExecutionSettings() {
+    const payload = {
+      mode: taskExecutionMode,
+      ...(validMaxParallel !== undefined ? { maxParallelTasks: validMaxParallel } : {}),
+    };
+    await setTaskExecution.mutateAsync(payload);
   }
 
   async function handleInitIssue(form: HTMLFormElement) {
@@ -200,6 +254,55 @@ export function Sidebar() {
             />
           </div>
           {iterationsError ? <div className="errorText" style={{ marginBottom: 10 }}>{iterationsError}</div> : null}
+
+          <div className="muted">Task execution</div>
+          <div className="segmented" style={{ marginBottom: 10 }}>
+            {(['sequential', 'parallel'] as const).map((m) => (
+              <button
+                key={m}
+                className={`segBtn ${taskExecutionMode === m ? 'active' : ''}`}
+                onClick={() => setTaskExecutionMode(m)}
+                disabled={!activeIssue || (run?.running ?? false) || setTaskExecution.isPending}
+                title={m === 'parallel' ? 'Run independent tasks in parallel (implement/spec-check waves)' : 'Run tasks one-at-a-time'}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <div className="muted">Max parallel tasks (1–8)</div>
+          <div className="fieldRow" style={{ marginBottom: 10 }}>
+            <input
+              className={`input ${taskExecutionMode === 'parallel' && maxParallelError ? 'inputError' : ''}`}
+              type="text"
+              inputMode="numeric"
+              placeholder="default: 1"
+              value={maxParallelTasksInput}
+              onChange={(e) => handleSetMaxParallelTasks(e.target.value)}
+              disabled={!activeIssue || (run?.running ?? false) || setTaskExecution.isPending}
+              style={{ flex: 1 }}
+            />
+            <button
+              className="btn"
+              onClick={() => void handleSaveTaskExecutionSettings().catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
+              disabled={
+                !activeIssue ||
+                (run?.running ?? false) ||
+                setTaskExecution.isPending ||
+                (taskExecutionMode === 'parallel' && maxParallelError !== null)
+              }
+              title="Persist to issue.json.settings.taskExecution"
+            >
+              {setTaskExecution.isPending ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {taskExecutionMode === 'parallel' && maxParallelError ? <div className="errorText" style={{ marginBottom: 10 }}>{maxParallelError}</div> : null}
+          <div className="muted" style={{ marginBottom: 10 }}>
+            current: <span className="mono">{canonicalTaskExecution.mode}</span>
+            {canonicalTaskExecution.mode === 'parallel' ? (
+              <> × <span className="mono">{canonicalTaskExecution.maxParallelTasks}</span></>
+            ) : null}
+          </div>
+
           <div className="row">
             <button
               className="btn primary"

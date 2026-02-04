@@ -1477,6 +1477,131 @@ describe('viewer-server', () => {
 
     await app.close();
   });
+
+  it('GET /api/issue/task-execution returns sequential defaults when settings are absent', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-task-exec-get-defaults-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-task-exec-get-defaults-');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_classify', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/task-execution',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      settings: { taskExecution: { mode: 'sequential', maxParallelTasks: 1 } },
+    });
+
+    await app.close();
+  });
+
+  it('POST /api/issue/task-execution updates issue.json and broadcasts state', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-issue-task-exec-update-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-issue-task-exec-update-');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'implement_task', workflow: 'default', branch: 'issue/1', notes: '' }, null, 2) +
+        '\n',
+      'utf-8',
+    );
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const httpUrl = new URL(address);
+    const wsUrl = new URL('/api/ws', address);
+    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    const stateSnapshots: { issue_json?: unknown }[] = [];
+    const ws = new WebSocket(wsUrl.toString(), { origin: httpUrl.origin });
+    ws.on('message', (data) => {
+      const raw = decodeWsData(data);
+      try {
+        const msg = JSON.parse(raw) as { event?: unknown; data?: unknown };
+        if (msg.event === 'state' && msg.data && typeof msg.data === 'object') {
+          stateSnapshots.push(msg.data as { issue_json?: unknown });
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    await waitFor(() => stateSnapshots.length > 0);
+
+    const postRes = await fetch(new URL('/api/issue/task-execution', address), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'parallel', maxParallelTasks: 3 }),
+    });
+    expect(postRes.status).toBe(200);
+    expect(await postRes.json()).toEqual({
+      ok: true,
+      settings: { taskExecution: { mode: 'parallel', maxParallelTasks: 3 } },
+    });
+
+    await waitFor(() => {
+      return stateSnapshots.some((s) => {
+        const issueJson = s.issue_json as Record<string, unknown> | null | undefined;
+        const settings = issueJson && typeof issueJson.settings === 'object' && issueJson.settings !== null
+          ? (issueJson.settings as Record<string, unknown>)
+          : null;
+        const taskExecution = settings && typeof settings.taskExecution === 'object' && settings.taskExecution !== null
+          ? (settings.taskExecution as Record<string, unknown>)
+          : null;
+        return Boolean(taskExecution && taskExecution.mode === 'parallel' && taskExecution.maxParallelTasks === 3);
+      });
+    });
+
+    const updated = await readIssueJson(stateDir);
+    const updatedSettings = (updated?.settings ?? null) as Record<string, unknown> | null;
+    const updatedTaskExecution = (updatedSettings?.taskExecution ?? null) as Record<string, unknown> | null;
+    expect(updatedTaskExecution?.mode).toBe('parallel');
+    expect(updatedTaskExecution?.maxParallelTasks).toBe(3);
+
+    ws.close();
+    await app.close();
+  });
 });
 
 describe('POST /api/github/issues/expand', () => {

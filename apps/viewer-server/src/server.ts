@@ -1218,10 +1218,10 @@ export async function buildServer(config: ViewerServerConfig) {
 	    return reply.send({ ok: true, workflow: info.name, ...(resetPhase ? { phase: workflowStart } : {}) });
 	  });
 
-  app.post('/api/issue/status', async (req, reply) => {
-    const gate = await requireMutatingAllowed(req);
-    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
-    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit phase while Jeeves is running.' });
+	  app.post('/api/issue/status', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit phase while Jeeves is running.' });
 
     const issue = runManager.getIssue();
     if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
@@ -1245,12 +1245,108 @@ export async function buildServer(config: ViewerServerConfig) {
     } catch (err) {
       return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
-  });
+	  });
 
-	  app.get('/api/workflow', async (_req, reply) => {
+	  app.get('/api/issue/task-execution', async (_req, reply) => {
 	    const issue = runManager.getIssue();
-	    const issueJson = issue.stateDir ? await readIssueJson(issue.stateDir) : null;
-	    const workflowName = (issueJson && typeof issueJson.workflow === 'string' && issueJson.workflow.trim()) ? issueJson.workflow : 'default';
+	    if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
+	    const issueJson = await readIssueJson(issue.stateDir);
+	    if (!issueJson) return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
+
+	    const settings = (issueJson.settings && typeof issueJson.settings === 'object' && !Array.isArray(issueJson.settings))
+	      ? (issueJson.settings as Record<string, unknown>)
+	      : {};
+	    const taskExecution =
+	      (settings.taskExecution && typeof settings.taskExecution === 'object' && !Array.isArray(settings.taskExecution))
+	        ? (settings.taskExecution as Record<string, unknown>)
+	        : {};
+
+	    const mode = typeof taskExecution.mode === 'string' ? taskExecution.mode : 'sequential';
+	    const maxParallelTasks = typeof taskExecution.maxParallelTasks === 'number' && Number.isInteger(taskExecution.maxParallelTasks) && taskExecution.maxParallelTasks >= 1
+	      ? Math.min(taskExecution.maxParallelTasks, 8)
+	      : 1;
+
+	    return reply.send({
+	      ok: true,
+	      settings: {
+	        taskExecution: {
+	          mode: mode === 'parallel' ? 'parallel' : 'sequential',
+	          maxParallelTasks,
+	        },
+	      },
+	    });
+	  });
+
+	  app.post('/api/issue/task-execution', async (req, reply) => {
+	    const gate = await requireMutatingAllowed(req);
+	    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+	    if (runManager.getStatus().running) return reply.code(409).send({ ok: false, error: 'Cannot edit task execution settings while Jeeves is running.' });
+
+	    const issue = runManager.getIssue();
+	    if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
+	    const issueJson = await readIssueJson(issue.stateDir);
+	    if (!issueJson) return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
+
+	    const body = getBody(req);
+	    const modeRaw = parseOptionalString(body.mode);
+	    if (!modeRaw) return reply.code(400).send({ ok: false, error: 'mode is required' });
+	    const mode = modeRaw.trim();
+	    if (mode !== 'sequential' && mode !== 'parallel') {
+	      return reply.code(400).send({ ok: false, error: 'mode must be "sequential" or "parallel"' });
+	    }
+
+	    const maxParallelTasksRaw = body.maxParallelTasks ?? body.max_parallel_tasks;
+	    const parsedMaxParallel = parseOptionalNumber(maxParallelTasksRaw);
+	    let maxParallelTasks: number | undefined;
+	    if (parsedMaxParallel !== null && parsedMaxParallel !== undefined) {
+	      if (!Number.isInteger(parsedMaxParallel) || parsedMaxParallel < 1 || parsedMaxParallel > 8) {
+	        return reply.code(400).send({ ok: false, error: 'maxParallelTasks must be an integer between 1 and 8' });
+	      }
+	      maxParallelTasks = parsedMaxParallel;
+	    }
+
+	    const settings =
+	      (issueJson.settings && typeof issueJson.settings === 'object' && !Array.isArray(issueJson.settings))
+	        ? (issueJson.settings as Record<string, unknown>)
+	        : {};
+	    const existingTaskExecution =
+	      (settings.taskExecution && typeof settings.taskExecution === 'object' && !Array.isArray(settings.taskExecution))
+	        ? (settings.taskExecution as Record<string, unknown>)
+	        : {};
+
+	    const nextTaskExecution: Record<string, unknown> = {
+	      ...existingTaskExecution,
+	      mode,
+	      ...(maxParallelTasks !== undefined ? { maxParallelTasks } : {}),
+	    };
+
+	    issueJson.settings = {
+	      ...settings,
+	      taskExecution: nextTaskExecution,
+	    };
+
+	    await writeIssueJson(issue.stateDir, issueJson);
+	    hub.broadcast('state', await getStateSnapshot());
+
+	    const effectiveMax = typeof nextTaskExecution.maxParallelTasks === 'number' && Number.isInteger(nextTaskExecution.maxParallelTasks) && nextTaskExecution.maxParallelTasks >= 1
+	      ? Math.min(nextTaskExecution.maxParallelTasks, 8)
+	      : 1;
+
+	    return reply.send({
+	      ok: true,
+	      settings: {
+	        taskExecution: {
+	          mode,
+	          maxParallelTasks: effectiveMax,
+	        },
+	      },
+	    });
+	  });
+
+		  app.get('/api/workflow', async (_req, reply) => {
+		    const issue = runManager.getIssue();
+		    const issueJson = issue.stateDir ? await readIssueJson(issue.stateDir) : null;
+		    const workflowName = (issueJson && typeof issueJson.workflow === 'string' && issueJson.workflow.trim()) ? issueJson.workflow : 'default';
 
 	    try {
 	      const workflow = await loadWorkflowByName(workflowName, { workflowsDir });

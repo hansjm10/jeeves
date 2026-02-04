@@ -89,6 +89,17 @@ export type RunStatus = Readonly<{
 
 export type CreateIssueRunProvider = 'claude' | 'codex' | 'fake';
 
+export type TaskExecutionMode = 'sequential' | 'parallel';
+
+export type TaskExecutionSettings = Readonly<{
+  mode: TaskExecutionMode;
+  maxParallelTasks: number;
+}>;
+
+export type IssueSettings = Readonly<{
+  taskExecution: TaskExecutionSettings;
+}>;
+
 /**
  * Input for starting a run via POST /api/run.
  * - provider: Required provider type
@@ -98,6 +109,19 @@ export type StartRunInput = Readonly<{
   provider: CreateIssueRunProvider;
   max_iterations?: number;
 }>;
+
+export type GetTaskExecutionResponse =
+  | Readonly<{ ok: true; settings: IssueSettings }>
+  | Readonly<{ ok: false; error: string }>;
+
+export type SetTaskExecutionRequest = Readonly<{
+  mode: TaskExecutionMode;
+  maxParallelTasks?: number;
+}>;
+
+export type SetTaskExecutionResponse =
+  | Readonly<{ ok: true; settings: IssueSettings }>
+  | Readonly<{ ok: false; error: string }>;
 
 export type CreateIssueInitParams = Readonly<{
   branch?: string;

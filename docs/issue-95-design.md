@@ -534,7 +534,166 @@ This feature introduces **issue-scoped secret storage** for a Sonar authenticati
 | Crash recovery | All file writes are atomic (temp + rename). On startup/reconcile, remove any leftover `<worktreeRoot>/.env.jeeves.tmp`, re-ensure `.git/info/exclude` lines (deduped), and retry reconcile to converge worktree state; `has_token` is derived from the secret file. |
 
 ## 5. Tasks
-[To be completed in design_plan phase]
+
+### Planning Gates (explicit answers)
+
+**Decomposition Gates**
+1) **Smallest independently testable unit**: A pure, side-effect-free token validator + (separately) a filesystem reconcile helper that can be tested against a temp worktree directory.  
+2) **Dependencies between tasks**: Yes; backend storage/reconcile primitives must exist before wiring HTTP endpoints; UI depends on endpoint contracts.  
+3) **Parallelizable tasks**: Yes; viewer UI work (T6/T7) can proceed in parallel with backend implementation once request/response shapes are fixed (Section 3).
+
+**Ordering Gates**
+7) **Must be done first**: Backend primitives (validation + secret store + reconcile helpers) to keep endpoint handlers thin and testable (T1–T3).  
+8) **Can only be done last**: Full integration wiring + manual verification (T5/T7, then Validation §6).  
+9) **Circular dependencies**: None; tasks form a DAG (see graph below).
+
+**Infrastructure Gates**
+10) **Build/config changes needed**: None expected (types are duplicated across viewer and viewer-server today; keep that pattern).  
+11) **New dependencies to install**: None.  
+12) **Environment variables or secrets needed**: No new env vars; the Sonar token itself is stored issue-scoped in `.jeeves/.secrets/sonar-token.json` with restrictive permissions.
+
+### Task Dependency Graph
+```
+T1 (no deps)
+T2 → depends on T1
+T3 → depends on T1, T2
+T4 → depends on T1, T2, T3
+T5 → depends on T3, T4
+T6 → depends on T4
+T7 → depends on T4, T6
+```
+
+### Task Breakdown
+| ID | Title | Summary | Files | Acceptance Criteria |
+|----|-------|---------|-------|---------------------|
+| T1 | Token types + validation | Add shared domain helpers for Sonar token inputs and status payloads (no I/O). | `apps/viewer-server/src/sonarTokenTypes.ts`, `apps/viewer/src/api/sonarTokenTypes.ts` | Invalid tokens are rejected per §3 Validation Rules; token value is never included in derived status. |
+| T2 | Secret file persistence | Implement atomic read/write/delete for `.jeeves/.secrets/sonar-token.json` with `0600` perms. | `apps/viewer-server/src/sonarTokenSecret.ts`, `apps/viewer-server/src/sonarTokenSecret.test.ts` | PUT creates/updates secret file atomically; DELETE removes it idempotently; file mode is `0600` where supported. |
+| T3 | Worktree reconcile helpers | Implement `.env.jeeves` materialization + `.git/info/exclude` updates + tmp cleanup. | `apps/viewer-server/src/sonarTokenReconcile.ts`, `apps/viewer-server/src/gitExclude.ts`, `apps/viewer-server/src/sonarTokenReconcile.test.ts` | Reconcile converges `.env.jeeves` and exclude lines idempotently; failures produce correct `SonarSyncStatus` without leaking token. |
+| T4 | Viewer-server endpoints + event | Add GET/PUT/DELETE/RECONCILE endpoints and `sonar-token-status` event emission with mutex + warnings behavior. | `apps/viewer-server/src/server.ts`, `apps/viewer-server/src/server.test.ts` | Endpoints match §3 contracts; 503 on mutex timeout; responses/events never return token; warnings emitted on non-fatal sync failures. |
+| T5 | Auto-reconcile on init/select | Trigger reconcile after worktree creation/refresh and on issue select (best-effort, non-fatal). | `apps/viewer-server/src/server.ts`, `apps/viewer-server/src/init.ts`, `apps/viewer-server/src/server.test.ts` | After `/api/init/issue` and `/api/issues/select`, a configured token is materialized (or deferred) and a `sonar-token-status` event is broadcast. |
+| T6 | Viewer Sonar token UI | Add a viewer page/panel to view status, save/update token, remove token, and retry sync. | `apps/viewer/src/pages/SonarTokenPage.tsx`, `apps/viewer/src/pages/SonarTokenPage.css`, `apps/viewer/src/app/router.tsx`, `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/features/sonarToken/*` | UI can add/update/remove/reconcile token for selected issue; token input is cleared on save; warnings/errors shown without token display. |
+| T7 | Viewer live status wiring | Consume `sonar-token-status` stream events to keep UI status fresh across tabs and operations. | `apps/viewer/src/stream/streamReducer.ts`, `apps/viewer/src/api/types.ts`, `apps/viewer/src/features/sonarToken/state.ts`, `apps/viewer/src/features/sonarToken/state.test.ts` | Receiving a `sonar-token-status` event updates the rendered status without requiring a manual refresh. |
+
+### Task Details
+
+**T1: Token types + validation**
+- Summary: Centralize token input validation and define the status shapes used by viewer-server and viewer (duplicated types, per existing pattern).
+- Files:
+  - `apps/viewer-server/src/sonarTokenTypes.ts` - define `SonarSyncStatus`, request/response/event TS types, `validateTokenInput()`, and `sanitizeErrorForUi()`.
+  - `apps/viewer/src/api/sonarTokenTypes.ts` - mirror the endpoint/event types for typed UI calls.
+  - `apps/viewer/src/api/types.ts` - export the new types (or re-export via a dedicated module).
+- Acceptance Criteria:
+  1. `token` validation enforces: trimmed, length `1..1024`, no `\0`, `\n`, `\r`.
+  2. `sync_now` and `force` validation rejects non-boolean values with per-field errors.
+  3. The token value is never part of any status/event type.
+- Dependencies: None
+- Verification: `pnpm test -- -t \"validateToken\"`
+
+**T2: Secret file persistence**
+- Summary: Store the token only in `.jeeves/.secrets/sonar-token.json` in the issue state directory, using atomic writes and restrictive permissions.
+- Files:
+  - `apps/viewer-server/src/sonarTokenSecret.ts` - implement `readSonarTokenSecret()`, `writeSonarTokenSecret()`, `deleteSonarTokenSecret()`.
+  - `apps/viewer-server/src/sonarTokenSecret.test.ts` - tests for atomic write behavior, delete idempotence, and file mode when supported.
+- Acceptance Criteria:
+  1. On write, the file content matches schema `{ schemaVersion: 1, token: <trimmed>, updated_at: <iso> }`.
+  2. Writes are atomic via temp + rename; leftover temp files are cleaned up on next write.
+  3. File permissions are set to `0600` on POSIX platforms (best effort; test skips on Windows).
+- Dependencies: T1
+- Verification: `pnpm test -- apps/viewer-server/src/sonarTokenSecret.test.ts`
+
+**T3: Worktree reconcile helpers**
+- Summary: Implement idempotent, crash-safe worktree side-effects: `.env.jeeves` write/remove and `.git/info/exclude` updates.
+- Files:
+  - `apps/viewer-server/src/sonarTokenReconcile.ts` - implement `reconcileSonarTokenToWorktree()` returning `{ sync_status, warnings, last_error, timestamps }`.
+  - `apps/viewer-server/src/gitExclude.ts` - generalize `ensureJeevesExcludedFromGitStatus()` to also support ensuring `.env.jeeves` + `.env.jeeves.tmp` ignore lines (deduped).
+  - `apps/viewer-server/src/sonarTokenReconcile.test.ts` - tests using a temp git worktree verifying `.env.jeeves` contents, atomic behavior, and exclude entries.
+- Acceptance Criteria:
+  1. When `has_token=true`, `.env.jeeves` equals `SONAR_TOKEN=<token>\\n` and is written atomically via `.env.jeeves.tmp`.
+  2. When `has_token=false`, `.env.jeeves` is removed if present; leftover `.env.jeeves.tmp` is removed on reconcile.
+  3. `.git/info/exclude` contains (deduped) `.env.jeeves` and `.env.jeeves.tmp`.
+  4. On exclude/env failures, reconcile returns `failed_*` status and a sanitized warning without including the token.
+- Dependencies: T1, T2
+- Verification: `pnpm test -- apps/viewer-server/src/sonarTokenReconcile.test.ts`
+
+**T4: Viewer-server endpoints + event**
+- Summary: Expose the REST API for token status/mutations and broadcast `sonar-token-status` after successful operations; implement a per-issue in-memory mutex to serialize operations.
+- Files:
+  - `apps/viewer-server/src/server.ts` - add the 4 endpoints under `/api/issue/sonar-token*` and emit `sonar-token-status`.
+  - `apps/viewer-server/src/server.test.ts` - add integration tests covering: no token value returned; PUT/DELETE create/remove secret; `.env.jeeves` and exclude updates; 409 when run is active; 503 on forced mutex timeout.
+- Acceptance Criteria:
+  1. `GET /api/issue/sonar-token` returns `has_token` based on secret file existence/parse; never returns the token.
+  2. `PUT` persists secret first; then reconciles unless `sync_now=false`; returns `warnings[]` on non-fatal sync failures.
+  3. `DELETE` is idempotent (`updated=false` when already absent) and attempts reconcile cleanup when worktree exists.
+  4. `POST /reconcile` never changes token presence (`updated=false`) and supports `force`.
+  5. After each successful mutation/reconcile, `sonar-token-status` is broadcast with sanitized `last_error`.
+- Dependencies: T1, T2, T3
+- Verification: `pnpm test -- apps/viewer-server/src/server.test.ts -t \"sonar-token\"`
+
+**T5: Auto-reconcile on init/select**
+- Summary: Make worktree materialization happen automatically when the worktree is created/refreshed and when the active issue changes (best effort).
+- Files:
+  - `apps/viewer-server/src/init.ts` - after `ensureWorktree()` + `.jeeves` link creation, invoke reconcile if the issue has a token (ignore errors; record status in issue.json).
+  - `apps/viewer-server/src/server.ts` - after successful `/api/issues/select`, trigger a best-effort reconcile and broadcast `sonar-token-status`.
+  - `apps/viewer-server/src/server.test.ts` - tests that init/select results in `sync_status=in_sync` (or `deferred_worktree_absent`) when token exists.
+- Acceptance Criteria:
+  1. After `/api/init/issue`, if a token exists, `.env.jeeves` is created and excluded (or a warning is returned/recorded if not possible).
+  2. After `/api/issues/select`, the server attempts reconcile and broadcasts the current status event (non-fatal on failure).
+- Dependencies: T3, T4
+- Verification: `pnpm test -- apps/viewer-server/src/server.test.ts -t \"auto-reconcile\"`
+
+**T6: Viewer Sonar token UI**
+- Summary: Add a dedicated viewer surface to manage the issue-scoped token without ever displaying the saved token value.
+- Files:
+  - `apps/viewer/src/pages/SonarTokenPage.tsx` - status display, token input, save/remove/retry actions, warning banner.
+  - `apps/viewer/src/pages/SonarTokenPage.css` - styling using design tokens (no hex colors).
+  - `apps/viewer/src/app/router.tsx` - add route (e.g. `/sonar-token`).
+  - `apps/viewer/src/layout/AppShell.tsx` - add a tab link.
+  - `apps/viewer/src/features/sonarToken/api.ts` - `getStatus()`, `putToken()`, `deleteToken()`, `reconcile()` wrappers using `apiJson`.
+  - `apps/viewer/src/features/sonarToken/queries.ts` - react-query status query + invalidation on mutations.
+  - `apps/viewer/src/features/mutations.ts` - add mutations for the 3 mutating endpoints (optional if kept in `features/sonarToken`).
+- Acceptance Criteria:
+  1. With no issue selected, the page shows a clear disabled/empty state (no requests spam).
+  2. Save/update sends `PUT` and clears the token input after success; remove sends `DELETE`; retry sends `POST /reconcile`.
+  3. UI shows `sync_status`, timestamps, and `last_error` (sanitized) and displays any `warnings[]` without the token.
+- Dependencies: T4
+- Verification: `pnpm typecheck && pnpm lint`
+
+**T7: Viewer live status wiring**
+- Summary: Keep the UI status consistent with backend changes by consuming the `sonar-token-status` stream event.
+- Files:
+  - `apps/viewer/src/api/types.ts` - add `SonarTokenStatusEvent` type.
+  - `apps/viewer/src/stream/streamReducer.ts` - store latest sonar token status in stream state (e.g. `sonarTokenStatusByIssueRef` or `sonarTokenStatus` for current issue).
+  - `apps/viewer/src/stream/streamTypes.ts` - extend state/action typings for the new event.
+  - `apps/viewer/src/stream/ViewerStreamProvider.tsx` - route `sonar-token-status` into a dedicated reducer action (not `sdk`).
+  - `apps/viewer/src/features/sonarToken/state.ts` + `apps/viewer/src/features/sonarToken/state.test.ts` - pure helpers to merge stream events with query-fetched status.
+- Acceptance Criteria:
+  1. When a `sonar-token-status` event arrives, the viewer updates the displayed status within one render tick.
+  2. Event handling does not add noise to `sdkEvents`.
+- Dependencies: T4, T6
+- Verification: `pnpm test -- apps/viewer/src/features/sonarToken/state.test.ts`
 
 ## 6. Validation
-[To be completed in design_plan phase]
+
+### Pre-Implementation Checks
+- [ ] All dependencies installed: `pnpm install`
+- [ ] Types check: `pnpm typecheck`
+- [ ] Existing tests pass: `pnpm test`
+
+### Post-Implementation Checks
+- [ ] Types check: `pnpm typecheck`
+- [ ] Lint passes: `pnpm lint`
+- [ ] All tests pass: `pnpm test`
+- [ ] New tests added for:
+  - `apps/viewer-server/src/sonarTokenSecret.test.ts`
+  - `apps/viewer-server/src/sonarTokenReconcile.test.ts`
+  - `apps/viewer/src/features/sonarToken/state.test.ts`
+  - Updated: `apps/viewer-server/src/server.test.ts`
+
+### Manual Verification (required)
+- [ ] Start viewer + server: `pnpm dev`
+- [ ] Init/select an issue from the sidebar; open `/sonar-token`
+- [ ] Save a token and verify:
+  - `.env.jeeves` exists in the worktree and contains `SONAR_TOKEN=...` (single line + newline)
+  - `git status --porcelain` in the worktree does **not** show `.env.jeeves`
+- [ ] Remove the token and verify `.env.jeeves` is removed (and still not shown in `git status`)
+- [ ] Restart viewer-server and confirm the status loads without ever showing the token value (presence only)

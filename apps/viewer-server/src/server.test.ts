@@ -3625,6 +3625,8 @@ describe('sonar-token endpoints', () => {
       // Create both state dir and worktree dir
       await fs.mkdir(stateDir, { recursive: true });
       await fs.mkdir(worktreeDir, { recursive: true });
+      // Initialize git so startup reconcile can succeed (even with no token)
+      await git(['init'], { cwd: worktreeDir });
       // Set a stored sync_status of in_sync
       await fs.writeFile(
         path.join(stateDir, 'issue.json'),
@@ -3657,7 +3659,7 @@ describe('sonar-token endpoints', () => {
       const body = res.json() as Record<string, unknown>;
       expect(body.ok).toBe(true);
       expect(body.worktree_present).toBe(true);
-      // When worktree is present, stored sync_status is returned unchanged
+      // When worktree is present and no token, startup reconcile runs and results in in_sync
       expect(body.sync_status).toBe('in_sync');
 
       await app.close();
@@ -4043,6 +4045,116 @@ describe('sonar-token endpoints', () => {
 
       // Token value should NEVER be in response
       expect(body.token).toBeUndefined();
+
+      await app.close();
+    });
+
+    it('startup reconcile removes stale .env.jeeves when no token is configured', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-stale-env-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-stale-env-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir WITHOUT token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Simulate leftover stale files from a previous run (e.g., token was removed)
+      const envPath = path.join(worktreeDir, '.env.jeeves');
+      const tmpPath = path.join(worktreeDir, '.env.jeeves.tmp');
+      await fs.writeFile(envPath, 'STALE_TOKEN="old-value"\n', 'utf-8');
+      await fs.writeFile(tmpPath, 'STALE_TMP="crash-remnant"\n', 'utf-8');
+
+      // Verify files exist before startup
+      const envBefore = await fs.stat(envPath).catch(() => null);
+      const tmpBefore = await fs.stat(tmpPath).catch(() => null);
+      expect(envBefore).not.toBeNull();
+      expect(tmpBefore).not.toBeNull();
+
+      // Start server - startup reconcile should clean up both files
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Both .env.jeeves and .env.jeeves.tmp should be removed
+      const envAfter = await fs.stat(envPath).catch(() => null);
+      const tmpAfter = await fs.stat(tmpPath).catch(() => null);
+      expect(envAfter).toBeNull();
+      expect(tmpAfter).toBeNull();
+
+      // Verify GET status shows in_sync (no token, files cleaned up)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(false);
+      expect(body.worktree_present).toBe(true);
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('startup reconcile records sync_status and last_error when reconcile fails (non-git worktree)', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-fail-status-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-fail-status-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      // Note: NOT initializing git in worktree, so .git/info/exclude update will fail
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'fail-status-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - reconcile should fail because no .git directory
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows the failure was recorded
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      // sync_status should indicate failure (failed_exclude since git is missing)
+      expect(body.sync_status).toBe('failed_exclude');
+      // last_error should be set
+      expect(body.last_error).not.toBeNull();
+      expect(typeof body.last_error).toBe('string');
+      // Token value should NEVER be in response or error
+      expect(body.token).toBeUndefined();
+      expect((body.last_error as string)).not.toContain('fail-status-token');
 
       await app.close();
     });

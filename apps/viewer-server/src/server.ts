@@ -524,13 +524,10 @@ export async function buildServer(config: ViewerServerConfig) {
   // This converges worktree artifacts, cleans up leftover .env.jeeves.tmp files,
   // and emits sonar-token-status event (Design §3 Worktree Filesystem Contracts).
   // Non-fatal: failures are surfaced via sync_status/last_error without blocking startup.
+  // autoReconcileSonarToken handles errors internally, so no try/catch needed here.
   const startupIssue = runManager.getIssue();
   if (startupIssue.issueRef && startupIssue.stateDir) {
-    try {
-      await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
-    } catch {
-      // Non-fatal - ignore reconcile errors on startup
-    }
+    await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
   }
 
   // Poll for log/sdk updates and file target changes
@@ -1475,8 +1472,15 @@ export async function buildServer(config: ViewerServerConfig) {
 
   /**
    * Best-effort auto-reconcile of sonar token to worktree.
-   * Called after /api/init/issue and /api/issues/select.
+   * Called after /api/init/issue, /api/issues/select, and on startup.
    * Non-fatal: errors are recorded in status but do not propagate.
+   *
+   * IMPORTANT: This function handles BOTH token-present AND token-absent cases:
+   * - Token present: writes .env.jeeves with token, cleans up .env.jeeves.tmp
+   * - Token absent: removes .env.jeeves (if stale), cleans up .env.jeeves.tmp
+   *
+   * This ensures that on startup or issue select, any leftover artifacts from
+   * previous runs are cleaned up, regardless of whether a token is configured.
    */
   async function autoReconcileSonarToken(
     issueRef: string,
@@ -1489,13 +1493,6 @@ export async function buildServer(config: ViewerServerConfig) {
     const secret = await readSonarTokenSecret(stateDir);
     const hasToken = secret.exists;
 
-    // If no token configured, just emit current status
-    if (!hasToken) {
-      const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
-      emitSonarTokenStatus(status);
-      return;
-    }
-
     // Read current env_var_name from issue.json
     const issueJson = await readIssueJson(stateDir);
     const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
@@ -1506,29 +1503,40 @@ export async function buildServer(config: ViewerServerConfig) {
         ? sonarTokenStatus.env_var_name.trim()
         : DEFAULT_ENV_VAR_NAME;
 
-    // Reconcile if worktree exists
+    // Reconcile if worktree exists (handles both token present/absent cases)
     let syncStatus: SonarSyncStatus = 'never_attempted';
     let lastError: string | null = null;
 
     if (workDir) {
       const worktreeExists = (await fs.stat(workDir).catch(() => null))?.isDirectory();
       if (worktreeExists) {
+        // Always call reconcile - it handles both:
+        // - hasToken=true: write .env.jeeves with token
+        // - hasToken=false: remove .env.jeeves if present
+        // In both cases, it cleans up .env.jeeves.tmp
         const tokenValue = secret.exists ? secret.data.token : undefined;
 
-        const reconcileResult = await reconcileSonarTokenToWorktree({
-          worktreeDir: workDir,
-          hasToken,
-          token: tokenValue,
-          envVarName,
-        });
+        try {
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: workDir,
+            hasToken,
+            token: tokenValue,
+            envVarName,
+          });
 
-        syncStatus = reconcileResult.sync_status;
-        lastError = reconcileResult.last_error;
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+        } catch (err) {
+          // reconcileSonarTokenToWorktree should not throw, but if it does
+          // (e.g., runGit throws in ensurePatternsExcluded), record the error
+          syncStatus = 'failed_exclude';
+          lastError = sanitizeErrorForUi(err);
+        }
       } else {
-        syncStatus = 'deferred_worktree_absent';
+        syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
       }
     } else {
-      syncStatus = 'deferred_worktree_absent';
+      syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
     }
 
     // Update status in issue.json

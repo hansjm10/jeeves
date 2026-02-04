@@ -32,6 +32,7 @@ import {
   getImplementDoneMarkerPath,
   hasCompletionMarker,
 } from './workerSandbox.js';
+import { decideQuickFixRouting } from './quickFixRouter.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -111,6 +112,12 @@ function mapProvider(value: unknown): 'claude' | 'fake' | 'codex' {
   if (v === 'claude' || v === 'claude-agent-sdk' || v === 'claude_agent_sdk') return 'claude';
   if (v === 'codex' || v === 'codex-sdk' || v === 'codex_sdk' || v === 'openai' || v === 'openai-codex') return 'codex';
   throw new Error(`Invalid provider '${value}'. Valid providers: claude, codex, fake`);
+}
+
+function validateQuick(value: unknown): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  throw new Error('Invalid quick: must be boolean');
 }
 
 export class RunManager {
@@ -220,6 +227,7 @@ export class RunManager {
   async start(params: {
     provider?: unknown;
     workflow?: unknown;
+    quick?: unknown;
     max_iterations?: unknown;
     inactivity_timeout_sec?: unknown;
     iteration_timeout_sec?: unknown;
@@ -244,6 +252,7 @@ export class RunManager {
     }
 
     const provider = mapProvider(params.provider);
+    const quick = validateQuick(params.quick) ?? false;
     const maxIterations = Number.isFinite(Number(params.max_iterations)) ? Math.max(1, Number(params.max_iterations)) : 10;
     const inactivityTimeoutSec = Number.isFinite(Number(params.inactivity_timeout_sec)) ? Math.max(1, Number(params.inactivity_timeout_sec)) : 600;
     const iterationTimeoutSec = Number.isFinite(Number(params.iteration_timeout_sec)) ? Math.max(1, Number(params.iteration_timeout_sec)) : 3600;
@@ -303,6 +312,7 @@ export class RunManager {
       inactivityTimeoutSec,
       iterationTimeoutSec,
       workflowOverride,
+      quick,
       viewerLogPath,
     });
 
@@ -534,6 +544,7 @@ export class RunManager {
     inactivityTimeoutSec: number;
     iterationTimeoutSec: number;
     workflowOverride: string | null;
+    quick: boolean;
     viewerLogPath: string;
   }): Promise<void> {
     const { viewerLogPath } = params;
@@ -576,8 +587,50 @@ export class RunManager {
 
 	        const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
 	        if (!issueJson) throw new Error('issue.json not found or invalid');
-	        const workflowName = params.workflowOverride ?? (isNonEmptyString(issueJson.workflow) ? issueJson.workflow : 'default');
 
+	        // Auto-route to the `quick-fix` workflow at the beginning of the run (iteration 1).
+	        // Guardrails:
+	        // - Only if no workflow override is set (so the issue can change workflows)
+	        // - Only if the issue is still at the start of the default workflow
+	        if (iteration === 1 && params.workflowOverride === null) {
+	          try {
+	            const currentWorkflow = isNonEmptyString(issueJson.workflow) ? issueJson.workflow.trim() : 'default';
+	            if (currentWorkflow === 'default') {
+	              const defaultWorkflow = await loadWorkflowByName('default', { workflowsDir: this.workflowsDir });
+	              const currentPhaseRaw = isNonEmptyString(issueJson.phase) ? issueJson.phase.trim() : '';
+	              const currentPhase = currentPhaseRaw || defaultWorkflow.start;
+	              if (currentPhase === defaultWorkflow.start) {
+	                const repo = typeof issueJson.repo === 'string' ? issueJson.repo.trim() : '';
+	                const issueNumber = getIssueNumber(issueJson);
+	                if (repo && issueNumber) {
+	                  const decision = await decideQuickFixRouting({
+	                    explicitQuick: params.quick,
+	                    repo,
+	                    issueNumber,
+	                    cwd: this.repoRoot,
+	                    env: process.env,
+	                  });
+	                  if (decision.route) {
+	                    const quickWorkflow = await loadWorkflowByName('quick-fix', { workflowsDir: this.workflowsDir });
+	                    issueJson.workflow = 'quick-fix';
+	                    issueJson.phase = quickWorkflow.start;
+	                    await writeIssueJson(this.stateDir!, issueJson);
+	                    this.broadcast('state', await this.getStateSnapshot());
+	                    await this.appendViewerLog(
+	                      viewerLogPath,
+	                      `[QUICK_FIX] Routed to workflow=quick-fix phase=${quickWorkflow.start} (${decision.reason})`,
+	                    );
+	                  }
+	                }
+	              }
+	            }
+	          } catch (err) {
+	            const msg = err instanceof Error ? err.message : String(err);
+	            await this.appendViewerLog(viewerLogPath, `[QUICK_FIX] Auto-routing skipped: ${msg}`);
+	          }
+	        }
+
+	        const workflowName = params.workflowOverride ?? (isNonEmptyString(issueJson.workflow) ? issueJson.workflow : 'default');
 	        const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
 	        const currentPhaseRaw = isNonEmptyString(issueJson.phase) ? issueJson.phase.trim() : '';
 	        let currentPhase = currentPhaseRaw || workflow.start;
@@ -839,6 +892,23 @@ export class RunManager {
 
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
+          // If a phase intentionally switched workflows by editing issue.json, honor it immediately.
+          // This is only allowed when no workflow override is active.
+          if (params.workflowOverride === null) {
+            const nextWorkflowName = isNonEmptyString(updatedIssue.workflow) ? updatedIssue.workflow.trim() : workflowName;
+            if (nextWorkflowName !== workflowName) {
+              const nextWorkflow = await loadWorkflowByName(nextWorkflowName, { workflowsDir: this.workflowsDir });
+              const requestedPhase = isNonEmptyString(updatedIssue.phase) ? updatedIssue.phase.trim() : '';
+              const nextPhase = requestedPhase && nextWorkflow.phases[requestedPhase] ? requestedPhase : nextWorkflow.start;
+              updatedIssue.workflow = nextWorkflowName;
+              updatedIssue.phase = nextPhase;
+              await writeIssueJson(this.stateDir!, updatedIssue);
+              this.broadcast('state', await this.getStateSnapshot());
+              await this.appendViewerLog(viewerLogPath, `[WORKFLOW] Switched: ${workflowName} -> ${nextWorkflowName} (phase=${nextPhase})`);
+              continue;
+            }
+          }
+
           await this.commitDesignDocCheckpoint({ phase: currentPhase, issueJson: updatedIssue });
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {

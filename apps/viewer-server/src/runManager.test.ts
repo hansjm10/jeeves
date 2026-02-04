@@ -1339,6 +1339,82 @@ describe('RunManager', () => {
   });
 });
 
+describe('RunManager quick-fix workflow switching', () => {
+  it('honors workflow switch written by a phase when no workflow override is set', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-switch-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-switch-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 79;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_classify', workflow: 'default', branch: 'issue/79', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const calls: string[][] = [];
+    const spawn = ((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      const phaseIdx = args.findIndex((a) => a === '--phase');
+      const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
+      if (phase === 'quick_fix') {
+        // Simulate a quick-fix phase handing off to the default workflow by editing issue.json.
+        // We write before the process exits so RunManager observes the workflow change after exitCode=0.
+        void fs.writeFile(
+          path.join(stateDir, 'issue.json'),
+          JSON.stringify(
+            { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_classify', workflow: 'default', branch: 'issue/79', notes: '' },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      }
+      return makeFakeChild(0, 50);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', quick: true, max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const firstCall = calls.find((c) => c.includes('--phase') && c.includes('quick_fix'));
+    expect(firstCall).toBeDefined();
+    expect(firstCall).toContain('--workflow');
+    expect(firstCall).toContain('quick-fix');
+
+    const secondCall = calls.find((c) => c.includes('--phase') && c.includes('design_classify'));
+    expect(secondCall).toBeDefined();
+    expect(secondCall).toContain('--workflow');
+    expect(secondCall).toContain('default');
+  });
+});
+
 describe('RunManager max_iterations handling', () => {
   // Helper to create a minimal RunManager setup for testing max_iterations behavior
   async function setupTestRun(issueNumber: number) {

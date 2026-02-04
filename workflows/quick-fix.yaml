@@ -1,0 +1,83 @@
+workflow:
+  name: quick-fix
+  version: 1
+  start: quick_fix
+  default_provider: codex
+  default_model: gpt-5.2
+  default_reasoning_effort: high
+phases:
+  # ============================================
+  # QUICK FIX PHASES (Lightweight path)
+  # ============================================
+  quick_fix:
+    type: execute
+    provider: claude
+    prompt: quick.fix.md
+    description: Small changes without full design ceremony
+    transitions:
+      - to: quick_fix
+        when: control.restartPhase == true
+        priority: 0
+      - to: prepare_pr
+        when: status.implementationComplete == true
+        priority: 1
+      - to: design_handoff
+        when: status.needsDesign == true
+        priority: 2
+    model: opus
+    thinking_budget: max
+
+  design_handoff:
+    type: execute
+    provider: codex
+    prompt: quick.handoff_to_design.md
+    description: Escalate to full design workflow when scope grows
+    transitions:
+      - to: complete
+        when: status.handoffComplete == true
+    model: gpt-5.2
+    reasoning_effort: high
+
+  # ============================================
+  # COMPLETION / REVIEW PHASES (Reuse defaults)
+  # ============================================
+  prepare_pr:
+    type: execute
+    provider: claude
+    prompt: pr.prepare.md
+    description: Create pull request after quick fix complete
+    transitions:
+      - to: code_review
+        when: status.prCreated == true
+    model: sonnet
+    thinking_budget: max
+
+  code_review:
+    type: evaluate
+    provider: codex
+    prompt: review.evaluate.md
+    description: Review code changes (read-only)
+    transitions:
+      - to: code_fix
+        when: status.reviewNeedsChanges == true
+      - to: complete
+        when: status.reviewClean == true
+    model: gpt-5.2
+    reasoning_effort: high
+
+  code_fix:
+    type: execute
+    provider: claude
+    prompt: review.fix.md
+    description: Apply fixes from code review
+    transitions:
+      - to: code_review
+        auto: true
+    model: opus
+    thinking_budget: max
+
+  complete:
+    type: terminal
+    description: Workflow complete
+    transitions: []
+

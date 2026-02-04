@@ -78,6 +78,32 @@ describe('CLI: jeeves run', () => {
     });
   });
 
+  describe('--quick flag', () => {
+    it('includes quick=true in POST payload when --quick is provided', async () => {
+      mockFetch.mockResolvedValue({
+        json: () => Promise.resolve({ ok: true, run: { running: true } }),
+      });
+
+      await main(['run', '--quick']);
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(options.body as string)).toEqual({ quick: true });
+    });
+
+    it('combines --quick and --iterations correctly', async () => {
+      mockFetch.mockResolvedValue({
+        json: () => Promise.resolve({ ok: true, run: { running: true } }),
+      });
+
+      await main(['run', '--quick', '--iterations', '3']);
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(options.body as string)).toEqual({ max_iterations: 3, quick: true });
+    });
+  });
+
   describe('server response handling', () => {
     it('throws error when server response has ok:false', async () => {
       mockFetch.mockResolvedValue({
@@ -169,6 +195,7 @@ describe('CLI: jeeves run', () => {
       expect(output).toContain('jeeves run');
       expect(output).toContain('--iterations');
       expect(output).toContain('--server');
+      expect(output).toContain('--quick');
       expect(output).toContain('--help');
       expect(output).toContain('--version');
       expect(mockFetch).not.toHaveBeenCalled();

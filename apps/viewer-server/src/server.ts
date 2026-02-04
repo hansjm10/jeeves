@@ -1140,6 +1140,7 @@ export async function buildServer(config: ViewerServerConfig) {
 	      const run = await runManager.start({
 	        provider: parseOptionalString(body.provider) ?? body.provider,
 	        workflow: parseOptionalString(body.workflow) ?? body.workflow,
+	        quick: parseOptionalBool(body.quick) ?? body.quick,
 	        max_iterations: parseOptionalNumber(body.max_iterations) ?? body.max_iterations,
 	        inactivity_timeout_sec: parseOptionalNumber(body.inactivity_timeout_sec) ?? body.inactivity_timeout_sec,
 	        iteration_timeout_sec: parseOptionalNumber(body.iteration_timeout_sec) ?? body.iteration_timeout_sec,
@@ -1156,7 +1157,8 @@ export async function buildServer(config: ViewerServerConfig) {
 	        msg.includes('Invalid max_parallel_tasks') ||
 	        msg.includes('Invalid provider') ||
 	        msg.includes('No issue selected') ||
-	        msg.includes('Worktree not found')
+	        msg.includes('Worktree not found') ||
+	        msg.includes('Invalid quick')
 	      ) {
 	        status = 400;
 	      } else {

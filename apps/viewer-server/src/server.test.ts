@@ -2089,3 +2089,281 @@ process.exit(0);
     await app.close();
   });
 });
+
+describe('POST /api/run max_parallel_tasks', () => {
+  it('returns 400 for invalid max_parallel_tasks (non-integer)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-parallel-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-parallel-invalid-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 123;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'implement_task',
+      workflow: 'default',
+    }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Invalid: string
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: 'invalid' },
+    });
+    expect(res1.statusCode).toBe(400);
+    expect((res1.json() as { error?: string }).error).toContain('max_parallel_tasks');
+
+    // Invalid: 0
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: 0 },
+    });
+    expect(res2.statusCode).toBe(400);
+
+    // Invalid: > MAX_PARALLEL_TASKS (8)
+    const res3 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: 9 },
+    });
+    expect(res3.statusCode).toBe(400);
+
+    // Invalid: negative
+    const res4 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: -1 },
+    });
+    expect(res4.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('accepts valid max_parallel_tasks values (1-8)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-parallel-valid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-parallel-valid-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 124;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'implement_task',
+      workflow: 'default',
+    }), 'utf-8');
+
+    // Create mock runner binary
+    const runnerDir = path.join(repoRoot, 'packages', 'runner', 'dist');
+    await fs.mkdir(runnerDir, { recursive: true });
+    await fs.writeFile(path.join(runnerDir, 'bin.js'), 'process.exit(0);', 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Valid: 1
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: 1, max_iterations: 1, inactivity_timeout_sec: 5, iteration_timeout_sec: 5 },
+    });
+    expect(res1.statusCode).toBe(200);
+    const body1 = res1.json() as { run?: { max_parallel_tasks?: number } };
+    expect(body1.run?.max_parallel_tasks).toBe(1);
+
+    // Wait for run to complete
+    let running = true;
+    while (running) {
+      const statusRes = await app.inject({ method: 'GET', url: '/api/run' });
+      running = (statusRes.json() as { run?: { running?: boolean } }).run?.running === true;
+      if (running) await new Promise((r) => setTimeout(r, 25));
+    }
+
+    // Valid: 8
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_parallel_tasks: 8, max_iterations: 1, inactivity_timeout_sec: 5, iteration_timeout_sec: 5 },
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json() as { run?: { max_parallel_tasks?: number } };
+    expect(body2.run?.max_parallel_tasks).toBe(8);
+
+    await app.close();
+  });
+});
+
+describe('POST /api/run error status codes', () => {
+  it('returns 409 for already running', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-409-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-409-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 125;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'implement_task',
+      workflow: 'default',
+    }), 'utf-8');
+
+    // Create a mock runner that waits a bit
+    const runnerDir = path.join(repoRoot, 'packages', 'runner', 'dist');
+    await fs.mkdir(runnerDir, { recursive: true });
+    await fs.writeFile(path.join(runnerDir, 'bin.js'), 'setTimeout(() => process.exit(0), 500);', 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Start first run
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_iterations: 1 },
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Try to start second run while first is running
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', max_iterations: 1 },
+    });
+    expect(res2.statusCode).toBe(409);
+    expect((res2.json() as { error?: string }).error).toContain('already running');
+
+    // Wait for run to finish
+    let running = true;
+    while (running) {
+      const statusRes = await app.inject({ method: 'GET', url: '/api/run' });
+      running = (statusRes.json() as { run?: { running?: boolean } }).run?.running === true;
+      if (running) await new Promise((r) => setTimeout(r, 25));
+    }
+
+    await app.close();
+  });
+
+  it('returns 400 for invalid provider', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-provider-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-provider-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 126;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'implement_task',
+      workflow: 'default',
+    }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'invalid_provider_xyz' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error?: string }).error).toContain('Invalid provider');
+
+    await app.close();
+  });
+
+  it('returns 400 when no issue selected', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-noissue-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-noissue-');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      // No initialIssue provided
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error?: string }).error).toContain('No issue selected');
+
+    await app.close();
+  });
+});

@@ -9,6 +9,8 @@ import {
   formatPid,
   formatRunState,
   formatTimestamp,
+  formatWorkerPhase,
+  getWorkerStatusColor,
   isValidViewMode,
   normalizeViewMode,
   type RunContextField,
@@ -630,5 +632,38 @@ describe('computeRunContextFields', () => {
       expect(getField(completedFields, 'Completed')?.visible).toBe(true);
       expect(getField(completedFields, 'Error')?.visible).toBe(true);
     });
+  });
+});
+
+describe('getWorkerStatusColor', () => {
+  it('returns blue colors for running status', () => {
+    const style = getWorkerStatusColor('running');
+    expect(style.color).toBe('var(--color-accent-blue)');
+  });
+
+  it('returns green colors for passed status', () => {
+    const style = getWorkerStatusColor('passed');
+    expect(style.color).toBe('var(--color-accent-green)');
+  });
+
+  it('returns red colors for failed status', () => {
+    const style = getWorkerStatusColor('failed');
+    expect(style.color).toBe('var(--color-accent-red)');
+  });
+
+  it('returns orange colors for timed_out status', () => {
+    const style = getWorkerStatusColor('timed_out');
+    // Should have an orange color
+    expect(style.color).toContain('orange');
+  });
+});
+
+describe('formatWorkerPhase', () => {
+  it('formats implement_task as "implement"', () => {
+    expect(formatWorkerPhase('implement_task')).toBe('implement');
+  });
+
+  it('formats task_spec_check as "spec-check"', () => {
+    expect(formatWorkerPhase('task_spec_check')).toBe('spec-check');
   });
 });

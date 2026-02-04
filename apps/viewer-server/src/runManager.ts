@@ -15,6 +15,23 @@ import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
+import {
+  ParallelRunner,
+  isParallelModeEnabled,
+  getMaxParallelTasks,
+  validateMaxParallelTasks,
+  MAX_PARALLEL_TASKS,
+  readParallelState,
+  rollbackTaskReservations,
+  repairOrphanedInProgressTasks,
+  type ParallelRunnerOptions,
+} from './parallelRunner.js';
+import type { WorkerStatusInfo } from './types.js';
+import {
+  getWorkerSandboxPaths,
+  getImplementDoneMarkerPath,
+  hasCompletionMarker,
+} from './workerSandbox.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -114,6 +131,10 @@ export class RunManager {
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
+  private activeParallelRunner: ParallelRunner | null = null;
+  private maxParallelTasksOverride: number | null = null;
+  /** Tracks the effective max parallel tasks (override or issue setting) for status reporting */
+  private effectiveMaxParallelTasks: number | null = null;
 
   private status: RunStatus = {
     running: false,
@@ -153,7 +174,27 @@ export class RunManager {
   }
 
   getStatus(): RunStatus {
-    return this.status;
+    // Include active workers if parallel execution is active
+    const workers = this.activeParallelRunner?.getActiveWorkers() ?? null;
+    const workerStatusInfo: WorkerStatusInfo[] | null = workers && workers.length > 0
+      ? workers.map((w) => ({
+          taskId: w.taskId,
+          phase: w.phase,
+          pid: w.pid,
+          started_at: w.startedAt,
+          ended_at: w.endedAt,
+          returncode: w.returncode,
+          status: w.status,
+        }))
+      : null;
+
+    return {
+      ...this.status,
+      workers: workerStatusInfo,
+      // Return the effective max_parallel_tasks (override if provided, otherwise issue setting)
+      // This reflects the actual value being used, not just the API override
+      max_parallel_tasks: this.effectiveMaxParallelTasks ?? this.maxParallelTasksOverride,
+    };
   }
 
   async setIssue(issueRef: string): Promise<void> {
@@ -182,6 +223,7 @@ export class RunManager {
     max_iterations?: unknown;
     inactivity_timeout_sec?: unknown;
     iteration_timeout_sec?: unknown;
+    max_parallel_tasks?: unknown;
   }): Promise<RunStatus> {
     if (this.status.running) throw new Error('Jeeves is already running');
     if (!this.issueRef || !this.stateDir || !this.workDir) throw new Error('No issue selected. Use /api/issues/select or /api/init/issue.');
@@ -189,6 +231,17 @@ export class RunManager {
       throw new Error(`Worktree not found at ${this.workDir}. Run init first.`);
     }
     await ensureJeevesExcludedFromGitStatus(this.workDir).catch(() => void 0);
+
+    // Validate max_parallel_tasks if provided
+    if (params.max_parallel_tasks !== undefined && params.max_parallel_tasks !== null) {
+      const validatedMaxParallel = validateMaxParallelTasks(params.max_parallel_tasks);
+      if (validatedMaxParallel === null) {
+        throw new Error(`Invalid max_parallel_tasks: must be an integer between 1 and ${MAX_PARALLEL_TASKS}`);
+      }
+      this.maxParallelTasksOverride = validatedMaxParallel;
+    } else {
+      this.maxParallelTasksOverride = null;
+    }
 
     const provider = mapProvider(params.provider);
     const maxIterations = Number.isFinite(Number(params.max_iterations)) ? Math.max(1, Number(params.max_iterations)) : 10;
@@ -202,6 +255,8 @@ export class RunManager {
     this.stopRequested = false;
     this.stopReason = null;
     this.runArchiveMeta = null;
+    // Reset effectiveMaxParallelTasks to avoid carrying stale values across runs
+    this.effectiveMaxParallelTasks = null;
     this.runId = makeRunId();
     this.runDir = path.join(this.stateDir, '.runs', this.runId);
     await fs.mkdir(path.join(this.runDir, 'iterations'), { recursive: true });
@@ -241,7 +296,7 @@ export class RunManager {
       iteration_timeout_sec: iterationTimeoutSec,
     });
 
-    this.broadcast('run', { run: this.status });
+    this.broadcast('run', { run: this.getStatus() });
     void this.runLoop({
       provider,
       maxIterations,
@@ -251,7 +306,7 @@ export class RunManager {
       viewerLogPath,
     });
 
-    return this.status;
+    return this.getStatus();
   }
 
   async stop(params?: { force?: boolean; reason?: string }): Promise<RunStatus> {
@@ -266,7 +321,116 @@ export class RunManager {
         // ignore
       }
     }
-    return this.status;
+    // Also stop parallel runner if active
+    if (this.activeParallelRunner) {
+      this.activeParallelRunner.requestStop();
+    }
+
+    // Per §6.2.8: On manual stop during an active wave, roll back reserved task statuses
+    if (this.stateDir) {
+      await this.rollbackActiveWaveOnStop().catch(() => void 0);
+    }
+
+    return this.getStatus();
+  }
+
+  /**
+   * Rolls back reserved task statuses on manual stop per §6.2.8.
+   *
+   * Per design doc §6.2.8 "Orchestration recovery / restart safety":
+   * - Stop mid-implement wave: roll back task statuses, clear parallel state
+   * - Stop between implement/spec-check waves: preserve parallel state for resume
+   *
+   * Detection: If all tasks in activeWaveTaskIds have implement_task.done markers,
+   * the stop is "between phases" and we should preserve parallel state to allow
+   * the next run to resume with spec-check (no reselection).
+   */
+  private async rollbackActiveWaveOnStop(): Promise<void> {
+    if (!this.stateDir || !this.dataDir) return;
+
+    const parallelState = await readParallelState(this.stateDir);
+    if (!parallelState) return;
+
+    // Check if we're "between phases": all implement_task.done markers exist
+    // If so, preserve parallel state so next run can resume spec-check
+    const issueJson = await readIssueJson(this.stateDir);
+    if (!issueJson) return;
+
+    const parsed = this.issueRef ? parseIssueRef(this.issueRef) : null;
+    if (!parsed) return;
+
+    // Check if all tasks have completed implement_task
+    let allImplementDone = true;
+    for (const taskId of parallelState.activeWaveTaskIds) {
+      const sandbox = getWorkerSandboxPaths({
+        taskId,
+        runId: parallelState.runId,
+        issueNumber: parsed.issueNumber,
+        owner: parsed.owner,
+        repo: parsed.repo,
+        canonicalStateDir: this.stateDir,
+        repoDir: path.join(this.dataDir, 'repos', parsed.owner, parsed.repo),
+        dataDir: this.dataDir,
+        canonicalBranch: typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${parsed.issueNumber}`,
+      });
+      const markerPath = getImplementDoneMarkerPath(sandbox);
+      const done = await hasCompletionMarker(markerPath);
+      if (!done) {
+        allImplementDone = false;
+        break;
+      }
+    }
+
+    // If stopped between implement/spec-check (all markers exist), preserve parallel state
+    if (allImplementDone && parallelState.activeWavePhase === 'implement_task') {
+      // Append progress entry noting preservation
+      const progressPath = path.join(this.stateDir, 'progress.txt');
+      const progressEntry = `\n## [${nowIso()}] - Manual Stop: Between Implement/Spec-Check\n\n` +
+        `### Wave\n` +
+        `- Wave ID: ${parallelState.activeWaveId}\n` +
+        `- Phase: ${parallelState.activeWavePhase}\n` +
+        `- Tasks: ${parallelState.activeWaveTaskIds.join(', ')}\n\n` +
+        `### Action\n` +
+        `- All implement_task.done markers present; wave is between phases\n` +
+        `- Parallel state preserved for spec-check resume\n` +
+        `- Task statuses NOT rolled back (remain in_progress)\n` +
+        `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
+        `---\n`;
+      await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+
+      if (this.status.viewer_log_file) {
+        await this.appendViewerLog(
+          this.status.viewer_log_file,
+          `[STOP] Preserved parallel state for spec-check resume (all ${parallelState.activeWaveTaskIds.length} implement_task.done markers present)`,
+        );
+      }
+      return;
+    }
+
+    // Mid-phase stop: roll back task reservations and clear parallel state
+    await rollbackTaskReservations(this.stateDir, parallelState.reservedStatusByTaskId);
+
+    // Append progress entry
+    const progressPath = path.join(this.stateDir, 'progress.txt');
+    const progressEntry = `\n## [${nowIso()}] - Manual Stop: Parallel Wave Aborted\n\n` +
+      `### Wave\n` +
+      `- Wave ID: ${parallelState.activeWaveId}\n` +
+      `- Phase: ${parallelState.activeWavePhase}\n` +
+      `- Tasks: ${parallelState.activeWaveTaskIds.join(', ')}\n\n` +
+      `### Action\n` +
+      `- Task statuses rolled back to pre-reservation state\n` +
+      `- Parallel state cleared from issue.json\n` +
+      `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
+      `---\n`;
+    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+
+    // Log if viewer log file is available
+    if (this.status.viewer_log_file) {
+      await this.appendViewerLog(
+        this.status.viewer_log_file,
+        `[STOP] Rolled back active wave ${parallelState.activeWaveId}, restored ${parallelState.activeWaveTaskIds.length} task(s) to pre-reservation status`,
+      );
+    }
   }
 
   private async appendViewerLog(viewerLogPath: string, line: string): Promise<void> {
@@ -311,7 +475,24 @@ export class RunManager {
     });
 
     const exitCode = await new Promise<number>((resolve) => {
-      proc.once('exit', (code, signal) => resolve(exitCodeFromExitEvent(code, signal)));
+      let resolved = false;
+
+      // Handle async spawn errors (e.g., invalid cwd, resource exhaustion, permission errors).
+      // Without this handler, Node would throw on the unhandled 'error' event and crash the server.
+      proc.once('error', async (err) => {
+        await this.appendViewerLog(viewerLogPath, `[RUNNER] Spawn error: ${err.message}`);
+        if (!resolved) {
+          resolved = true;
+          resolve(-1); // Synthetic non-zero exit code for spawn failure
+        }
+      });
+
+      proc.once('exit', (code, signal) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(exitCodeFromExitEvent(code, signal));
+        }
+      });
     });
     return exitCode;
   }
@@ -357,6 +538,26 @@ export class RunManager {
   }): Promise<void> {
     const { viewerLogPath } = params;
     try {
+      // Per §6.2.8: Start-of-run recovery - repair orphaned in_progress tasks
+      if (this.stateDir) {
+        const repairResult = await repairOrphanedInProgressTasks(this.stateDir);
+        if (repairResult.repairedTaskIds.length > 0) {
+          await this.appendViewerLog(
+            viewerLogPath,
+            `[RECOVERY] Repaired ${repairResult.repairedTaskIds.length} orphaned in_progress task(s): ${repairResult.repairedTaskIds.join(', ')}`,
+          );
+          // Append progress entry for the repair
+          const progressPath = path.join(this.stateDir, 'progress.txt');
+          const progressEntry = `\n## [${nowIso()}] - Start-of-Run Recovery\n\n` +
+            `### Orphaned Tasks Repaired\n` +
+            repairResult.repairedTaskIds.map((id) => `- ${id}: in_progress -> failed`).join('\n') + '\n\n' +
+            `### Canonical Feedback Written\n` +
+            repairResult.feedbackFilesWritten.map((f) => `- ${path.basename(f)}`).join('\n') + '\n\n' +
+            `---\n`;
+          await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+        }
+      }
+
       let completedNaturally = true;
       for (let iteration = 1; iteration <= params.maxIterations; iteration += 1) {
         if (this.stopRequested) {
@@ -426,62 +627,182 @@ export class RunManager {
         const startAtMs = Date.now();
         const iterStartedAt = nowIso();
 
-        const exitPromise = this.spawnRunner(
-          [
-            'run-phase',
-            '--workflow',
+        // Check if parallel mode is enabled and applicable for this phase
+        const isParallelPhase = currentPhase === 'implement_task' || currentPhase === 'task_spec_check';
+        const parallelEnabled = isParallelPhase && await isParallelModeEnabled(this.stateDir!);
+
+        let exitCode: number;
+        let parallelWaveExecuted = false;
+
+        if (parallelEnabled) {
+          // Run parallel wave for task execution phases
+          const parallelResult = await this.runParallelWave({
+            currentPhase: currentPhase as 'implement_task' | 'task_spec_check',
             workflowName,
-            '--phase',
-            currentPhase,
-            '--provider',
             effectiveProvider,
-            '--workflows-dir',
-            this.workflowsDir,
-            '--prompts-dir',
-            this.promptsDir,
-            '--issue',
-            this.issueRef!,
-          ],
-          viewerLogPath,
-          { model: effectiveModel },
-        );
+            effectiveModel,
+            viewerLogPath,
+            iterStartedAt,
+            iterationTimeoutSec: params.iterationTimeoutSec,
+            inactivityTimeoutSec: params.inactivityTimeoutSec,
+          });
+          exitCode = parallelResult.exitCode;
+          parallelWaveExecuted = parallelResult.waveExecuted;
 
-        const exitCode = await (async () => {
-          while (true) {
-            if (this.stopRequested) break;
-            const elapsedSec = (Date.now() - startAtMs) / 1000;
-            if (elapsedSec > params.iterationTimeoutSec) {
-              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Iteration exceeded ${params.iterationTimeoutSec}s; stopping`);
-              await this.stop({ force: true, reason: `iteration_timeout (${params.iterationTimeoutSec}s)` });
-              completedNaturally = false;
-              break;
-            }
+          // If wave timed out, handle cleanup and stop the run
+          if (parallelResult.timedOut) {
+            this.stopReason = `wave_timeout (parallel ${currentPhase})`;
 
-            const stat = await fs.stat(lastRunLog).catch(() => null);
-            if (stat && stat.isFile()) {
-              if (stat.size !== lastSize) {
-                lastSize = stat.size;
-                lastChangeAtMs = Date.now();
+            // Per §6.2.8 "Timeout stop":
+            // - implement_task timeout: Keep phase at implement_task so next run can retry
+            //   (transitioning to task_spec_check would create stuck state with no active wave)
+            // - task_spec_check timeout: Evaluate transitions to go back to implement_task
+            //   (taskFailed=true triggers the transition per workflows/default.yaml)
+            if (currentPhase === 'task_spec_check') {
+              const timeoutIssue = await readIssueJson(this.stateDir!);
+              if (timeoutIssue) {
+                const nextPhase = engine.evaluateTransitions(currentPhase, timeoutIssue);
+                if (nextPhase && nextPhase !== currentPhase) {
+                  timeoutIssue.phase = nextPhase;
+                  await writeIssueJson(this.stateDir!, timeoutIssue);
+                  await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
+                  this.broadcast('state', await this.getStateSnapshot());
+                }
               }
+            } else {
+              // implement_task timeout: Stay at implement_task for retry
+              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Keeping phase at ${currentPhase} for retry`);
             }
 
-            const idleSec = (Date.now() - lastChangeAtMs) / 1000;
-            if (idleSec > params.inactivityTimeoutSec) {
-              await this.appendViewerLog(viewerLogPath, `[TIMEOUT] No log activity for ${params.inactivityTimeoutSec}s; stopping`);
-              await this.stop({ force: true, reason: `inactivity_timeout (${params.inactivityTimeoutSec}s)` });
-              completedNaturally = false;
-              break;
-            }
-
-            const done = await Promise.race([
-              exitPromise.then((code) => ({ done: true as const, code })),
-              new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false as const }), 150)),
-            ]);
-            if (done.done) return done.code;
+            completedNaturally = false;
+            break;
           }
 
-          return exitPromise;
-        })();
+          // If merge conflict occurred, stop the run as errored (§6.2.5)
+          // Per T15: Ensure the workflow is left in a resumable state
+          if (parallelResult.mergeConflict) {
+            this.stopReason = `merge_conflict (parallel ${currentPhase})`;
+            this.status = { ...this.status, last_error: `Merge conflict during ${currentPhase}` };
+            this.broadcast('run', { run: this.status });
+            await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to merge conflict during ${currentPhase}`);
+
+            // T15: Ensure issue.json is left in a resumable state (phase != task_spec_check when
+            // status.parallel is cleared). The merge conflict handler in ParallelRunner already:
+            // - Marks the conflicted task as 'failed' in tasks.json
+            // - Writes canonical feedback pointing to retained artifacts
+            // - Clears status.parallel via updateCanonicalStatusFlags
+            //
+            // However, it does NOT set status.taskFailed=true (which updateCanonicalStatusFlags
+            // only sets based on spec-check outcomes, not merge outcomes). We need to:
+            // 1. Ensure status.taskFailed=true so the workflow transition guard is satisfied
+            // 2. Evaluate workflow transitions to move phase from task_spec_check to implement_task
+            const conflictIssue = await readIssueJson(this.stateDir!);
+            if (conflictIssue) {
+              const conflictStatus = (conflictIssue.status as Record<string, unknown>) ?? {};
+              // Set taskFailed=true to satisfy the workflow transition guard (task_spec_check -> implement_task)
+              conflictStatus.taskFailed = true;
+              conflictStatus.taskPassed = false;
+              conflictStatus.hasMoreTasks = true;
+              conflictStatus.allTasksComplete = false;
+              conflictIssue.status = conflictStatus;
+
+              // Evaluate workflow transitions to move phase back to implement_task
+              const nextPhase = engine.evaluateTransitions(currentPhase, conflictIssue);
+              if (nextPhase && nextPhase !== currentPhase) {
+                conflictIssue.phase = nextPhase;
+                await this.appendViewerLog(viewerLogPath, `[MERGE_CONFLICT] Transitioning phase: ${currentPhase} -> ${nextPhase}`);
+              }
+
+              await writeIssueJson(this.stateDir!, conflictIssue);
+              this.broadcast('state', await this.getStateSnapshot());
+            }
+
+            completedNaturally = false;
+            break;
+          }
+
+          // If setup/orchestration failure occurred, stop the run immediately as errored (§6.2.8 step 6)
+          // Per T17: Setup failures should NOT continue iterating until max_iterations
+          if (parallelResult.setupFailure) {
+            this.stopReason = `setup_failure (parallel ${currentPhase})`;
+            this.status = { ...this.status, last_error: parallelResult.setupError ?? `Setup failure during ${currentPhase}` };
+            this.broadcast('run', { run: this.status });
+            await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to setup failure during ${currentPhase}: ${parallelResult.setupError ?? 'unknown'}`);
+
+            // Per §6.2.8 "Wave setup failure":
+            // - Task statuses have already been rolled back via reservedStatusByTaskId
+            // - status.parallel has been cleared
+            // - Progress entry and wave artifact have been written
+            // - Do NOT update taskFailed/taskPassed flags (setup failure ≠ task failure)
+            // The issue state is already clean (tasks restored to pre-reservation status), so we
+            // just stop the run immediately without modifying any flags.
+            completedNaturally = false;
+            break;
+          }
+
+          // If no wave was executed (no ready tasks), treat as success and let workflow transition
+          if (!parallelWaveExecuted && exitCode === 0) {
+            await this.appendViewerLog(viewerLogPath, `[PARALLEL] No ready tasks for ${currentPhase}, continuing workflow`);
+          }
+        } else {
+          // Run single sequential subprocess (existing behavior)
+          const exitPromise = this.spawnRunner(
+            [
+              'run-phase',
+              '--workflow',
+              workflowName,
+              '--phase',
+              currentPhase,
+              '--provider',
+              effectiveProvider,
+              '--workflows-dir',
+              this.workflowsDir,
+              '--prompts-dir',
+              this.promptsDir,
+              '--issue',
+              this.issueRef!,
+            ],
+            viewerLogPath,
+            { model: effectiveModel },
+          );
+
+          exitCode = await (async () => {
+            while (true) {
+              if (this.stopRequested) break;
+              const elapsedSec = (Date.now() - startAtMs) / 1000;
+              if (elapsedSec > params.iterationTimeoutSec) {
+                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] Iteration exceeded ${params.iterationTimeoutSec}s; stopping`);
+                await this.stop({ force: true, reason: `iteration_timeout (${params.iterationTimeoutSec}s)` });
+                completedNaturally = false;
+                break;
+              }
+
+              const stat = await fs.stat(lastRunLog).catch(() => null);
+              if (stat && stat.isFile()) {
+                if (stat.size !== lastSize) {
+                  lastSize = stat.size;
+                  lastChangeAtMs = Date.now();
+                }
+              }
+
+              const idleSec = (Date.now() - lastChangeAtMs) / 1000;
+              if (idleSec > params.inactivityTimeoutSec) {
+                await this.appendViewerLog(viewerLogPath, `[TIMEOUT] No log activity for ${params.inactivityTimeoutSec}s; stopping`);
+                await this.stop({ force: true, reason: `inactivity_timeout (${params.inactivityTimeoutSec}s)` });
+                completedNaturally = false;
+                break;
+              }
+
+              const done = await Promise.race([
+                exitPromise.then((code) => ({ done: true as const, code })),
+                new Promise<{ done: false }>((r) => setTimeout(() => r({ done: false as const }), 150)),
+              ]);
+              if (done.done) return done.code;
+            }
+
+            return exitPromise;
+          })();
+        }
 
         this.status = { ...this.status, returncode: exitCode };
         this.broadcast('run', { run: this.status });
@@ -507,6 +828,15 @@ export class RunManager {
         }
 
         // Advance phase via workflow transitions (viewer-server owns orchestration)
+        // Skip transitions if stopRequested is set, to avoid advancing to task_spec_check
+        // after a mid-implement manual stop (which clears status.parallel via rollbackActiveWaveOnStop).
+        // Per §6.2.8: On manual stop mid-wave, the phase should remain at implement_task so the
+        // next run can re-select tasks rather than entering task_spec_check with no active wave.
+        if (this.stopRequested) {
+          await this.appendViewerLog(viewerLogPath, `[STOP] Stop requested; skipping phase transition`);
+          continue;
+        }
+
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
           await this.commitDesignDocCheckpoint({ phase: currentPhase, issueJson: updatedIssue });
@@ -577,6 +907,154 @@ export class RunManager {
       this.broadcast('run', { run: this.status });
       await this.persistLastRunStatus().catch(() => void 0);
       await this.finalizeRunArchive().catch(() => void 0);
+    }
+  }
+
+  /**
+   * Executes a parallel wave for implement_task or task_spec_check phases.
+   * Returns the effective exit code and whether a wave was actually executed.
+   */
+  private async runParallelWave(params: {
+    currentPhase: 'implement_task' | 'task_spec_check';
+    workflowName: string;
+    effectiveProvider: string;
+    effectiveModel?: string;
+    viewerLogPath: string;
+    iterStartedAt: string;
+    iterationTimeoutSec: number;
+    inactivityTimeoutSec: number;
+  }): Promise<{ exitCode: number; waveExecuted: boolean; timedOut?: boolean; mergeConflict?: boolean; setupFailure?: boolean; setupError?: string }> {
+    if (!this.stateDir || !this.workDir || !this.runId || !this.issueRef) {
+      return { exitCode: 1, waveExecuted: false };
+    }
+
+    // Parse issue ref to get owner/repo/issueNumber
+    const parsed = parseIssueRef(this.issueRef);
+    const { owner, repo, issueNumber } = parsed;
+
+    // Get repo directory path
+    const repoDir = path.join(this.dataDir, 'repos', owner, repo);
+
+    // Read issue.json to get canonical branch
+    const issueJson = await readIssueJson(this.stateDir);
+    if (!issueJson) {
+      await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] ERROR: issue.json not found');
+      return { exitCode: 1, waveExecuted: false };
+    }
+    const canonicalBranch = typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${issueNumber}`;
+
+    // Get max parallel tasks: API override > issue settings > default (1)
+    const maxParallelTasks = this.maxParallelTasksOverride ?? await getMaxParallelTasks(this.stateDir);
+    // Track effective value for status reporting (per code review feedback)
+    this.effectiveMaxParallelTasks = maxParallelTasks;
+
+    // Get runner binary path
+    const runnerBinPath = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');
+
+    // Create parallel runner options
+    const parallelOptions: ParallelRunnerOptions = {
+      canonicalStateDir: this.stateDir,
+      canonicalWorkDir: this.workDir,
+      repoDir,
+      dataDir: this.dataDir,
+      owner,
+      repo,
+      issueNumber,
+      canonicalBranch,
+      runId: this.runId,
+      workflowName: params.workflowName,
+      provider: params.effectiveProvider,
+      workflowsDir: this.workflowsDir,
+      promptsDir: this.promptsDir,
+      viewerLogPath: params.viewerLogPath,
+      maxParallelTasks,
+      appendLog: async (line: string) => {
+        await this.appendViewerLog(params.viewerLogPath, line);
+      },
+      broadcast: (event: string, data: unknown) => {
+        this.broadcast(event, data);
+      },
+      getRunStatus: () => this.getStatus(),
+      spawn: this.spawnImpl,
+      runnerBinPath,
+      model: params.effectiveModel,
+      iterationTimeoutSec: params.iterationTimeoutSec,
+      inactivityTimeoutSec: params.inactivityTimeoutSec,
+    };
+
+    const parallelRunner = new ParallelRunner(parallelOptions);
+    this.activeParallelRunner = parallelRunner;
+
+    // Broadcast initial worker status
+    this.status = { ...this.status };
+    this.broadcast('run', { run: this.getStatus() });
+
+    // Wire up stop handling
+    if (this.stopRequested) {
+      parallelRunner.requestStop();
+    }
+
+    try {
+      if (params.currentPhase === 'implement_task') {
+        // Run implement wave
+        const result = await parallelRunner.runImplementWave();
+        if (!result) {
+          // No ready tasks to run
+          return { exitCode: 0, waveExecuted: false };
+        }
+        if (result.timedOut) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave timed out (${result.timeoutType})`);
+          return { exitCode: 1, waveExecuted: true, timedOut: true };
+        }
+        if (result.error) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Implement wave error: ${result.error}`);
+          // Check if this is a setup/orchestration failure (continueExecution=false + error)
+          // Per §6.2.8 step 6: setup failures should stop the run immediately as errored
+          if (!result.continueExecution) {
+            return { exitCode: 1, waveExecuted: true, setupFailure: true, setupError: result.error };
+          }
+          return { exitCode: 1, waveExecuted: true };
+        }
+        // Implement wave completed successfully, exit code 0 to proceed to spec check
+        return { exitCode: 0, waveExecuted: true };
+      } else {
+        // Run spec check wave
+        const result = await parallelRunner.runSpecCheckWave();
+        if (!result) {
+          // No active wave to run spec check
+          await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] No active wave state for spec check');
+          return { exitCode: 1, waveExecuted: false };
+        }
+        if (result.timedOut) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave timed out (${result.timeoutType})`);
+          return { exitCode: 1, waveExecuted: true, timedOut: true };
+        }
+        if (result.mergeConflict) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave completed with merge conflict: ${result.error}`);
+          return { exitCode: 1, waveExecuted: true, mergeConflict: true };
+        }
+        if (result.error) {
+          await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Spec check wave error: ${result.error}`);
+          // Check if this is a setup/orchestration failure (continueExecution=false + error)
+          // Per §6.2.8 step 6: setup failures should stop the run immediately as errored
+          if (!result.continueExecution) {
+            return { exitCode: 1, waveExecuted: true, setupFailure: true, setupError: result.error };
+          }
+          return { exitCode: 1, waveExecuted: true };
+        }
+        // Spec check wave completed - exit code based on results
+        // The canonical status flags have already been updated by ParallelRunner
+        return { exitCode: 0, waveExecuted: true };
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await this.appendViewerLog(params.viewerLogPath, `[PARALLEL] Wave execution error: ${errMsg}`);
+      return { exitCode: 1, waveExecuted: false };
+    } finally {
+      // Clear the parallel runner when wave completes
+      this.activeParallelRunner = null;
+      // Broadcast final status without workers
+      this.broadcast('run', { run: this.getStatus() });
     }
   }
 

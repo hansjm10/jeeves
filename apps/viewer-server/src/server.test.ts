@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 import WebSocket from 'ws';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
@@ -2977,143 +2977,166 @@ describe('sonar-token endpoints', () => {
 
   // ============================================================================
   // Deterministic 503 busy test (T9)
+  // Uses fake timers to prove 1500ms mutex timeout triggers 503 busy response
   // ============================================================================
 
-  it('returns 503 busy (deterministic) when mutex is held during PUT request', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-');
-    const owner = 'testorg';
-    const repo = 'testrepo';
-    const issueRef = `${owner}/${repo}#42`;
-    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
-    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
-
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.mkdir(worktreeDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
-    await git(['init'], { cwd: worktreeDir });
-
-    // Use a short mutex timeout (50ms) so the test doesn't take 1500ms
-    const { app, __test__ } = await buildServer({
-      host: '127.0.0.1',
-      port: 0,
-      allowRemoteRun: false,
-      dataDir,
-      repoRoot,
-      initialIssue: issueRef,
-      sonarTokenMutexTimeoutMs: 50,
+  describe('sonar token mutex 503 busy (deterministic with fake timers)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
     });
 
-    // Acquire mutex directly via test helper and hold it
-    const mutex = await __test__.acquireSonarTokenMutex(issueRef);
-
-    try {
-      // Make PUT request while mutex is held - should get 503 busy
-      const res = await app.inject({
-        method: 'PUT',
-        url: '/api/issue/sonar-token',
-        remoteAddress: '127.0.0.1',
-        payload: { token: 'test-token' },
-      });
-
-      expect(res.statusCode).toBe(503);
-      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
-    } finally {
-      mutex.release();
-    }
-
-    await app.close();
-  });
-
-  it('returns 503 busy (deterministic) when mutex is held during DELETE request', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-del-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-del-');
-    const owner = 'testorg';
-    const repo = 'testrepo';
-    const issueRef = `${owner}/${repo}#42`;
-    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
-    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
-
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.mkdir(worktreeDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
-    await git(['init'], { cwd: worktreeDir });
-
-    // Use a short mutex timeout (50ms) so the test doesn't take 1500ms
-    const { app, __test__ } = await buildServer({
-      host: '127.0.0.1',
-      port: 0,
-      allowRemoteRun: false,
-      dataDir,
-      repoRoot,
-      initialIssue: issueRef,
-      sonarTokenMutexTimeoutMs: 50,
+    afterEach(() => {
+      vi.useRealTimers();
     });
 
-    // Acquire mutex directly via test helper and hold it
-    const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+    it('returns 503 busy after default 1500ms timeout when mutex is held during PUT request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
 
-    try {
-      // Make DELETE request while mutex is held - should get 503 busy
-      const res = await app.inject({
-        method: 'DELETE',
-        url: '/api/issue/sonar-token',
-        remoteAddress: '127.0.0.1',
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
       });
 
-      expect(res.statusCode).toBe(503);
-      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
-    } finally {
-      mutex.release();
-    }
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
 
-    await app.close();
-  });
+      try {
+        // Start PUT request while mutex is held - it will wait for mutex
+        const putPromise = app.inject({
+          method: 'PUT',
+          url: '/api/issue/sonar-token',
+          remoteAddress: '127.0.0.1',
+          payload: { token: 'test-token' },
+        });
 
-  it('returns 503 busy (deterministic) when mutex is held during RECONCILE request', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-rec-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-rec-');
-    const owner = 'testorg';
-    const repo = 'testrepo';
-    const issueRef = `${owner}/${repo}#42`;
-    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
-    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
 
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.mkdir(worktreeDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
-    await git(['init'], { cwd: worktreeDir });
+        // Now the request should complete with 503 busy
+        const res = await putPromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
 
-    // Use a short mutex timeout (50ms) so the test doesn't take 1500ms
-    const { app, __test__ } = await buildServer({
-      host: '127.0.0.1',
-      port: 0,
-      allowRemoteRun: false,
-      dataDir,
-      repoRoot,
-      initialIssue: issueRef,
-      sonarTokenMutexTimeoutMs: 50,
+      await app.close();
     });
 
-    // Acquire mutex directly via test helper and hold it
-    const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+    it('returns 503 busy after default 1500ms timeout when mutex is held during DELETE request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-del-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-del-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
 
-    try {
-      // Make RECONCILE request while mutex is held - should get 503 busy
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/issue/sonar-token/reconcile',
-        remoteAddress: '127.0.0.1',
-        payload: {},
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
       });
 
-      expect(res.statusCode).toBe(503);
-      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
-    } finally {
-      mutex.release();
-    }
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
 
-    await app.close();
+      try {
+        // Start DELETE request while mutex is held - it will wait for mutex
+        const deletePromise = app.inject({
+          method: 'DELETE',
+          url: '/api/issue/sonar-token',
+          remoteAddress: '127.0.0.1',
+        });
+
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
+
+        // Now the request should complete with 503 busy
+        const res = await deletePromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+
+    it('returns 503 busy after default 1500ms timeout when mutex is held during RECONCILE request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-rec-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-rec-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+
+      try {
+        // Start RECONCILE request while mutex is held - it will wait for mutex
+        const reconcilePromise = app.inject({
+          method: 'POST',
+          url: '/api/issue/sonar-token/reconcile',
+          remoteAddress: '127.0.0.1',
+          payload: {},
+        });
+
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
+
+        // Now the request should complete with 503 busy
+        const res = await reconcilePromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
   });
 
   it('emits sonar-token-status event after PUT', async () => {

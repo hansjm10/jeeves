@@ -151,28 +151,38 @@ export async function reconcileSonarTokenToWorktree(options: ReconcileOptions): 
   // Always clean up any leftover temp file first
   await cleanupTempFile(tempFilePath);
 
-  // Ensure .git/info/exclude has the required patterns
+  // Ensure .git/info/exclude has the required patterns BEFORE writing the token
   const excludeSuccess = await ensurePatternsExcluded(worktreeDir, [ENV_FILE_NAME, ENV_TEMP_FILE_NAME]);
   if (!excludeSuccess) {
-    // Failed to update exclude - this is a non-fatal warning
-    // We still attempt to write/remove the env file
-    warnings.push('Failed to update .git/info/exclude; file may appear in git status.');
+    // Failed to update exclude - treat as hard stop for token materialization
+    // to prevent accidental secret commits (design §3 failure behavior)
     lastError = 'Failed to update .git/info/exclude';
+    warnings.push('Failed to update .git/info/exclude; token not written to avoid potential secret exposure.');
+
+    // Optionally remove .env.jeeves if it exists to avoid stale unignored secrets
+    try {
+      await fs.rm(envFilePath, { force: true });
+    } catch {
+      // Ignore removal errors
+    }
+
+    return {
+      sync_status: 'failed_exclude',
+      warnings,
+      last_error: lastError,
+    };
   }
 
-  // Now reconcile the env file itself
+  // Now reconcile the env file itself (exclude is guaranteed to be in place)
   if (hasToken && token !== undefined) {
     // Write the env file atomically
     const writeResult = await writeEnvFileAtomic(envFilePath, tempFilePath, envVarName, token);
     if (!writeResult.success) {
-      // Failed to write - this overrides any exclude warning
       lastError = sanitizeErrorForUi(writeResult.error);
       warnings.push(`Failed to write ${ENV_FILE_NAME}: ${lastError}`);
 
-      // If exclude also failed, we return failed_exclude (exclude is prerequisite)
-      // Otherwise return failed_env_write
       return {
-        sync_status: excludeSuccess ? 'failed_env_write' : 'failed_exclude',
+        sync_status: 'failed_env_write',
         warnings,
         last_error: lastError,
       };
@@ -185,20 +195,11 @@ export async function reconcileSonarTokenToWorktree(options: ReconcileOptions): 
       warnings.push(`Failed to remove ${ENV_FILE_NAME}: ${lastError}`);
 
       return {
-        sync_status: excludeSuccess ? 'failed_env_delete' : 'failed_exclude',
+        sync_status: 'failed_env_delete',
         warnings,
         last_error: lastError,
       };
     }
-  }
-
-  // If we got here but exclude failed, report failed_exclude
-  if (!excludeSuccess) {
-    return {
-      sync_status: 'failed_exclude',
-      warnings,
-      last_error: lastError,
-    };
   }
 
   // Full success

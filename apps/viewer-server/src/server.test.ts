@@ -2820,12 +2820,12 @@ describe('sonar-token endpoints', () => {
     const envExists1 = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
     expect(envExists1).toBeNull();
 
-    // Now reconcile
+    // Now reconcile with force=true (since server thinks it's in_sync but file is missing)
     const res2 = await app.inject({
       method: 'POST',
       url: '/api/issue/sonar-token/reconcile',
       remoteAddress: '127.0.0.1',
-      payload: {},
+      payload: { force: true },
     });
     expect(res2.statusCode).toBe(200);
     const body2 = res2.json() as Record<string, unknown>;

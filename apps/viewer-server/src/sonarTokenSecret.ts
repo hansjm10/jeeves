@@ -175,9 +175,24 @@ export async function writeSonarTokenSecret(
     try {
       await fs.rename(uniqueTempPath, secretPath);
     } catch {
-      // Temp file may have been cleaned up by another concurrent write - that's ok
-      // as long as the secret file now exists with valid content
+      // Second rename also failed - clean up temp file and check if secret file exists
       await fs.rm(uniqueTempPath, { force: true }).catch(() => void 0);
+
+      // Verify the final file exists and contains valid content
+      // (another concurrent write may have succeeded)
+      try {
+        const content = await fs.readFile(secretPath, 'utf-8');
+        const parsed = JSON.parse(content) as unknown;
+        if (isValidSecretFile(parsed)) {
+          // Another concurrent write succeeded - return its data
+          return parsed;
+        }
+      } catch {
+        // File doesn't exist or is invalid
+      }
+
+      // Final file missing or invalid - this is an actual failure
+      throw new Error('Failed to write secret file: atomic rename failed');
     }
   }
 
@@ -261,6 +276,13 @@ async function cleanupTempFile(tempPath: string): Promise<void> {
 }
 
 /**
+ * Escape a string for use in a regular expression.
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Clean up any stale temp files from previous crashed writes.
  * Matches files like: sonar-token.json.*.tmp
  * Only removes files older than 5 seconds to avoid race conditions with concurrent writes.
@@ -271,7 +293,8 @@ async function cleanupStaleTemps(secretsDir: string, baseName: string): Promise<
 
   try {
     const entries = await fs.readdir(secretsDir);
-    const tempPattern = new RegExp(`^${baseName}\\.(\\d+)\\.(\\d+)\\.tmp$`);
+    // Escape baseName for regex (e.g., "sonar-token.json" has a literal dot)
+    const tempPattern = new RegExp(`^${escapeRegex(baseName)}\\.(\\d+)\\.(\\d+)\\.tmp$`);
 
     await Promise.all(
       entries

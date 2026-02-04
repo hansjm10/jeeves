@@ -524,10 +524,18 @@ export async function buildServer(config: ViewerServerConfig) {
   // This converges worktree artifacts, cleans up leftover .env.jeeves.tmp files,
   // and emits sonar-token-status event (Design §3 Worktree Filesystem Contracts).
   // Non-fatal: failures are surfaced via sync_status/last_error without blocking startup.
-  // autoReconcileSonarToken handles errors internally, so no try/catch needed here.
   const startupIssue = runManager.getIssue();
   if (startupIssue.issueRef && startupIssue.stateDir) {
-    await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    try {
+      await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    } catch (err) {
+      // Startup reconcile is best-effort: log error but don't block server startup
+      // (e.g., disk full, permission errors on writeIssueJson)
+      console.error(
+        'Startup sonar token reconcile failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // Poll for log/sdk updates and file target changes
@@ -1619,6 +1627,12 @@ export async function buildServer(config: ViewerServerConfig) {
         await updateSonarTokenStatusInIssueJson(issue.stateDir, { env_var_name: validation.env_var_name });
       }
 
+      // Track whether meaningful changes were made that invalidate current sync state
+      const tokenChanged = validation.token !== undefined;
+      const envVarNameChanged =
+        validation.env_var_name !== undefined && validation.env_var_name !== existingStatus.env_var_name;
+      const meaningfulChange = tokenChanged || envVarNameChanged;
+
       // Reconcile if sync_now is true and worktree exists
       let syncStatus: SonarSyncStatus = existingStatus.sync_status;
       let lastError: string | null = existingStatus.last_error;
@@ -1656,6 +1670,16 @@ export async function buildServer(config: ViewerServerConfig) {
             last_error: null,
           });
         }
+      } else if (meaningfulChange) {
+        // Token or env_var_name changed without reconciliation - reset sync_status
+        // so the UI shows that syncing is needed (per design, sync_status should
+        // reflect actual state, not stale prior state)
+        syncStatus = 'never_attempted';
+        lastError = null;
+        await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+          sync_status: syncStatus,
+          last_error: null,
+        });
       }
 
       // Build final status
@@ -1783,9 +1807,21 @@ export async function buildServer(config: ViewerServerConfig) {
     try {
       const warnings: string[] = [];
       const now = new Date().toISOString();
+      const forceReconcile = validation.value?.force ?? false;
 
       // Get current status
       const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Skip reconcile if already in_sync and force is not set
+      if (existingStatus.sync_status === 'in_sync' && !forceReconcile) {
+        // Already in desired state; no-op
+        return reply.send({
+          ok: true,
+          updated: false,
+          status: existingStatus,
+          warnings: ['Already in sync; use force=true to re-run reconciliation.'],
+        });
+      }
 
       // Reconcile only if worktree exists
       let syncStatus: SonarSyncStatus = existingStatus.sync_status;

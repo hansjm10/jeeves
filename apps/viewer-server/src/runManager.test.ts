@@ -265,7 +265,7 @@ describe('RunManager', () => {
     expect(broadcastEvents.includes('run')).toBe(true);
   });
 
-  it('commits a design doc checkpoint after design_draft success', async () => {
+  it('commits a design doc checkpoint after design_plan success', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
@@ -281,15 +281,15 @@ describe('RunManager', () => {
 
     const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify(
-        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' },
-        null,
-        2,
-      ) + '\n',
-      'utf-8',
-    );
+	    await fs.writeFile(
+	      path.join(stateDir, 'issue.json'),
+	      JSON.stringify(
+	        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_plan', workflow: 'default', branch: 'issue/1', notes: '' },
+	        null,
+	        2,
+	      ) + '\n',
+	      'utf-8',
+	    );
 
     const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
     await fs.mkdir(workDir, { recursive: true });
@@ -315,12 +315,12 @@ describe('RunManager', () => {
     await expect(runGit(workDir, ['ls-files', '--error-unmatch', '--', `docs/issue-${issueNumber}-design.md`])).resolves.toContain(
       `docs/issue-${issueNumber}-design.md`,
     );
-    const subject = (await runGit(workDir, ['log', '-1', '--pretty=%s'])).trim();
-    expect(subject).toContain(`checkpoint issue #${issueNumber} design doc (design_draft)`);
+	    const subject = (await runGit(workDir, ['log', '-1', '--pretty=%s'])).trim();
+	    expect(subject).toContain(`checkpoint issue #${issueNumber} design doc (design_plan)`);
 
-    const updated = await readIssueJson(stateDir);
-    expect(updated?.phase).toBe('design_review');
-  });
+	    const updated = await readIssueJson(stateDir);
+	    expect(updated?.phase).toBe('design_review');
+	  });
 
   it('commits a design doc checkpoint after design_edit success', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
@@ -392,15 +392,15 @@ describe('RunManager', () => {
 
     const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify(
-        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_draft', workflow: 'default', branch: 'issue/1', notes: '' },
-        null,
-        2,
-      ) + '\n',
-      'utf-8',
-    );
+	    await fs.writeFile(
+	      path.join(stateDir, 'issue.json'),
+	      JSON.stringify(
+	        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_plan', workflow: 'default', branch: 'issue/1', notes: '' },
+	        null,
+	        2,
+	      ) + '\n',
+	      'utf-8',
+	    );
 
     const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
     await fs.mkdir(workDir, { recursive: true });
@@ -425,10 +425,10 @@ describe('RunManager', () => {
     await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
     await waitFor(() => rm.getStatus().running === false);
 
-    expect(rm.getStatus().last_error).toMatch(/Refusing to auto-commit design doc with other staged changes present/);
-    const updated = await readIssueJson(stateDir);
-    expect(updated?.phase).toBe('design_draft');
-  });
+	    expect(rm.getStatus().last_error).toMatch(/Refusing to auto-commit design doc with other staged changes present/);
+	    const updated = await readIssueJson(stateDir);
+	    expect(updated?.phase).toBe('design_plan');
+	  });
 
   it('propagates dataDir to runner via JEEVES_DATA_DIR', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { createIssueState, getIssueStateDir, getWorktreePath, parseRepoSpec, type RepoSpec } from '@jeeves/core';
+import { createIssueState, getIssueStateDir, getWorktreePath, loadWorkflowByName, parseRepoSpec, type RepoSpec } from '@jeeves/core';
 
 import { runGit } from './git.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
@@ -85,14 +85,16 @@ export type InitIssueResult = Readonly<{
   branch: string;
 }>;
 
-export async function initIssue(params: { dataDir: string; body: InitIssueRequest }): Promise<InitIssueResult> {
+export async function initIssue(params: { dataDir: string; workflowsDir: string; body: InitIssueRequest }): Promise<InitIssueResult> {
   const repo = parseRepoSpec(params.body.repo);
   const issueNumber = params.body.issue;
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error('issue must be a positive integer');
 
   const branch = params.body.branch?.trim() || `issue/${issueNumber}`;
   const workflow = params.body.workflow?.trim() || 'default';
-  const phase = params.body.phase?.trim() || 'design_draft';
+  const phase =
+    params.body.phase?.trim() ||
+    (await loadWorkflowByName(workflow, { workflowsDir: params.workflowsDir }).then((w) => w.start));
   const force = Boolean(params.body.force ?? false);
 
   const repoDir = await ensureRepoClone({ dataDir: params.dataDir, repo });

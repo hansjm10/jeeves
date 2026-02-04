@@ -18,7 +18,19 @@ common:
 # Phase-specific skill mappings
 # Keys are phase names from workflow YAML (e.g., design_draft, implement_task)
 phases:
+  # Legacy single-phase design
   design_draft:
+    - architecture-patterns
+  # Multi-phase design (workflow v3)
+  design_classify:
+    - architecture-patterns
+  design_workflow:
+    - architecture-patterns
+  design_api:
+    - architecture-patterns
+  design_data:
+    - architecture-patterns
+  design_plan:
     - architecture-patterns
   design_review:
     - architecture-patterns

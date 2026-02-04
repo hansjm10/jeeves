@@ -373,14 +373,31 @@ export class RunManager {
         await this.appendViewerLog(viewerLogPath, `[ITERATION ${iteration}/${params.maxIterations}] Starting fresh context`);
         await this.appendViewerLog(viewerLogPath, `${'='.repeat(60)}`);
 
-        const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
-        if (!issueJson) throw new Error('issue.json not found or invalid');
-        const workflowName = params.workflowOverride ?? (isNonEmptyString(issueJson.workflow) ? issueJson.workflow : 'default');
-        const currentPhase = isNonEmptyString(issueJson.phase) ? issueJson.phase : 'design_draft';
+	        const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
+	        if (!issueJson) throw new Error('issue.json not found or invalid');
+	        const workflowName = params.workflowOverride ?? (isNonEmptyString(issueJson.workflow) ? issueJson.workflow : 'default');
 
-        const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
-        const engine = new WorkflowEngine(workflow);
-        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
+	        const workflow = await loadWorkflowByName(workflowName, { workflowsDir: this.workflowsDir });
+	        const currentPhaseRaw = isNonEmptyString(issueJson.phase) ? issueJson.phase.trim() : '';
+	        let currentPhase = currentPhaseRaw || workflow.start;
+	        if (!workflow.phases[currentPhase]) {
+	          if (currentPhaseRaw === 'design_draft') {
+	            await this.appendViewerLog(
+	              viewerLogPath,
+	              `[MIGRATE] issue.json.phase=design_draft is not present in workflow '${workflowName}'. Using start phase '${workflow.start}'.`,
+	            );
+	            currentPhase = workflow.start;
+	            issueJson.phase = currentPhase;
+	            await writeIssueJson(this.stateDir!, issueJson);
+	            this.broadcast('state', await this.getStateSnapshot());
+	          } else {
+	            throw new Error(
+	              `Unknown phase '${currentPhase}' for workflow '${workflowName}'. Valid phases: ${Object.keys(workflow.phases).sort().join(', ')}`,
+	            );
+	          }
+	        }
+	        const engine = new WorkflowEngine(workflow);
+	        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
 
         // Compute effective model: phase.model ?? workflow.defaultModel ?? (provider default = undefined)
         const effectiveModel = getEffectiveModel(workflow, currentPhase);
@@ -652,7 +669,19 @@ export class RunManager {
 
   private async commitDesignDocCheckpoint(params: { phase: string; issueJson: Record<string, unknown> }): Promise<void> {
     if (!this.workDir) return;
-    if (params.phase !== 'design_draft' && params.phase !== 'design_edit') return;
+    const checkpointPhases = new Set([
+      // Legacy
+      'design_draft',
+      // Multi-phase design workflow (v3)
+      'design_classify',
+      'design_workflow',
+      'design_api',
+      'design_data',
+      'design_plan',
+      // Design edits after review
+      'design_edit',
+    ]);
+    if (!checkpointPhases.has(params.phase)) return;
 
     const inferred = inferDesignDocPath(params.issueJson);
     if (!inferred) return;

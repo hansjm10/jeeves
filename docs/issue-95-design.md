@@ -14,7 +14,7 @@ Running SonarQube/SonarCloud tooling from a Jeeves worktree currently requires m
 ### Goals
 - [ ] Provide a viewer UI to add/edit/remove a Sonar authentication token for the currently selected issue/worktree.
 - [ ] Persist the token in issue-scoped local state (outside the git worktree) without leaking it via UI rendering, logs, or streaming payloads.
-- [ ] Materialize the token into the corresponding worktree as an env file (e.g., `.env.jeeves`) on worktree create/refresh and on token updates/removal, and ensure it is git-ignored without modifying tracked files.
+- [ ] Materialize the token into the corresponding worktree as an env file (e.g., `.env.jeeves`) using a configurable env var name (default `SONAR_TOKEN`) on worktree create/refresh and on token updates/removal, and ensure it is git-ignored without modifying tracked files.
 
 ### Non-Goals
 - Running SonarQube/SonarCloud scans automatically or adding broader Sonar workflow automation.
@@ -117,15 +117,15 @@ This feature introduces a **two-level workflow** that must stay consistent:
 | op.validate | Request invalid (missing issue, bad token shape, oversized token) | op.done_error | Return 4xx; write sanitized error to request log; no token persisted. |
 | op.validate | `SAVE_TOKEN_REQUEST` or `REMOVE_TOKEN_REQUEST` valid | op.persist_issue_state | Compute `desiredState` (present/absent); set `desiredEnvFilePath=<worktree>/.env.jeeves` if worktree known. |
 | op.validate | `RECONCILE_REQUEST` and worktree present | op.ensure_git_exclude | Load issue state to determine desired presence; do not read/write token unless needed for writing env. |
-| op.validate | `RECONCILE_REQUEST` and worktree absent | op.record_sync_result | Record `syncStatus=pending_no_worktree`; return success (no-op). |
+| op.validate | `RECONCILE_REQUEST` and worktree absent | op.record_sync_result | Record `sync_status=deferred_worktree_absent` (when `has_token=true`); return success (no-op). |
 | op.persist_issue_state | Persist fails (permissions, IO, JSON parse/serialize) | op.done_error | Return 5xx; do not attempt worktree writes; record sanitized error. |
-| op.persist_issue_state | Worktree absent | op.record_sync_result | Record `syncStatus=pending_no_worktree`; return success for persistence. |
+| op.persist_issue_state | Worktree absent | op.record_sync_result | Record `sync_status=deferred_worktree_absent` (when `has_token=true`); return success for persistence. |
 | op.persist_issue_state | Worktree present | op.ensure_git_exclude | Continue to worktree reconciliation. |
 | op.ensure_git_exclude | Exclude update succeeds | op.reconcile_worktree | Write/ensure `.git/info/exclude` contains `.env.jeeves` (idempotent). |
 | op.ensure_git_exclude | Exclude update fails (permissions/IO) | op.record_sync_result | Record `syncStatus=failed_exclude`; continue without writing env file. |
-| op.reconcile_worktree | Desired=present | op.record_sync_result | Atomically write `.env.jeeves` with `SONAR_TOKEN=…`; `chmod 0600`; never log contents. |
+| op.reconcile_worktree | Desired=present | op.record_sync_result | Atomically write `.env.jeeves` with `<env_var_name>=\"<escaped_token>\"`; `chmod 0600`; never log contents. |
 | op.reconcile_worktree | Desired=absent | op.record_sync_result | Remove `.env.jeeves` if present; ignore missing-file errors. |
-| op.reconcile_worktree | Env write/delete fails (permissions/IO/disk full) | op.record_sync_result | Record `syncStatus=failed_env`; ensure no partial file by using temp+rename; never log token. |
+| op.reconcile_worktree | Env write/delete fails (permissions/IO/disk full) | op.record_sync_result | Record `sync_status=failed_env_write` (if desired=present) or `failed_env_delete` (if desired=absent); ensure no partial file by using temp+rename; never log token. |
 | op.record_sync_result | Fatal state corruption detected (issue state unreadable) | op.done_error | Return 5xx; log sanitized error; do not proceed. |
 | op.record_sync_result | Non-fatal sync failure recorded (exclude/env) | op.done_success | Return success-with-warning; persist `lastError` (sanitized) and `lastAttemptAt`. |
 | op.record_sync_result | Sync applied or pending recorded | op.done_success | Persist `lastAppliedAt` when applied; clear `lastError` on success. |
@@ -153,7 +153,7 @@ This feature introduces a **two-level workflow** that must stay consistent:
 | op.validate | Invalid token format/size | op.done_error | Reject request; log error code only; no writes. |
 | op.persist_issue_state | IO/permission failure writing issue state | op.done_error | Abort; log sanitized error; do not attempt worktree writes. |
 | op.ensure_git_exclude | IO/permission failure updating exclude | op.done_success | Record `failed_exclude`; do not write env file; return warning. |
-| op.reconcile_worktree | IO/permission/disk failure writing/deleting env | op.done_success | Record `failed_env`; ensure atomic write; return warning. |
+| op.reconcile_worktree | IO/permission/disk failure writing/deleting env | op.done_success | Record `failed_env_write` (desired=present) or `failed_env_delete` (desired=absent); ensure atomic write; return warning. |
 | op.record_sync_result | Issue state unreadable/corrupted | op.done_error | Abort; log sanitized error; require manual intervention (e.g., delete/repair issue state). |
 | any op state | Mutex acquisition timeout (stuck operation) | op.done_error | Fail request; log “concurrency” error; no further writes in this attempt. |
 
@@ -235,6 +235,10 @@ This section defines **all viewer-server HTTP endpoints**, **streaming events**,
 - The token value MUST NEVER be returned by any endpoint or streaming event.
 - Token values MUST NEVER be logged or included in viewer logs / SSE / WS payloads.
 
+**Concurrency / mutex**:
+- Mutating endpoints (PUT/DELETE) and reconcile (POST `/reconcile`) MUST be serialized per selected issue via an in-memory mutex.
+- **Mutex acquisition timeout**: `1500ms`. If the mutex cannot be acquired within this window, return `503` with `code=busy`.
+
 ### Endpoints
 
 | Method | Path | Input | Success | Errors |
@@ -262,6 +266,7 @@ type SonarTokenStatusResponse = {
   issue_ref: string;
   worktree_present: boolean;
   has_token: boolean;
+  env_var_name: string; // default "SONAR_TOKEN"
   sync_status: SonarSyncStatus;
   last_attempt_at: string | null; // ISO-8601
   last_success_at: string | null; // ISO-8601
@@ -280,10 +285,13 @@ Errors:
 3) **Input parameters** (`PutSonarTokenRequest`):
 ```ts
 type PutSonarTokenRequest = {
-  token: string;         // required
+  token?: string;        // optional; if provided, saves/updates token
+  env_var_name?: string; // optional; if provided, saves/updates env var name (default "SONAR_TOKEN")
   sync_now?: boolean;    // optional; default true
 };
 ```
+Notes:
+- `PUT` MUST include at least one of: `token`, `env_var_name`. If both are omitted, validation fails.
 4) **Success** (`SonarTokenMutateResponse`, 200):
 ```ts
 type SonarTokenMutateResponse = {
@@ -295,11 +303,13 @@ type SonarTokenMutateResponse = {
 ```
 5) **Errors**:
 - `400` `{"ok":false,"error":"...","code":"validation_failed","field_errors":{...}}` when:
-  - `token` is missing, not a string, empty after trim, exceeds max length, or contains `\0`, `\n`, or `\r`.
+  - Both `token` and `env_var_name` are omitted.
+  - `token` is provided but is not a string, empty after trim, exceeds max length, or contains `\0`, `\n`, or `\r`.
+  - `env_var_name` is provided but is not a string, empty after trim, exceeds max length, contains invalid characters, or contains `\0`, `\n`, or `\r`.
   - `sync_now` is provided but is not a boolean.
 - `403` `{"ok":false,"error":"...","code":"forbidden"}` when mutation is not allowed from the requester (non-local without `--allow-remote-run`, or Origin not allowed).
 - `409` `{"ok":false,"error":"Cannot edit while Jeeves is running.","code":"conflict_running"}` when Jeeves is currently running (token changes are disallowed during an active run).
-- `503` `{"ok":false,"error":"...","code":"busy"}` when an existing token-sync operation mutex cannot be acquired within a fixed timeout (prevents concurrent writes).
+- `503` `{"ok":false,"error":"...","code":"busy"}` when an existing token-sync operation mutex cannot be acquired within `1500ms` (prevents concurrent writes).
 - `500` `{"ok":false,"error":"...","code":"io_error"}` when issue-scoped state cannot be written (no worktree writes should be attempted in this case).
 
 **DELETE /api/issue/sonar-token (remove)**
@@ -355,6 +365,7 @@ type SonarTokenStatusEvent = {
   issue_ref: string;
   worktree_present: boolean;
   has_token: boolean;
+  env_var_name: string;
   sync_status: SonarSyncStatus;
   last_attempt_at: string | null;
   last_success_at: string | null;
@@ -366,20 +377,22 @@ type SonarTokenStatusEvent = {
 
 | Field | Type | Constraints | Error |
 |------|------|-------------|-------|
-| `token` | string | required for PUT; trimmed; length `1..1024`; MUST NOT contain `\0`, `\n`, `\r` | 400 `code=validation_failed`, `field_errors.token` |
+| `token` | string | optional for PUT; when provided: trimmed; length `1..1024`; MUST NOT contain `\0`, `\n`, `\r` | 400 `code=validation_failed`, `field_errors.token` |
+| `env_var_name` | string | optional for PUT; default `"SONAR_TOKEN"` when absent; when provided: trimmed; length `1..64`; MUST match `^[A-Z_][A-Z0-9_]*$`; MUST NOT contain `\0`, `\n`, `\r` | 400 `code=validation_failed`, `field_errors.env_var_name` |
 | `sync_now` | boolean | optional; default `true` | 400 `field_errors.sync_now` |
 | `force` | boolean | optional; default `false` | 400 `field_errors.force` |
 
 **When validation fails**:
 - Response: `400` with the standard error envelope.
 - Validation is **synchronous** (string/type checks only). No remote Sonar verification is performed.
+- `PUT` MUST fail validation if both `token` and `env_var_name` are omitted.
 
 ### UI Interactions (viewer)
 
 | Action | Request | Loading State | Success | Error |
 |--------|---------|---------------|---------|-------|
-| Open Sonar token settings panel | `GET /api/issue/sonar-token` | Show spinner; disable form | Render “token present/absent” + sync status; never show token value | Inline error state with retry button |
-| Save/update token | `PUT /api/issue/sonar-token` | Disable inputs/buttons; show “Saving…” | Show “Saved” toast; if `warnings.length>0`, show non-fatal warning banner (no token); refresh status | Show error toast + inline message; remain on form with token field cleared |
+| Open Sonar token settings panel | `GET /api/issue/sonar-token` | Show spinner; disable form | Render “token present/absent” + `env_var_name` + sync status; never show token value | Inline error state with retry button |
+| Save/update token/config | `PUT /api/issue/sonar-token` | Disable inputs/buttons; show “Saving…” | Show “Saved” toast; if `warnings.length>0`, show non-fatal warning banner (no token); refresh status | Show error toast + inline message; remain on form with token field cleared |
 | Remove token | `DELETE /api/issue/sonar-token` | Disable controls; show “Removing…” | Show “Removed” toast; if warnings, show banner; refresh status | Show error toast; remain on panel with prior status |
 | Retry sync | `POST /api/issue/sonar-token/reconcile` | Disable controls; show “Syncing…” | Update sync status; if warnings, show banner | Show error toast; preserve prior status |
 | Close panel / change issue | none (local UI action) | Cancel in-flight fetch via AbortController (client-side) | UI returns to closed/next issue state | n/a |
@@ -390,8 +403,14 @@ These side-effects are part of the feature contract because they impact how user
 
 **Env file materialization**
 - **Path**: `<worktreeRoot>/.env.jeeves`
-- **Format** (exact):
-  - When `has_token=true`: file MUST contain exactly one variable assignment line (plus trailing newline): `SONAR_TOKEN=<token>\n`.
+- **Format** (exact, dotenv-compatible):
+  - When `has_token=true`: file MUST contain exactly one variable assignment line (plus trailing newline):
+    - `<env_var_name>="<escaped_token>"\n`
+  - `env_var_name` is the persisted configuration (default `"SONAR_TOKEN"`).
+  - `escaped_token` MUST be generated by:
+    - Replacing `\` with `\\`
+    - Replacing `"` with `\"`
+  - **Parsing contract**: Consumers MUST parse `.env.jeeves` as a dotenv file with a single `KEY="VALUE"` assignment, interpreting the token as the literal value after unescaping `\\` → `\` and `\"` → `"`. (No other escapes are produced by Jeeves; tokens cannot contain newlines/CR/NUL by validation.)
   - When `has_token=false`: file MUST be removed if it exists.
 - **Permissions**:
   - Write with restrictive permissions (target `0600` where supported).
@@ -420,6 +439,7 @@ This feature introduces **issue-scoped secret storage** for a Sonar authenticati
 |----------|-------|------|----------|---------|-------------|
 | `.jeeves/issue.json` | `status.sonarToken` | object | no | `{}` | if present, MUST be an object |
 | `.jeeves/issue.json` | `status.sonarToken.sync_status` | string | no | `"never_attempted"` | enum: `in_sync`, `deferred_worktree_absent`, `failed_exclude`, `failed_env_write`, `failed_env_delete`, `never_attempted` |
+| `.jeeves/issue.json` | `status.sonarToken.env_var_name` | string | no | `"SONAR_TOKEN"` | trimmed; length `1..64`; MUST match `^[A-Z_][A-Z0-9_]*$`; MUST NOT contain `\0`, `\n`, `\r` |
 | `.jeeves/issue.json` | `status.sonarToken.last_attempt_at` | string \| null | no | `null` | ISO-8601 UTC string ending in `Z` |
 | `.jeeves/issue.json` | `status.sonarToken.last_success_at` | string \| null | no | `null` | ISO-8601 UTC string ending in `Z` |
 | `.jeeves/issue.json` | `status.sonarToken.last_error` | string \| null | no | `null` | sanitized; max 2048 chars; MUST NOT include token; MUST NOT include `\0`, `\n`, `\r` |
@@ -454,6 +474,22 @@ This feature introduces **issue-scoped secret storage** for a Sonar authenticati
 - Derivation:
   - Not derived from other stored fields; set on write as the result of the reconcile attempt.
   - If worktree state changes externally, `sync_status` may become stale until the next reconcile (manual or on init/select).
+
+**`status.sonarToken.env_var_name`**
+- Purpose: Persist the per-issue env var name used when materializing the token into `<worktreeRoot>/.env.jeeves`.
+- Type: `string`
+- Set by: `PUT /api/issue/sonar-token` when `env_var_name` is provided (default `"SONAR_TOKEN"` when unset).
+- Read by: `GET /api/issue/sonar-token`, `sonar-token-status` event emission, and the worktree reconcile helper.
+- Default when absent: `"SONAR_TOKEN"`.
+- Constraints:
+  - MUST match `^[A-Z_][A-Z0-9_]*$`.
+  - MUST be length `1..64` after trim.
+  - MUST NOT contain `\0`, `\n`, `\r`.
+- Migration notes:
+  - Not breaking: existing issue states will not have this field.
+  - Existing records: treat missing as `"SONAR_TOKEN"`.
+  - Migration script: not required.
+  - Rollback: remove this field; interpret as default.
 
 **`status.sonarToken.last_attempt_at` / `status.sonarToken.last_success_at`**
 - Purpose: Provide stable UX and diagnostics across restarts for when reconcile was last tried and last succeeded.
@@ -515,6 +551,7 @@ This feature introduces **issue-scoped secret storage** for a Sonar authenticati
 | Change | Existing Data | Migration | Rollback |
 |--------|---------------|-----------|----------|
 | Add non-secret reconcile metadata under `status.sonarToken.*` | Fields absent | Treat absent as defaults (`sync_status="never_attempted"`, timestamps/error `null`) until first write | Remove the fields |
+| Add `status.sonarToken.env_var_name` | Field absent | Treat absent as default `"SONAR_TOKEN"` until first write | Remove the field |
 | Add `.jeeves/.secrets/sonar-token.json` secret file | File absent | No-op until token is saved; on first PUT create file atomically with `0600` perms | Delete the file |
 
 ### Artifacts
@@ -583,9 +620,11 @@ T7 → depends on T4, T6
   - `apps/viewer/src/api/sonarTokenTypes.ts` - mirror the endpoint/event types for typed UI calls.
   - `apps/viewer/src/api/types.ts` - export the new types (or re-export via a dedicated module).
 - Acceptance Criteria:
-  1. `token` validation enforces: trimmed, length `1..1024`, no `\0`, `\n`, `\r`.
-  2. `sync_now` and `force` validation rejects non-boolean values with per-field errors.
-  3. The token value is never part of any status/event type.
+  1. `token` validation (when provided) enforces: trimmed, length `1..1024`, no `\0`, `\n`, `\r`.
+  2. `env_var_name` validation (when provided) enforces: trimmed, length `1..64`, matches `^[A-Z_][A-Z0-9_]*$`, no `\0`, `\n`, `\r`.
+  3. `PUT` validation fails if both `token` and `env_var_name` are omitted.
+  4. `sync_now` and `force` validation rejects non-boolean values with per-field errors.
+  5. The token value is never part of any status/event type.
 - Dependencies: None
 - Verification: `pnpm test -- -t \"validateToken\"`
 
@@ -608,10 +647,11 @@ T7 → depends on T4, T6
   - `apps/viewer-server/src/gitExclude.ts` - generalize `ensureJeevesExcludedFromGitStatus()` to also support ensuring `.env.jeeves` + `.env.jeeves.tmp` ignore lines (deduped).
   - `apps/viewer-server/src/sonarTokenReconcile.test.ts` - tests using a temp git worktree verifying `.env.jeeves` contents, atomic behavior, and exclude entries.
 - Acceptance Criteria:
-  1. When `has_token=true`, `.env.jeeves` equals `SONAR_TOKEN=<token>\\n` and is written atomically via `.env.jeeves.tmp`.
-  2. When `has_token=false`, `.env.jeeves` is removed if present; leftover `.env.jeeves.tmp` is removed on reconcile.
-  3. `.git/info/exclude` contains (deduped) `.env.jeeves` and `.env.jeeves.tmp`.
-  4. On exclude/env failures, reconcile returns `failed_*` status and a sanitized warning without including the token.
+  1. When `has_token=true`, `.env.jeeves` equals `<env_var_name>=\"<escaped_token>\"\\n` and is written atomically via `.env.jeeves.tmp`.
+  2. Escaping MUST follow §3 “Worktree Filesystem Contracts”, and tests cover tokens containing at least `#`, `\\`, and `"` (still written as a single line).
+  3. When `has_token=false`, `.env.jeeves` is removed if present; leftover `.env.jeeves.tmp` is removed on reconcile.
+  4. `.git/info/exclude` contains (deduped) `.env.jeeves` and `.env.jeeves.tmp`.
+  5. On exclude/env failures, reconcile returns `failed_*` status and a sanitized warning without including the token.
 - Dependencies: T1, T2
 - Verification: `pnpm test -- apps/viewer-server/src/sonarTokenReconcile.test.ts`
 
@@ -621,11 +661,13 @@ T7 → depends on T4, T6
   - `apps/viewer-server/src/server.ts` - add the 4 endpoints under `/api/issue/sonar-token*` and emit `sonar-token-status`.
   - `apps/viewer-server/src/server.test.ts` - add integration tests covering: no token value returned; PUT/DELETE create/remove secret; `.env.jeeves` and exclude updates; 409 when run is active; 503 on forced mutex timeout.
 - Acceptance Criteria:
-  1. `GET /api/issue/sonar-token` returns `has_token` based on secret file existence/parse; never returns the token.
-  2. `PUT` persists secret first; then reconciles unless `sync_now=false`; returns `warnings[]` on non-fatal sync failures.
-  3. `DELETE` is idempotent (`updated=false` when already absent) and attempts reconcile cleanup when worktree exists.
-  4. `POST /reconcile` never changes token presence (`updated=false`) and supports `force`.
-  5. After each successful mutation/reconcile, `sonar-token-status` is broadcast with sanitized `last_error`.
+  1. `GET /api/issue/sonar-token` returns `has_token` based on secret file existence/parse and returns `env_var_name` (default `"SONAR_TOKEN"`); never returns the token.
+  2. `PUT` supports updating `env_var_name` without requiring a new token value; it MUST fail validation if both `token` and `env_var_name` are omitted.
+  3. If `token` is provided on `PUT`, persist secret first; then reconcile unless `sync_now=false`; return `warnings[]` on non-fatal sync failures.
+  4. `DELETE` is idempotent (`updated=false` when already absent) and attempts reconcile cleanup when worktree exists.
+  5. `POST /reconcile` never changes token presence (`updated=false`) and supports `force`.
+  6. After each successful mutation/reconcile, `sonar-token-status` is broadcast with sanitized `last_error` and includes `env_var_name`.
+  7. `503` is returned with `code=busy` when the mutex cannot be acquired within `1500ms`.
 - Dependencies: T1, T2, T3
 - Verification: `pnpm test -- apps/viewer-server/src/server.test.ts -t \"sonar-token\"`
 
@@ -653,8 +695,9 @@ T7 → depends on T4, T6
   - `apps/viewer/src/features/mutations.ts` - add mutations for the 3 mutating endpoints (optional if kept in `features/sonarToken`).
 - Acceptance Criteria:
   1. With no issue selected, the page shows a clear disabled/empty state (no requests spam).
-  2. Save/update sends `PUT` and clears the token input after success; remove sends `DELETE`; retry sends `POST /reconcile`.
-  3. UI shows `sync_status`, timestamps, and `last_error` (sanitized) and displays any `warnings[]` without the token.
+  2. Page includes an env var name input (default `SONAR_TOKEN`) and persists updates via `PUT` without displaying the stored token.
+  3. Save/update sends `PUT` and clears the token input after success; remove sends `DELETE`; retry sends `POST /reconcile`.
+  4. UI shows `sync_status`, timestamps, `env_var_name`, and `last_error` (sanitized) and displays any `warnings[]` without the token.
 - Dependencies: T4
 - Verification: `pnpm typecheck && pnpm lint`
 
@@ -693,7 +736,8 @@ T7 → depends on T4, T6
 - [ ] Start viewer + server: `pnpm dev`
 - [ ] Init/select an issue from the sidebar; open `/sonar-token`
 - [ ] Save a token and verify:
-  - `.env.jeeves` exists in the worktree and contains `SONAR_TOKEN=...` (single line + newline)
+  - `.env.jeeves` exists in the worktree and contains a single line `<env_var_name>="..."` (single line + newline; value quoted/escaped per §3)
   - `git status --porcelain` in the worktree does **not** show `.env.jeeves`
+- [ ] Customize env var name (e.g. `SONARQUBE_TOKEN`) and verify `.env.jeeves` is rewritten to use the new name (still quoted/escaped)
 - [ ] Remove the token and verify `.env.jeeves` is removed (and still not shown in `git status`)
 - [ ] Restart viewer-server and confirm the status loads without ever showing the token value (presence only)

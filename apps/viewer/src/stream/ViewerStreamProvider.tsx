@@ -1,8 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useReducer, useRef } from 'react';
 
 import { wsUrlFromBaseUrl } from '../api/paths.js';
-import type { IssueStateSnapshot, LogEvent, RunStatus } from '../api/types.js';
+import type { IssueStateSnapshot, LogEvent, RunStatus, SonarTokenStatusEvent } from '../api/types.js';
+import { sonarTokenQueryKey } from '../features/sonarToken/queries.js';
 import type { ExtendedStreamState } from './streamReducer.js';
 import { streamReducer } from './streamReducer.js';
 
@@ -20,6 +22,7 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     sdkEvents: [],
     runOverride: null,
     effectiveRun: null,
+    sonarTokenStatus: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -54,6 +57,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
             dispatch({ type: 'run', data: parsed.data as { run: RunStatus } });
           else if (event === 'logs') dispatch({ type: 'logs', data: parsed.data as LogEvent });
           else if (event === 'viewer-logs') dispatch({ type: 'viewer-logs', data: parsed.data as LogEvent });
+          else if (event === 'sonar-token-status')
+            dispatch({ type: 'sonar-token-status', data: parsed.data as SonarTokenStatusEvent });
           else dispatch({ type: 'sdk', event, data: parsed.data });
         } catch {
           dispatch({
@@ -92,7 +97,44 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     };
   }, [props.baseUrl]);
 
-  return <ViewerStreamContext.Provider value={state}>{props.children}</ViewerStreamContext.Provider>;
+  return (
+    <ViewerStreamContext.Provider value={state}>
+      <SonarTokenStreamSyncInternal baseUrl={props.baseUrl} />
+      {props.children}
+    </ViewerStreamContext.Provider>
+  );
+}
+
+/**
+ * Internal component that automatically invalidates the Sonar token query when a stream event arrives.
+ * This ensures the UI displays the latest status without requiring manual refresh.
+ *
+ * Rendered automatically by ViewerStreamProvider - no need to use directly.
+ */
+function SonarTokenStreamSyncInternal(props: { baseUrl: string }) {
+  const queryClient = useQueryClient();
+  const stream = useViewerStream();
+  const sonarTokenStatus = stream.sonarTokenStatus;
+  const prevEventRef = useRef<SonarTokenStatusEvent | null>(null);
+
+  useEffect(() => {
+    if (!sonarTokenStatus) return;
+
+    // Check if this is a new event
+    const prevEvent = prevEventRef.current;
+    const isNewEvent =
+      !prevEvent ||
+      prevEvent.issue_ref !== sonarTokenStatus.issue_ref ||
+      prevEvent.last_attempt_at !== sonarTokenStatus.last_attempt_at;
+
+    if (isNewEvent) {
+      // Invalidate the query to trigger a refetch, updating the displayed status
+      void queryClient.invalidateQueries({ queryKey: sonarTokenQueryKey(props.baseUrl) });
+      prevEventRef.current = sonarTokenStatus;
+    }
+  }, [sonarTokenStatus, props.baseUrl, queryClient]);
+
+  return null;
 }
 
 export function useViewerStream(): ExtendedStreamState {

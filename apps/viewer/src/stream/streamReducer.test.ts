@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IssueStateSnapshot, RunStatus } from '../api/types.js';
+import type { IssueStateSnapshot, RunStatus, SonarTokenStatusEvent } from '../api/types.js';
 import type { ExtendedStreamState } from './streamReducer.js';
 import { MAX_LOG_LINES, MAX_SDK_EVENTS, capArray, streamReducer } from './streamReducer.js';
 
@@ -14,6 +14,7 @@ function makeState(): ExtendedStreamState {
     sdkEvents: [],
     runOverride: null,
     effectiveRun: null,
+    sonarTokenStatus: null,
   };
 }
 
@@ -268,6 +269,102 @@ describe('streamReducer workflow/phase live updates via state events', () => {
 
     // Assert issue_json is now null
     expect(s3.state?.issue_json).toBeNull();
+  });
+});
+
+function makeSonarTokenStatusEvent(overrides: Partial<SonarTokenStatusEvent> = {}): SonarTokenStatusEvent {
+  return {
+    issue_ref: 'owner/repo#1',
+    worktree_present: true,
+    has_token: true,
+    env_var_name: 'SONAR_TOKEN',
+    sync_status: 'in_sync',
+    last_attempt_at: '2026-02-04T10:00:00.000Z',
+    last_success_at: '2026-02-04T10:00:00.000Z',
+    last_error: null,
+    ...overrides,
+  };
+}
+
+describe('streamReducer sonar-token-status', () => {
+  it('stores sonar-token-status event in state', () => {
+    const s1 = makeState();
+    const event = makeSonarTokenStatusEvent();
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: event });
+
+    expect(s2.sonarTokenStatus).toEqual(event);
+  });
+
+  it('updates sonar-token-status when a new event arrives', () => {
+    const s1 = makeState();
+    const event1 = makeSonarTokenStatusEvent({ sync_status: 'in_sync' });
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: event1 });
+    expect(s2.sonarTokenStatus?.sync_status).toBe('in_sync');
+
+    const event2 = makeSonarTokenStatusEvent({
+      sync_status: 'failed_env_write',
+      last_error: 'Permission denied',
+    });
+    const s3 = streamReducer(s2, { type: 'sonar-token-status', data: event2 });
+
+    expect(s3.sonarTokenStatus?.sync_status).toBe('failed_env_write');
+    expect(s3.sonarTokenStatus?.last_error).toBe('Permission denied');
+  });
+
+  it('does NOT add sonar-token-status to sdkEvents', () => {
+    const s1 = makeState();
+    const event = makeSonarTokenStatusEvent();
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: event });
+
+    // sdkEvents should remain empty - sonar-token-status is handled separately
+    expect(s2.sdkEvents).toEqual([]);
+  });
+
+  it('preserves sonar-token-status across state snapshot updates', () => {
+    const s1 = makeState();
+
+    // First: sonar-token-status arrives
+    const tokenEvent = makeSonarTokenStatusEvent({ issue_ref: 'owner/repo#1' });
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: tokenEvent });
+    expect(s2.sonarTokenStatus).toEqual(tokenEvent);
+
+    // Then: state snapshot arrives - sonarTokenStatus should be preserved
+    const snapshot = makeStateSnapshot({ issue_ref: 'owner/repo#1' });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot });
+
+    // sonarTokenStatus is NOT cleared by state snapshots
+    expect(s3.sonarTokenStatus).toEqual(tokenEvent);
+  });
+
+  it('preserves sonar-token-status across run updates', () => {
+    const s1 = makeState();
+
+    // First: sonar-token-status arrives
+    const tokenEvent = makeSonarTokenStatusEvent();
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: tokenEvent });
+    expect(s2.sonarTokenStatus).toEqual(tokenEvent);
+
+    // Then: run update arrives - sonarTokenStatus should be preserved
+    const runUpdate = makeRunStatus({ running: true, current_iteration: 3 });
+    const s3 = streamReducer(s2, { type: 'run', data: { run: runUpdate } });
+
+    expect(s3.sonarTokenStatus).toEqual(tokenEvent);
+  });
+
+  it('handles sonar-token-status for different issues', () => {
+    const s1 = makeState();
+
+    // Event for issue #1
+    const event1 = makeSonarTokenStatusEvent({ issue_ref: 'owner/repo#1', has_token: true });
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: event1 });
+    expect(s2.sonarTokenStatus?.issue_ref).toBe('owner/repo#1');
+    expect(s2.sonarTokenStatus?.has_token).toBe(true);
+
+    // Event for issue #2 replaces the stored status
+    const event2 = makeSonarTokenStatusEvent({ issue_ref: 'owner/repo#2', has_token: false });
+    const s3 = streamReducer(s2, { type: 'sonar-token-status', data: event2 });
+    expect(s3.sonarTokenStatus?.issue_ref).toBe('owner/repo#2');
+    expect(s3.sonarTokenStatus?.has_token).toBe(false);
   });
 });
 

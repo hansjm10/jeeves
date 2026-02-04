@@ -380,6 +380,8 @@ export type ViewerServerConfig = Readonly<{
   dataDir?: string;
   initialIssue?: string;
   createGitHubIssue?: CreateGitHubIssueAdapter;
+  /** Mutex timeout for sonar token operations (ms). Default: 1500. For testing only. */
+  sonarTokenMutexTimeoutMs?: number;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -1314,7 +1316,7 @@ export async function buildServer(config: ViewerServerConfig) {
   // ============================================================================
 
   /** Mutex timeout for sonar token operations (ms). */
-  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = 1500;
+  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = config.sonarTokenMutexTimeoutMs ?? 1500;
 
   /** Per-issue mutex map for sonar token operations. */
   const sonarTokenMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
@@ -1875,7 +1877,19 @@ export async function buildServer(config: ViewerServerConfig) {
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
   });
 
-  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun, createGitHubIssue };
+  // Test helpers for direct mutex control (used only in tests)
+  const __test__ = {
+    /** Acquire the sonar token mutex for the given issue. Returns release function. */
+    acquireSonarTokenMutex: async (issueRef: string): Promise<{ release: () => void }> => {
+      const acquired = await acquireSonarTokenMutex(issueRef);
+      if (!acquired) {
+        throw new Error('Failed to acquire sonar token mutex (timeout)');
+      }
+      return { release: () => releaseSonarTokenMutex(issueRef) };
+    },
+  };
+
+  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun, createGitHubIssue, __test__ };
 }
 
 export async function startServer(config: ViewerServerConfig): Promise<void> {

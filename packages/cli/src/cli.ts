@@ -6,12 +6,13 @@ const VERSION = '0.0.0';
 interface RunOptions {
   server: string;
   iterations?: number;
+  quick?: boolean;
 }
 
 function usage(): string {
   return [
     'Usage:',
-    '  jeeves run [--iterations <n>] [--server <url>]',
+    '  jeeves run [--iterations <n>] [--server <url>] [--quick]',
     '',
     'Commands:',
     '  run    Start a Jeeves run via the viewer-server API',
@@ -19,6 +20,7 @@ function usage(): string {
     'Options:',
     '  --iterations <n>   Maximum iterations for the run (positive integer)',
     '  --server <url>     Viewer-server URL (default: http://127.0.0.1:8081)',
+    '  --quick            Route to the quick-fix workflow when possible',
     '  --help             Show this help message',
     '  --version, -v      Show version number',
     '',
@@ -42,6 +44,9 @@ async function runCommand(options: RunOptions): Promise<void> {
 
   if (options.iterations !== undefined) {
     body.max_iterations = options.iterations;
+  }
+  if (options.quick === true) {
+    body.quick = true;
   }
 
   let response: Response;
@@ -70,6 +75,7 @@ export async function main(argv: string[]): Promise<void> {
     options: {
       iterations: { type: 'string' },
       server: { type: 'string' },
+      quick: { type: 'boolean' },
       help: { type: 'boolean' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -104,6 +110,9 @@ export async function main(argv: string[]): Promise<void> {
 
   if (values.iterations !== undefined) {
     options.iterations = parseIterations(values.iterations);
+  }
+  if (values.quick !== undefined) {
+    options.quick = Boolean(values.quick);
   }
 
   await runCommand(options);

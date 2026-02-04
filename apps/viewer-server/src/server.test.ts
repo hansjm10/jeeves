@@ -2232,6 +2232,133 @@ describe('POST /api/run max_parallel_tasks', () => {
   });
 });
 
+describe('POST /api/run quick', () => {
+  it('returns 400 for invalid quick (non-boolean)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-quick-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-quick-invalid-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 222;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'design_classify',
+      workflow: 'default',
+    }), 'utf-8');
+
+    // Create mock runner binary
+    const runnerDir = path.join(repoRoot, 'packages', 'runner', 'dist');
+    await fs.mkdir(runnerDir, { recursive: true });
+    await fs.writeFile(path.join(runnerDir, 'bin.js'), 'process.exit(0);', 'utf-8');
+
+    // Provide workflows/prompts so the run loop can load workflows.
+    await fs.mkdir(path.join(repoRoot, 'workflows'), { recursive: true });
+    await fs.copyFile(path.join(process.cwd(), 'workflows', 'default.yaml'), path.join(repoRoot, 'workflows', 'default.yaml'));
+    await fs.copyFile(path.join(process.cwd(), 'workflows', 'quick-fix.yaml'), path.join(repoRoot, 'workflows', 'quick-fix.yaml'));
+    await fs.mkdir(path.join(repoRoot, 'prompts'), { recursive: true });
+    for (const p of ['quick.fix.md', 'quick.handoff_to_design.md', 'pr.prepare.md', 'review.evaluate.md', 'review.fix.md', 'design.classify.md']) {
+      await fs.copyFile(path.join(process.cwd(), 'prompts', p), path.join(repoRoot, 'prompts', p));
+    }
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', quick: 'maybe', max_iterations: 1, inactivity_timeout_sec: 5, iteration_timeout_sec: 5 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error?: string }).error).toContain('Invalid quick');
+
+    await app.close();
+  });
+
+  it('routes to quick-fix workflow when quick=true and issue is at default start phase', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-quick-route-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-quick-route-');
+    const owner = 'test-owner';
+    const repo = 'test-repo';
+    const issueNumber = 223;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({
+      schemaVersion: 1,
+      repo: `${owner}/${repo}`,
+      issue: { number: issueNumber, repo: `${owner}/${repo}` },
+      branch: `issue/${issueNumber}`,
+      phase: 'design_classify',
+      workflow: 'default',
+    }), 'utf-8');
+
+    // Create mock runner binary
+    const runnerDir = path.join(repoRoot, 'packages', 'runner', 'dist');
+    await fs.mkdir(runnerDir, { recursive: true });
+    await fs.writeFile(path.join(runnerDir, 'bin.js'), 'process.exit(0);', 'utf-8');
+
+    // Provide workflows/prompts so the run loop can load workflows.
+    await fs.mkdir(path.join(repoRoot, 'workflows'), { recursive: true });
+    await fs.copyFile(path.join(process.cwd(), 'workflows', 'default.yaml'), path.join(repoRoot, 'workflows', 'default.yaml'));
+    await fs.copyFile(path.join(process.cwd(), 'workflows', 'quick-fix.yaml'), path.join(repoRoot, 'workflows', 'quick-fix.yaml'));
+    await fs.mkdir(path.join(repoRoot, 'prompts'), { recursive: true });
+    for (const p of ['quick.fix.md', 'quick.handoff_to_design.md', 'pr.prepare.md', 'review.evaluate.md', 'review.fix.md', 'design.classify.md']) {
+      await fs.copyFile(path.join(process.cwd(), 'prompts', p), path.join(repoRoot, 'prompts', p));
+    }
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake', quick: true, max_iterations: 1, inactivity_timeout_sec: 5, iteration_timeout_sec: 5 },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Wait for run to complete
+    let running = true;
+    while (running) {
+      const statusRes = await app.inject({ method: 'GET', url: '/api/run' });
+      running = (statusRes.json() as { run?: { running?: boolean } }).run?.running === true;
+      if (running) await new Promise((r) => setTimeout(r, 25));
+    }
+
+    const issueJson = JSON.parse(await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8')) as { workflow?: unknown; phase?: unknown };
+    expect(issueJson.workflow).toBe('quick-fix');
+    expect(issueJson.phase).toBe('quick_fix');
+
+    await app.close();
+  });
+});
+
 describe('POST /api/run error status codes', () => {
   it('returns 409 for already running', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-409-');

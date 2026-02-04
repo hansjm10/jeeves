@@ -257,6 +257,7 @@ This section defines **all viewer-server HTTP endpoints**, **streaming events**,
   - `failed_exclude`: desired sync could not proceed because `.git/info/exclude` update failed.
   - `failed_env_write`: `.env.jeeves` write failed (token desired=present).
   - `failed_env_delete`: `.env.jeeves` delete failed (token desired=absent).
+  - `failed_secret_read`: secret file read failed during reconcile (I/O or permissions error).
   - `never_attempted`: no reconcile has been attempted since last token change / issue init.
 
 **GET /api/issue/sonar-token → SonarTokenStatusResponse**

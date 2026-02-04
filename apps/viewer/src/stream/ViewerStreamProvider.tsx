@@ -106,8 +106,9 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
 }
 
 /**
- * Internal component that automatically invalidates the Sonar token query when a stream event arrives.
- * This ensures the UI displays the latest status without requiring manual refresh.
+ * Internal component that directly updates the Sonar token query cache when a stream event arrives.
+ * This ensures the UI displays the latest status immediately (within one render tick) without
+ * requiring a network round-trip.
  *
  * Rendered automatically by ViewerStreamProvider - no need to use directly.
  */
@@ -120,16 +121,34 @@ function SonarTokenStreamSyncInternal(props: { baseUrl: string }) {
   useEffect(() => {
     if (!sonarTokenStatus) return;
 
-    // Check if this is a new event
+    // Check if this is a different event by comparing all status fields
+    // This ensures we catch changes to any field, not just issue_ref/last_attempt_at
     const prevEvent = prevEventRef.current;
     const isNewEvent =
       !prevEvent ||
       prevEvent.issue_ref !== sonarTokenStatus.issue_ref ||
-      prevEvent.last_attempt_at !== sonarTokenStatus.last_attempt_at;
+      prevEvent.has_token !== sonarTokenStatus.has_token ||
+      prevEvent.worktree_present !== sonarTokenStatus.worktree_present ||
+      prevEvent.env_var_name !== sonarTokenStatus.env_var_name ||
+      prevEvent.sync_status !== sonarTokenStatus.sync_status ||
+      prevEvent.last_attempt_at !== sonarTokenStatus.last_attempt_at ||
+      prevEvent.last_success_at !== sonarTokenStatus.last_success_at ||
+      prevEvent.last_error !== sonarTokenStatus.last_error;
 
     if (isNewEvent) {
-      // Invalidate the query to trigger a refetch, updating the displayed status
-      void queryClient.invalidateQueries({ queryKey: sonarTokenQueryKey(props.baseUrl) });
+      // Directly update the query cache with the event data (immediate, no network round-trip)
+      // This converts the event to a SonarTokenStatusResponse format
+      queryClient.setQueryData(sonarTokenQueryKey(props.baseUrl), {
+        ok: true as const,
+        issue_ref: sonarTokenStatus.issue_ref,
+        worktree_present: sonarTokenStatus.worktree_present,
+        has_token: sonarTokenStatus.has_token,
+        env_var_name: sonarTokenStatus.env_var_name,
+        sync_status: sonarTokenStatus.sync_status,
+        last_attempt_at: sonarTokenStatus.last_attempt_at,
+        last_success_at: sonarTokenStatus.last_success_at,
+        last_error: sonarTokenStatus.last_error,
+      });
       prevEventRef.current = sonarTokenStatus;
     }
   }, [sonarTokenStatus, props.baseUrl, queryClient]);

@@ -19,6 +19,7 @@ export type SonarSyncStatus =
   | 'failed_exclude'
   | 'failed_env_write'
   | 'failed_env_delete'
+  | 'failed_secret_read'
   | 'never_attempted';
 
 // ============================================================================

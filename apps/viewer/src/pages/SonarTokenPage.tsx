@@ -41,8 +41,15 @@ function formatSyncStatus(status: SonarSyncStatus): { label: string; color: stri
       return { label: 'Failed (env write)', color: 'var(--color-accent-red)' };
     case 'failed_env_delete':
       return { label: 'Failed (env delete)', color: 'var(--color-accent-red)' };
+    case 'failed_secret_read':
+      return { label: 'Failed (secret read)', color: 'var(--color-accent-red)' };
     case 'never_attempted':
       return { label: 'Not synced yet', color: 'var(--color-text-muted)' };
+    default: {
+      // Exhaustive check: this should never happen, but provide a safe fallback
+      const _exhaustive: never = status;
+      return { label: String(_exhaustive), color: 'var(--color-text-muted)' };
+    }
   }
 }
 
@@ -233,7 +240,7 @@ export function SonarTokenPage() {
   const hasToken = status?.has_token ?? false;
   const worktreePresent = status?.worktree_present ?? false;
   const canSync = hasToken && worktreePresent;
-  const needsSync = status?.sync_status && ['failed_exclude', 'failed_env_write', 'failed_env_delete', 'deferred_worktree_absent'].includes(status.sync_status);
+  const needsSync = status?.sync_status && ['failed_exclude', 'failed_env_write', 'failed_env_delete', 'failed_secret_read', 'deferred_worktree_absent'].includes(status.sync_status);
 
   return (
     <div className="sonar-token-page">

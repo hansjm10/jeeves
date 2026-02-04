@@ -205,7 +205,211 @@ No subprocesses are required for this feature; reconciliation uses in-process fi
 | none | n/a | n/a | n/a |
 
 ## 3. Interfaces
-[To be completed in design_api phase]
+
+This section defines **all viewer-server HTTP endpoints**, **streaming events**, and **UI ↔ server interactions** for managing an issue-scoped Sonar token and syncing it into the selected issue’s worktree.
+
+### Conventions (applies to all endpoints below)
+
+**Content-Type**:
+- Requests with a body MUST send `Content-Type: application/json`.
+- Responses are JSON unless noted.
+
+**Success envelope**:
+```json
+{ "ok": true, "...": "..." }
+```
+
+**Error envelope (consistent across endpoints)**:
+```json
+{ "ok": false, "error": "human readable message", "code": "optional_machine_code", "field_errors": { "optional": "map" } }
+```
+
+**Mutation gating / auth**:
+- Mutating endpoints are **localhost-only** unless viewer-server is started with `--allow-remote-run` (matches existing `requireMutatingAllowed` behavior).
+- All endpoints are subject to the existing **Origin allowlist/same-origin** gate.
+
+**Selected issue scoping**:
+- Endpoints in this section operate on the **currently selected issue** in viewer-server (no `issue_ref` parameter).
+
+**No secret exfiltration**:
+- The token value MUST NEVER be returned by any endpoint or streaming event.
+- Token values MUST NEVER be logged or included in viewer logs / SSE / WS payloads.
+
+### Endpoints
+
+| Method | Path | Input | Success | Errors |
+|--------|------|-------|---------|--------|
+| GET | `/api/issue/sonar-token` | none | 200: `SonarTokenStatusResponse` | 400, 403, 500 |
+| PUT | `/api/issue/sonar-token` | `PutSonarTokenRequest` | 200: `SonarTokenMutateResponse` | 400, 403, 409, 500, 503 |
+| DELETE | `/api/issue/sonar-token` | none | 200: `SonarTokenMutateResponse` | 400, 403, 409, 500, 503 |
+| POST | `/api/issue/sonar-token/reconcile` | `ReconcileSonarTokenRequest` | 200: `SonarTokenMutateResponse` | 400, 403, 409, 500, 503 |
+
+#### Types
+
+**Enums**
+- `SonarSyncStatus`:
+  - `in_sync`: token desired state matches worktree materialization and `.git/info/exclude` is updated.
+  - `deferred_worktree_absent`: token is stored issue-scoped, but worktree does not exist; nothing to sync yet.
+  - `failed_exclude`: desired sync could not proceed because `.git/info/exclude` update failed.
+  - `failed_env_write`: `.env.jeeves` write failed (token desired=present).
+  - `failed_env_delete`: `.env.jeeves` delete failed (token desired=absent).
+  - `never_attempted`: no reconcile has been attempted since last token change / issue init.
+
+**GET /api/issue/sonar-token → SonarTokenStatusResponse**
+```ts
+type SonarTokenStatusResponse = {
+  ok: true;
+  issue_ref: string;
+  worktree_present: boolean;
+  has_token: boolean;
+  sync_status: SonarSyncStatus;
+  last_attempt_at: string | null; // ISO-8601
+  last_success_at: string | null; // ISO-8601
+  last_error: string | null; // sanitized; MUST NOT include token
+};
+```
+
+Errors:
+- `400` `{"ok":false,"error":"No issue selected.","code":"no_issue_selected"}` when no issue is selected.
+- `403` `{"ok":false,"error":"Origin not allowed","code":"forbidden"}` when the request Origin is not allowed.
+- `500` `{"ok":false,"error":"...","code":"io_error"}` when issue-scoped status cannot be read.
+
+**PUT /api/issue/sonar-token (save/update)**
+1) **Path**: `/api/issue/sonar-token`  
+2) **Method**: `PUT`  
+3) **Input parameters** (`PutSonarTokenRequest`):
+```ts
+type PutSonarTokenRequest = {
+  token: string;         // required
+  sync_now?: boolean;    // optional; default true
+};
+```
+4) **Success** (`SonarTokenMutateResponse`, 200):
+```ts
+type SonarTokenMutateResponse = {
+  ok: true;
+  updated: true; // always true for PUT
+  status: Omit<SonarTokenStatusResponse, "ok">;
+  warnings: string[]; // may be empty; MUST NOT include token
+};
+```
+5) **Errors**:
+- `400` `{"ok":false,"error":"...","code":"validation_failed","field_errors":{...}}` when:
+  - `token` is missing, not a string, empty after trim, exceeds max length, or contains `\0`, `\n`, or `\r`.
+  - `sync_now` is provided but is not a boolean.
+- `403` `{"ok":false,"error":"...","code":"forbidden"}` when mutation is not allowed from the requester (non-local without `--allow-remote-run`, or Origin not allowed).
+- `409` `{"ok":false,"error":"Cannot edit while Jeeves is running.","code":"conflict_running"}` when Jeeves is currently running (token changes are disallowed during an active run).
+- `503` `{"ok":false,"error":"...","code":"busy"}` when an existing token-sync operation mutex cannot be acquired within a fixed timeout (prevents concurrent writes).
+- `500` `{"ok":false,"error":"...","code":"io_error"}` when issue-scoped state cannot be written (no worktree writes should be attempted in this case).
+
+**DELETE /api/issue/sonar-token (remove)**
+1) **Path**: `/api/issue/sonar-token`  
+2) **Method**: `DELETE`  
+3) **Input parameters**: none (body ignored if provided)  
+4) **Success** (`SonarTokenMutateResponse`, 200):
+- `updated` MUST be `true` if a token previously existed, else `false` (idempotent remove).
+- `status.has_token` MUST be `false` on success.
+5) **Errors**:
+- `400` `{"ok":false,"error":"No issue selected.","code":"no_issue_selected"}` when no issue is selected.
+- `403` forbidden (same as PUT).
+- `409` `{"ok":false,"error":"Cannot edit while Jeeves is running.","code":"conflict_running"}` when Jeeves is running.
+- `503` busy mutex timeout (same as PUT).
+- `500` io_error writing issue-scoped state (do not attempt worktree cleanup if state write fails).
+
+**POST /api/issue/sonar-token/reconcile (retry sync / converge worktree)**
+1) **Path**: `/api/issue/sonar-token/reconcile`  
+2) **Method**: `POST`  
+3) **Input parameters** (`ReconcileSonarTokenRequest`):
+```ts
+type ReconcileSonarTokenRequest = {
+  force?: boolean; // optional; default false; if true, rewrites/removes even if already in desired state
+};
+```
+4) **Success** (`SonarTokenMutateResponse`, 200):
+- `updated` MUST be `false` (reconcile does not change the stored token presence; it only attempts to sync side-effects).
+- `warnings` may include “worktree not present; deferred” or filesystem failures (sanitized).
+5) **Errors**:
+- `400` no issue selected; invalid `force` type.
+- `403` forbidden (same as PUT).
+- `409` conflict_running when Jeeves is running (reconcile is disallowed during an active run).
+- `503` busy mutex timeout (same as PUT).
+- `500` io_error reading issue-scoped state, or unrecoverable corruption/unreadable state.
+
+### CLI Commands (if applicable)
+
+No new CLI commands are introduced for this feature. The viewer UI + viewer-server API are the supported interfaces.
+
+### Events (streaming, if applicable)
+
+All events are delivered over:
+- **SSE**: `GET /api/stream` (`event: <name>` + JSON `data: ...`)
+- **WebSocket**: `GET /api/ws` (JSON `{ event: string, data: unknown }`)
+
+| Event | Trigger | Payload | Consumers |
+|-------|---------|---------|-----------|
+| `sonar-token-status` | After any successful PUT/DELETE/RECONCILE completes, and after automatic reconcile on issue init/select (if implemented). | `SonarTokenStatusEvent` | Viewer UI Sonar settings panel (and any future settings dashboards). |
+
+**sonar-token-status → SonarTokenStatusEvent**
+```ts
+type SonarTokenStatusEvent = {
+  issue_ref: string;
+  worktree_present: boolean;
+  has_token: boolean;
+  sync_status: SonarSyncStatus;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null; // sanitized
+};
+```
+
+### Validation Rules
+
+| Field | Type | Constraints | Error |
+|------|------|-------------|-------|
+| `token` | string | required for PUT; trimmed; length `1..1024`; MUST NOT contain `\0`, `\n`, `\r` | 400 `code=validation_failed`, `field_errors.token` |
+| `sync_now` | boolean | optional; default `true` | 400 `field_errors.sync_now` |
+| `force` | boolean | optional; default `false` | 400 `field_errors.force` |
+
+**When validation fails**:
+- Response: `400` with the standard error envelope.
+- Validation is **synchronous** (string/type checks only). No remote Sonar verification is performed.
+
+### UI Interactions (viewer)
+
+| Action | Request | Loading State | Success | Error |
+|--------|---------|---------------|---------|-------|
+| Open Sonar token settings panel | `GET /api/issue/sonar-token` | Show spinner; disable form | Render “token present/absent” + sync status; never show token value | Inline error state with retry button |
+| Save/update token | `PUT /api/issue/sonar-token` | Disable inputs/buttons; show “Saving…” | Show “Saved” toast; if `warnings.length>0`, show non-fatal warning banner (no token); refresh status | Show error toast + inline message; remain on form with token field cleared |
+| Remove token | `DELETE /api/issue/sonar-token` | Disable controls; show “Removing…” | Show “Removed” toast; if warnings, show banner; refresh status | Show error toast; remain on panel with prior status |
+| Retry sync | `POST /api/issue/sonar-token/reconcile` | Disable controls; show “Syncing…” | Update sync status; if warnings, show banner | Show error toast; preserve prior status |
+| Close panel / change issue | none (local UI action) | Cancel in-flight fetch via AbortController (client-side) | UI returns to closed/next issue state | n/a |
+
+### Worktree Filesystem Contracts (internal but externally observable)
+
+These side-effects are part of the feature contract because they impact how users run tooling inside the worktree.
+
+**Env file materialization**
+- **Path**: `<worktreeRoot>/.env.jeeves`
+- **Format** (exact):
+  - When `has_token=true`: file MUST contain exactly one variable assignment line (plus trailing newline): `SONAR_TOKEN=<token>\n`.
+  - When `has_token=false`: file MUST be removed if it exists.
+- **Permissions**:
+  - Write with restrictive permissions (target `0600` where supported).
+- **Atomicity**:
+  - Writes MUST be atomic: write to `<worktreeRoot>/.env.jeeves.tmp` then rename to `.env.jeeves`.
+  - On startup/reconcile, `.env.jeeves.tmp` MUST be cleaned up if present.
+
+**Git ignore behavior**
+- **Path**: `<worktreeRoot>/.git/info/exclude`
+- **Entries** (must be present, deduped):
+  - `.env.jeeves`
+  - `.env.jeeves.tmp`
+
+### Contract Gates
+
+13) **Breaking change?** No. This design adds new endpoints and one new streaming event only.  
+14) **Migration path?** Not applicable (no existing consumer contract is being removed or changed).  
+15) **Versioning?** No version bump required. If future breaking changes are needed, introduce new endpoints (e.g. `/api/v2/...`) rather than changing payload shapes in-place.
 
 ## 4. Data
 [To be completed in design_data phase]

@@ -2547,7 +2547,9 @@ describe('sonar-token endpoints', () => {
     expect(body.ok).toBe(true);
     expect(body.has_token).toBe(false);
     expect(body.env_var_name).toBe('SONAR_TOKEN'); // default
-    expect(body.sync_status).toBe('never_attempted');
+    // Per Design §4: when worktree missing and no token, sync_status=in_sync (trivially satisfied)
+    expect(body.sync_status).toBe('in_sync');
+    expect(body.worktree_present).toBe(false);
     // Token value should never be present
     expect(body.token).toBeUndefined();
 
@@ -3360,5 +3362,203 @@ describe('sonar-token endpoints', () => {
 
     ws.close();
     await app.close();
+  });
+
+  describe('worktree-missing sync_status semantics', () => {
+    it('GET returns sync_status=deferred_worktree_absent when has_token=true and worktree missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-token-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-token-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      // Write a secret token file directly
+      const secretsDir = path.join(stateDir, '.secrets');
+      await fs.mkdir(secretsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(secretsDir, 'sonar-token.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          token: 'test-token',
+          updated_at: new Date().toISOString(),
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+
+      await app.close();
+    });
+
+    it('GET returns sync_status=in_sync when has_token=false and worktree missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-notoken-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-notoken-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir, and NO token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(false);
+      expect(body.worktree_present).toBe(false);
+      // Trivially in_sync when no token and no worktree
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('GET returns stored sync_status when worktree is present', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-present-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-present-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create both state dir and worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      // Set a stored sync_status of in_sync
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          status: {
+            sonarToken: {
+              sync_status: 'in_sync',
+              last_attempt_at: '2026-02-04T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.worktree_present).toBe(true);
+      // When worktree is present, stored sync_status is returned unchanged
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('sync_status override applies even when stored status differs', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-override-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-override-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      // Set a stored sync_status of in_sync, but worktree is missing with token
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          status: {
+            sonarToken: {
+              sync_status: 'in_sync', // This was true when worktree existed
+              last_success_at: '2026-02-04T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      // Write a secret token file directly
+      const secretsDir = path.join(stateDir, '.secrets');
+      await fs.mkdir(secretsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(secretsDir, 'sonar-token.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          token: 'test-token',
+          updated_at: new Date().toISOString(),
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      // Even though stored was in_sync, missing worktree with token forces deferred_worktree_absent
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+
+      await app.close();
+    });
   });
 });

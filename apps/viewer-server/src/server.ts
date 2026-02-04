@@ -1388,13 +1388,23 @@ export async function buildServer(config: ViewerServerConfig) {
         ? sonarTokenStatus.env_var_name.trim()
         : DEFAULT_ENV_VAR_NAME;
 
-    const syncStatus = (sonarTokenStatus?.sync_status as SonarSyncStatus) ?? 'never_attempted';
+    const storedSyncStatus = (sonarTokenStatus?.sync_status as SonarSyncStatus) ?? 'never_attempted';
     const lastAttemptAt =
       typeof sonarTokenStatus?.last_attempt_at === 'string' ? sonarTokenStatus.last_attempt_at : null;
     const lastSuccessAt =
       typeof sonarTokenStatus?.last_success_at === 'string' ? sonarTokenStatus.last_success_at : null;
     const lastError =
       typeof sonarTokenStatus?.last_error === 'string' ? sonarTokenStatus.last_error : null;
+
+    // Design §4 sync_status relationships when worktree is missing/deleted:
+    // - If worktree_present=false and has_token=true: sync_status=deferred_worktree_absent
+    // - If worktree_present=false and has_token=false: sync_status=in_sync (trivially satisfied)
+    let syncStatus: SonarSyncStatus;
+    if (!worktreePresent) {
+      syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
+    } else {
+      syncStatus = storedSyncStatus;
+    }
 
     return {
       issue_ref: issueRef,

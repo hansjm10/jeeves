@@ -14,12 +14,12 @@ describe('resolvePromptPath', () => {
     const workflow: Workflow = {
       name: 't',
       version: 1,
-      start: 'design_draft',
+      start: 'design_classify',
       phases: {
-        design_draft: {
-          name: 'design_draft',
+        design_classify: {
+          name: 'design_classify',
           type: 'execute',
-          prompt: 'design.draft.md',
+          prompt: 'design.classify.md',
           transitions: [],
           allowedWrites: ['.jeeves/*'],
         },
@@ -28,14 +28,14 @@ describe('resolvePromptPath', () => {
     };
 
     const engine = new WorkflowEngine(workflow);
-    const resolved = await resolvePromptPath('design_draft', promptsDir, engine);
-    expect(resolved.endsWith('/prompts/design.draft.md') || resolved.endsWith('\\prompts\\design.draft.md')).toBe(true);
+    const resolved = await resolvePromptPath('design_classify', promptsDir, engine);
+    expect(resolved.endsWith('/prompts/design.classify.md') || resolved.endsWith('\\prompts\\design.classify.md')).toBe(true);
   });
 
-  it('includes the design pre-submission checklist in the draft prompt', async () => {
-    const promptPath = fileURLToPath(new URL('../../../prompts/design.draft.md', import.meta.url));
+  it('includes verdict rules in the design review prompt', async () => {
+    const promptPath = fileURLToPath(new URL('../../../prompts/design.review.md', import.meta.url));
     const content = await readFile(promptPath, 'utf8');
-    expect(content).toContain('## Pre-Submission Checklist');
+    expect(content).toContain('## Verdict Rules');
   });
 
   it('blocks path traversal and errors on missing prompts', async () => {

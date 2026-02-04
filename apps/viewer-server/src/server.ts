@@ -891,12 +891,13 @@ export async function buildServer(config: ViewerServerConfig) {
 		      const prevActiveIssue = await loadActiveIssue(dataDir);
 
 		      try {
-		        const initRes = await initIssue({
-		          dataDir,
-		          body: {
-		            repo,
-		            issue: issueUrlInfo.issueNumber,
-		            branch: parseOptionalString(initParams.branch),
+			        const initRes = await initIssue({
+			          dataDir,
+			          workflowsDir,
+			          body: {
+			            repo,
+			            issue: issueUrlInfo.issueNumber,
+			            branch: parseOptionalString(initParams.branch),
 		            workflow: parseOptionalString(initParams.workflow),
 		            phase: parseOptionalString(initParams.phase),
 		            design_doc: parseOptionalString(initParams.design_doc),
@@ -1091,13 +1092,14 @@ export async function buildServer(config: ViewerServerConfig) {
 	      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
 	    }
 
-	    try {
-	      const res = await initIssue({
-	        dataDir,
-	        body: {
-	          repo: repoStr,
-	          issue: issueNum,
-	          branch: parseOptionalString(body.branch),
+		    try {
+		      const res = await initIssue({
+		        dataDir,
+		        workflowsDir,
+		        body: {
+		          repo: repoStr,
+		          issue: issueNum,
+		          branch: parseOptionalString(body.branch),
 	          workflow: parseOptionalString(body.workflow),
 	          phase: parseOptionalString(body.phase),
 	          design_doc: parseOptionalString(body.design_doc),
@@ -1243,18 +1245,20 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
-  app.get('/api/workflow', async (_req, reply) => {
-    const issue = runManager.getIssue();
-    const issueJson = issue.stateDir ? await readIssueJson(issue.stateDir) : null;
-    const workflowName = (issueJson && typeof issueJson.workflow === 'string' && issueJson.workflow.trim()) ? issueJson.workflow : 'default';
-    const currentPhase = (issueJson && typeof issueJson.phase === 'string' && issueJson.phase.trim()) ? issueJson.phase : 'design_draft';
+	  app.get('/api/workflow', async (_req, reply) => {
+	    const issue = runManager.getIssue();
+	    const issueJson = issue.stateDir ? await readIssueJson(issue.stateDir) : null;
+	    const workflowName = (issueJson && typeof issueJson.workflow === 'string' && issueJson.workflow.trim()) ? issueJson.workflow : 'default';
 
-    try {
-      const workflow = await loadWorkflowByName(workflowName, { workflowsDir });
-      const phases = Object.entries(workflow.phases).map(([id, phase]) => ({
-        id,
-        name: id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-        type: phase.type,
+	    try {
+	      const workflow = await loadWorkflowByName(workflowName, { workflowsDir });
+	      const currentPhaseRaw =
+	        issueJson && typeof issueJson.phase === 'string' && issueJson.phase.trim() ? issueJson.phase.trim() : null;
+	      const currentPhase = currentPhaseRaw && workflow.phases[currentPhaseRaw] ? currentPhaseRaw : workflow.start;
+	      const phases = Object.entries(workflow.phases).map(([id, phase]) => ({
+	        id,
+	        name: id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+	        type: phase.type,
         description: phase.description ?? '',
       }));
       const phase_order = Object.keys(workflow.phases);

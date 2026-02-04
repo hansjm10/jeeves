@@ -520,6 +520,19 @@ export async function buildServer(config: ViewerServerConfig) {
 
   await refreshFileTargets();
 
+  // Startup reconcile/cleanup: run best-effort reconcile for initially selected issue
+  // This converges worktree artifacts, cleans up leftover .env.jeeves.tmp files,
+  // and emits sonar-token-status event (Design §3 Worktree Filesystem Contracts).
+  // Non-fatal: failures are surfaced via sync_status/last_error without blocking startup.
+  const startupIssue = runManager.getIssue();
+  if (startupIssue.issueRef && startupIssue.stateDir) {
+    try {
+      await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    } catch {
+      // Non-fatal - ignore reconcile errors on startup
+    }
+  }
+
   // Poll for log/sdk updates and file target changes
   async function pollTick(): Promise<void> {
     try {

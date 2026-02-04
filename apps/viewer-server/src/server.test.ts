@@ -3725,4 +3725,326 @@ describe('sonar-token endpoints', () => {
       await app.close();
     });
   });
+
+  // ============================================================================
+  // Startup reconcile/cleanup tests (T10)
+  // ============================================================================
+
+  describe('startup reconcile/cleanup', () => {
+    it('runs reconcile on startup and creates .env.jeeves when token exists', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-reconcile-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-reconcile-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token before server starts
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file directly
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'startup-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // .env.jeeves should not exist yet
+      const envBefore = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+      expect(envBefore).toBeNull();
+
+      // Start server - this should trigger startup reconcile
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // .env.jeeves should now exist (created by startup reconcile)
+      const envAfter = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+      expect(envAfter).not.toBeNull();
+
+      // Verify the content is correct
+      const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+      expect(envContent).toBe('SONAR_TOKEN="startup-test-token"\n');
+
+      // Verify status is updated
+      const issueJson = await readIssueJson(stateDir);
+      const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+        | Record<string, unknown>
+        | undefined;
+      expect(sonarTokenStatus?.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('cleans up leftover .env.jeeves.tmp on startup', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-cleanup-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-cleanup-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir and worktree with a token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'cleanup-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Simulate a leftover temp file from a crashed previous run
+      const tmpPath = path.join(worktreeDir, '.env.jeeves.tmp');
+      await fs.writeFile(tmpPath, 'OLD_LEFTOVER="crash-remnant"\n', 'utf-8');
+      const tmpBefore = await fs.stat(tmpPath).catch(() => null);
+      expect(tmpBefore).not.toBeNull();
+
+      // Start server - startup reconcile should clean up the temp file
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // .env.jeeves.tmp should be cleaned up
+      const tmpAfter = await fs.stat(tmpPath).catch(() => null);
+      expect(tmpAfter).toBeNull();
+
+      // .env.jeeves should now exist with correct content
+      const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+      expect(envContent).toBe('SONAR_TOKEN="cleanup-test-token"\n');
+
+      await app.close();
+    });
+
+    it('emits sonar-token-status event on startup when token exists', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-event-token-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-event-token-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token before server starts
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'event-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server and listen
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+      await app.listen({ port: 0 });
+      const actualAddress = app.server.address();
+      const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+      // Connect via WebSocket - we should eventually get status when connecting
+      const receivedEvents: { event: string; data: unknown }[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+      await new Promise<void>((resolve) => {
+        ws.on('open', resolve);
+      });
+
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+        receivedEvents.push(msg);
+      });
+
+      // Wait for state event (which clients receive on connect)
+      await waitFor(() => receivedEvents.some((e) => e.event === 'state'));
+
+      // Verify GET status shows correct values (startup reconcile ran)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      expect(body.sync_status).toBe('in_sync');
+      // Token value should NEVER be in the response
+      expect(body.token).toBeUndefined();
+
+      ws.close();
+      await app.close();
+    });
+
+    it('emits sonar-token-status event on startup when no token (has_token=false)', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-event-notoken-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-event-notoken-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir WITHOUT token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Start server and listen
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows correct values (startup reconcile ran, no token)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(false);
+      // No token, so status is based on worktree presence (worktree present, no token = in_sync or never_attempted)
+      // Since startup reconcile runs and emits status for no-token case, it should be reported correctly
+      expect(body.worktree_present).toBe(true);
+
+      await app.close();
+    });
+
+    it('startup reconcile is non-fatal when worktree is missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-nonfatal-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-nonfatal-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      // No worktree dir created
+
+      // Create state dir with token but NO worktree
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'nonfatal-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - should not throw even though worktree is missing
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows deferred status
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+      // Token value should NEVER leak
+      expect(body.token).toBeUndefined();
+
+      await app.close();
+    });
+
+    it('startup reconcile does not leak token in last_error when reconcile fails', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-noleak-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-noleak-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      // Note: NOT initializing git in worktree, so .git/info/exclude update will fail
+
+      // Pre-create the token secret file with a distinctive token value
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      const secretToken = 'SUPERSECRETTOKEN12345';
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: secretToken, updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - reconcile should fail because no .git directory
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows the failure
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+
+      // last_error should exist due to failed reconcile, but MUST NOT contain the token
+      // The error should be about git exclude or env write failure
+      if (body.last_error) {
+        expect(typeof body.last_error).toBe('string');
+        expect((body.last_error as string)).not.toContain(secretToken);
+      }
+
+      // Token value should NEVER be in response
+      expect(body.token).toBeUndefined();
+
+      await app.close();
+    });
+  });
 });

@@ -23,6 +23,16 @@ import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
+import { reconcileSonarTokenToWorktree } from './sonarTokenReconcile.js';
+import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret } from './sonarTokenSecret.js';
+import {
+  validatePutRequest,
+  validateReconcileRequest,
+  sanitizeErrorForUi,
+  DEFAULT_ENV_VAR_NAME,
+  type SonarTokenStatus,
+  type SonarSyncStatus,
+} from './sonarTokenTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
@@ -1274,6 +1284,434 @@ export async function buildServer(config: ViewerServerConfig) {
       });
     } catch (err) {
       return reply.code(404).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ============================================================================
+  // Sonar Token Endpoints
+  // ============================================================================
+
+  /** Mutex timeout for sonar token operations (ms). */
+  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = 1500;
+
+  /** Per-issue mutex map for sonar token operations. */
+  const sonarTokenMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
+
+  /** Acquire mutex for issue - returns true if acquired, false if timed out. */
+  async function acquireSonarTokenMutex(issueRef: string): Promise<boolean> {
+    let mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) {
+      mutex = { locked: false, waiters: [] };
+      sonarTokenMutexes.set(issueRef, mutex);
+    }
+
+    if (!mutex.locked) {
+      mutex.locked = true;
+      return true;
+    }
+
+    // Wait for mutex with timeout
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        // Remove ourselves from the waiter queue
+        const idx = mutex!.waiters.indexOf(waiterCallback);
+        if (idx !== -1) mutex!.waiters.splice(idx, 1);
+        resolve(false);
+      }, SONAR_TOKEN_MUTEX_TIMEOUT_MS);
+
+      const waiterCallback = (acquired: boolean) => {
+        clearTimeout(timer);
+        resolve(acquired);
+      };
+
+      mutex!.waiters.push(waiterCallback);
+    });
+  }
+
+  /** Release mutex for issue. */
+  function releaseSonarTokenMutex(issueRef: string): void {
+    const mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) return;
+
+    if (mutex.waiters.length > 0) {
+      // Pass to next waiter
+      const next = mutex.waiters.shift();
+      if (next) next(true);
+    } else {
+      mutex.locked = false;
+    }
+  }
+
+  /** Build SonarTokenStatus from current state (never includes token value). */
+  async function buildSonarTokenStatus(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<SonarTokenStatus> {
+    const secret = await readSonarTokenSecret(stateDir);
+    const hasToken = secret.exists;
+
+    const worktreePresent = Boolean(
+      workDir && (await fs.stat(workDir).catch(() => null))?.isDirectory(),
+    );
+
+    // Read status from issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+
+    const envVarName =
+      typeof sonarTokenStatus?.env_var_name === 'string' && sonarTokenStatus.env_var_name.trim()
+        ? sonarTokenStatus.env_var_name.trim()
+        : DEFAULT_ENV_VAR_NAME;
+
+    const syncStatus = (sonarTokenStatus?.sync_status as SonarSyncStatus) ?? 'never_attempted';
+    const lastAttemptAt =
+      typeof sonarTokenStatus?.last_attempt_at === 'string' ? sonarTokenStatus.last_attempt_at : null;
+    const lastSuccessAt =
+      typeof sonarTokenStatus?.last_success_at === 'string' ? sonarTokenStatus.last_success_at : null;
+    const lastError =
+      typeof sonarTokenStatus?.last_error === 'string' ? sonarTokenStatus.last_error : null;
+
+    return {
+      issue_ref: issueRef,
+      worktree_present: worktreePresent,
+      has_token: hasToken,
+      env_var_name: envVarName,
+      sync_status: syncStatus,
+      last_attempt_at: lastAttemptAt,
+      last_success_at: lastSuccessAt,
+      last_error: lastError,
+    };
+  }
+
+  /** Update issue.json with sonar token status (never stores token value). */
+  async function updateSonarTokenStatusInIssueJson(
+    stateDir: string,
+    updates: Partial<{
+      env_var_name: string;
+      sync_status: SonarSyncStatus;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+    }>,
+  ): Promise<void> {
+    const issueJson = (await readIssueJson(stateDir)) ?? {};
+
+    // Ensure status object exists
+    if (!issueJson.status || typeof issueJson.status !== 'object') {
+      issueJson.status = {};
+    }
+    const status = issueJson.status as Record<string, unknown>;
+
+    // Ensure sonarToken object exists
+    if (!status.sonarToken || typeof status.sonarToken !== 'object') {
+      status.sonarToken = {};
+    }
+    const sonarToken = status.sonarToken as Record<string, unknown>;
+
+    // Apply updates
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        sonarToken[key] = value;
+      }
+    }
+
+    await writeIssueJson(stateDir, issueJson);
+  }
+
+  /** Emit sonar-token-status event. */
+  function emitSonarTokenStatus(status: SonarTokenStatus): void {
+    hub.broadcast('sonar-token-status', status);
+  }
+
+  // GET /api/issue/sonar-token
+  app.get('/api/issue/sonar-token', async (_req, reply) => {
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    try {
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      return reply.send({ ok: true, ...status });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    }
+  });
+
+  // PUT /api/issue/sonar-token
+  app.put('/api/issue/sonar-token', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validatePutRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Read existing status to get current env_var_name if not provided
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Determine env_var_name to use
+      const envVarName = validation.env_var_name ?? existingStatus.env_var_name;
+
+      // Persist token if provided
+      if (validation.token !== undefined) {
+        await writeSonarTokenSecret(issue.stateDir, validation.token);
+      }
+
+      // Update env_var_name in issue.json if provided
+      if (validation.env_var_name !== undefined) {
+        await updateSonarTokenStatusInIssueJson(issue.stateDir, { env_var_name: validation.env_var_name });
+      }
+
+      // Reconcile if sync_now is true and worktree exists
+      let syncStatus: SonarSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (validation.sync_now && issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          // Read the token for reconciliation (we need the actual value to write to .env.jeeves)
+          const secretResult = await readSonarTokenSecret(issue.stateDir);
+          const tokenValue = secretResult.exists ? secretResult.data.token : undefined;
+          const hasTokenNow = secretResult.exists;
+
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: hasTokenNow,
+            token: tokenValue,
+            envVarName,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+
+          await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+            last_error: lastError,
+          });
+        } else {
+          syncStatus = 'deferred_worktree_absent';
+          await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_error: null,
+          });
+        }
+      }
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      return reply.send({ ok: true, updated: true, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
+    }
+  });
+
+  // DELETE /api/issue/sonar-token
+  app.delete('/api/issue/sonar-token', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Check if token existed before deletion
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      const hadToken = existingStatus.has_token;
+
+      // Delete the secret file
+      await deleteSonarTokenSecret(issue.stateDir);
+
+      // Reconcile (remove .env.jeeves) if worktree exists
+      let syncStatus: SonarSyncStatus = 'never_attempted';
+      let lastError: string | null = null;
+
+      if (issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: false,
+            envVarName: existingStatus.env_var_name,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+        } else {
+          syncStatus = 'in_sync'; // No worktree, so nothing to sync - trivially satisfied
+        }
+      } else {
+        syncStatus = 'in_sync'; // No worktree, trivially satisfied
+      }
+
+      await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      return reply.send({ ok: true, updated: hadToken, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
+    }
+  });
+
+  // POST /api/issue/sonar-token/reconcile
+  app.post('/api/issue/sonar-token/reconcile', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validateReconcileRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Get current status
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Reconcile only if worktree exists
+      let syncStatus: SonarSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (!issue.workDir) {
+        syncStatus = existingStatus.has_token ? 'deferred_worktree_absent' : 'in_sync';
+        warnings.push('Worktree not present; deferred.');
+      } else {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (!worktreeExists) {
+          syncStatus = existingStatus.has_token ? 'deferred_worktree_absent' : 'in_sync';
+          warnings.push('Worktree directory does not exist; deferred.');
+        } else {
+          // Read token for reconciliation
+          const secretResult = await readSonarTokenSecret(issue.stateDir);
+          const tokenValue = secretResult.exists ? secretResult.data.token : undefined;
+          const hasTokenNow = secretResult.exists;
+
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: hasTokenNow,
+            token: tokenValue,
+            envVarName: existingStatus.env_var_name,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+        }
+      }
+
+      await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      // Reconcile never changes token presence, so updated is always false
+      return reply.send({ ok: true, updated: false, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
     }
   });
 

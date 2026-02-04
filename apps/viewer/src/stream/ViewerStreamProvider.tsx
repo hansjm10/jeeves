@@ -138,7 +138,8 @@ function SonarTokenStreamSyncInternal(props: { baseUrl: string }) {
     if (isNewEvent) {
       // Directly update the query cache with the event data (immediate, no network round-trip)
       // This converts the event to a SonarTokenStatusResponse format
-      queryClient.setQueryData(sonarTokenQueryKey(props.baseUrl), {
+      // Include issueRef in query key to match the query used by useSonarTokenStatus
+      queryClient.setQueryData(sonarTokenQueryKey(props.baseUrl, sonarTokenStatus.issue_ref), {
         ok: true as const,
         issue_ref: sonarTokenStatus.issue_ref,
         worktree_present: sonarTokenStatus.worktree_present,

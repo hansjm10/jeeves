@@ -57,7 +57,13 @@ export async function ensureJeevesExcludedFromGitStatus(worktreeDir: string): Pr
  * @returns true if successful, false if the exclude file could not be updated
  */
 export async function ensurePatternsExcluded(worktreeDir: string, patterns: string[]): Promise<boolean> {
-  const excludePath = await resolveInfoExcludePath(worktreeDir);
+  let excludePath: string | null;
+  try {
+    excludePath = await resolveInfoExcludePath(worktreeDir);
+  } catch {
+    // resolveInfoExcludePath can throw if git rev-parse fails (e.g., not a git repo)
+    return false;
+  }
   if (!excludePath) return false;
 
   try {

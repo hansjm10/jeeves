@@ -280,8 +280,35 @@ export async function hasToken(issueStateDir: string): Promise<boolean> {
 // Internal Helpers
 // ============================================================================
 
+/** Minimum token length (must be non-empty). */
+const TOKEN_MIN_LENGTH = 1;
+
+/** Maximum token length. */
+const TOKEN_MAX_LENGTH = 1024;
+
+/** Characters that are forbidden in token values (\0, \n, \r). */
+const FORBIDDEN_TOKEN_CHARS = ['\0', '\n', '\r'];
+
+/**
+ * Check if a token string is valid according to token constraints.
+ * This enforces the same rules as PUT validation to prevent materialization
+ * of corrupted/hand-edited secrets into .env.jeeves.
+ */
+function isValidTokenValue(token: string): boolean {
+  // Token must be non-empty and within length limits
+  if (token.length < TOKEN_MIN_LENGTH || token.length > TOKEN_MAX_LENGTH) {
+    return false;
+  }
+  // Token must not contain forbidden characters that would break .env.jeeves format
+  if (FORBIDDEN_TOKEN_CHARS.some((c) => token.includes(c))) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Validate that a parsed object matches the expected secret file schema.
+ * Also validates token constraints to prevent invalid secrets from being materialized.
  */
 function isValidSecretFile(value: unknown): value is SonarTokenSecretFile {
   if (value === null || typeof value !== 'object') {
@@ -290,12 +317,17 @@ function isValidSecretFile(value: unknown): value is SonarTokenSecretFile {
 
   const obj = value as Record<string, unknown>;
 
-  return (
-    obj.schemaVersion === SECRET_FILE_SCHEMA_VERSION &&
-    typeof obj.token === 'string' &&
-    obj.token.length > 0 &&
-    typeof obj.updated_at === 'string'
-  );
+  if (
+    obj.schemaVersion !== SECRET_FILE_SCHEMA_VERSION ||
+    typeof obj.token !== 'string' ||
+    typeof obj.updated_at !== 'string'
+  ) {
+    return false;
+  }
+
+  // Validate token value matches constraints (length, forbidden chars)
+  // to prevent corrupted secrets from being materialized into .env.jeeves
+  return isValidTokenValue(obj.token);
 }
 
 /**

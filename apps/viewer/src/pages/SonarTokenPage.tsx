@@ -80,10 +80,10 @@ export function SonarTokenPage() {
 
   // Query and mutations
   const hasIssue = currentIssueRef !== null;
-  const statusQuery = useSonarTokenStatus(baseUrl, hasIssue);
-  const putMutation = usePutSonarTokenMutation(baseUrl);
-  const deleteMutation = useDeleteSonarTokenMutation(baseUrl);
-  const reconcileMutation = useReconcileSonarTokenMutation(baseUrl);
+  const statusQuery = useSonarTokenStatus(baseUrl, hasIssue, currentIssueRef);
+  const putMutation = usePutSonarTokenMutation(baseUrl, currentIssueRef);
+  const deleteMutation = useDeleteSonarTokenMutation(baseUrl, currentIssueRef);
+  const reconcileMutation = useReconcileSonarTokenMutation(baseUrl, currentIssueRef);
 
   const status = statusQuery.data;
   const isLoading = statusQuery.isLoading;
@@ -239,8 +239,11 @@ export function SonarTokenPage() {
   const syncStatusInfo = status ? formatSyncStatus(status.sync_status) : null;
   const hasToken = status?.has_token ?? false;
   const worktreePresent = status?.worktree_present ?? false;
-  const canSync = hasToken && worktreePresent;
-  const needsSync = status?.sync_status && ['failed_exclude', 'failed_env_write', 'failed_env_delete', 'failed_secret_read', 'deferred_worktree_absent'].includes(status.sync_status);
+  // Check if sync is needed (any failed or pending status that isn't in_sync or never_attempted)
+  const needsSync = status?.sync_status && status.sync_status !== 'in_sync' && status.sync_status !== 'never_attempted';
+  // Allow retry sync when worktree is present and sync is needed, regardless of token state.
+  // This handles cases like failed_env_delete where we need to clean up stale .env.jeeves.
+  const canRetrySync = worktreePresent && needsSync;
 
   return (
     <div className="sonar-token-page">
@@ -395,7 +398,7 @@ export function SonarTokenPage() {
                 </>
               )}
 
-              {canSync && needsSync && (
+              {canRetrySync && (
                 <button
                   className="btn"
                   type="button"

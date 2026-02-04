@@ -33,6 +33,19 @@ export type ReadSecretResult =
   | Readonly<{ exists: true; data: SonarTokenSecretFile }>
   | Readonly<{ exists: false }>;
 
+/**
+ * Error thrown when reading the secret file fails due to a non-ENOENT error.
+ * The message is sanitized to avoid leaking sensitive information.
+ */
+export class SonarTokenSecretReadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SonarTokenSecretReadError';
+    // Maintain proper prototype chain for instanceof checks
+    Object.setPrototypeOf(this, SonarTokenSecretReadError.prototype);
+  }
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -91,6 +104,7 @@ function getTempFilePath(secretFilePath: string): string {
  *
  * @param issueStateDir - The issue state directory containing .secrets/
  * @returns The secret file data if it exists, or { exists: false } if not
+ * @throws {SonarTokenSecretReadError} For non-ENOENT errors (e.g., EACCES, I/O errors)
  */
 export async function readSonarTokenSecret(issueStateDir: string): Promise<ReadSecretResult> {
   const secretPath = getSonarTokenSecretPath(issueStateDir);
@@ -107,13 +121,18 @@ export async function readSonarTokenSecret(issueStateDir: string): Promise<ReadS
 
     return { exists: true, data: parsed };
   } catch (error) {
-    // File doesn't exist or can't be read
+    // File doesn't exist - expected case
     if (isNodeError(error) && error.code === 'ENOENT') {
       return { exists: false };
     }
-    // For other errors (permissions, etc.), treat as non-existent
-    // to avoid leaking error details that might include paths
-    return { exists: false };
+    // JSON parse error - treat as corrupted/non-existent
+    if (error instanceof SyntaxError) {
+      return { exists: false };
+    }
+    // For other errors (EACCES, I/O errors, etc.), throw a sanitized error
+    // so callers can return 500 io_error instead of incorrectly reporting has_token=false
+    const code = isNodeError(error) ? error.code : 'UNKNOWN';
+    throw new SonarTokenSecretReadError(`Failed to read secret file: ${code}`);
   }
 }
 
@@ -250,6 +269,7 @@ export async function deleteSonarTokenSecret(issueStateDir: string): Promise<boo
  *
  * @param issueStateDir - The issue state directory containing .secrets/
  * @returns true if the secret file exists and is valid
+ * @throws {SonarTokenSecretReadError} For non-ENOENT errors (e.g., EACCES, I/O errors)
  */
 export async function hasToken(issueStateDir: string): Promise<boolean> {
   const result = await readSonarTokenSecret(issueStateDir);

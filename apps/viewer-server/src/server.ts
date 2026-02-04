@@ -24,7 +24,7 @@ import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
 import { reconcileSonarTokenToWorktree } from './sonarTokenReconcile.js';
-import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret } from './sonarTokenSecret.js';
+import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret, SonarTokenSecretReadError } from './sonarTokenSecret.js';
 import {
   validatePutRequest,
   validateReconcileRequest,
@@ -1530,7 +1530,29 @@ export async function buildServer(config: ViewerServerConfig) {
     const now = new Date().toISOString();
 
     // Read existing status to determine if we have a token
-    const secret = await readSonarTokenSecret(stateDir);
+    // If reading fails (e.g., EACCES), treat as error (not as "token absent")
+    let secret: Awaited<ReturnType<typeof readSonarTokenSecret>>;
+    try {
+      secret = await readSonarTokenSecret(stateDir);
+    } catch (err) {
+      // I/O error reading secret file - record error and abort reconcile
+      // Do NOT treat as "token absent" (would incorrectly delete .env.jeeves)
+      const lastError = err instanceof SonarTokenSecretReadError ? err.message : sanitizeErrorForUi(err);
+      await updateSonarTokenStatusInIssueJson(stateDir, {
+        sync_status: 'failed_secret_read',
+        last_attempt_at: now,
+        last_error: lastError,
+      });
+      // Best-effort: still try to emit status (may throw again, but that's fine)
+      try {
+        const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
+        emitSonarTokenStatus(status);
+      } catch {
+        // Ignore - we already recorded the error
+      }
+      return;
+    }
+
     const hasToken = secret.exists;
 
     // Read current env_var_name from issue.json

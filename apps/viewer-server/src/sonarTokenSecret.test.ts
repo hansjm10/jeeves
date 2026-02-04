@@ -12,6 +12,7 @@ import {
   getSonarTokenSecretPath,
   getSecretsDir,
   SECRET_FILE_SCHEMA_VERSION,
+  SonarTokenSecretReadError,
 } from './sonarTokenSecret.js';
 
 describe('sonarTokenSecret', () => {
@@ -224,6 +225,55 @@ describe('sonarTokenSecret', () => {
 
       expect(result.exists).toBe(false);
     });
+
+    it('throws SonarTokenSecretReadError for non-ENOENT errors (e.g., EACCES)', async () => {
+      // Skip on Windows where chmod doesn't fully control read permissions
+      if (process.platform === 'win32') {
+        return;
+      }
+
+      // Write a valid secret file
+      await writeSonarTokenSecret(tempDir, 'my-token');
+      const secretPath = getSonarTokenSecretPath(tempDir);
+
+      // Remove read permission to cause EACCES
+      await fs.chmod(secretPath, 0o000);
+
+      try {
+        // Should throw SonarTokenSecretReadError, NOT return { exists: false }
+        await expect(readSonarTokenSecret(tempDir)).rejects.toThrow(SonarTokenSecretReadError);
+        await expect(readSonarTokenSecret(tempDir)).rejects.toThrow(/EACCES/);
+      } finally {
+        // Restore permissions for cleanup
+        await fs.chmod(secretPath, 0o600);
+      }
+    });
+
+    it('throws SonarTokenSecretReadError with sanitized message (no token value)', async () => {
+      // Skip on Windows where chmod doesn't fully control read permissions
+      if (process.platform === 'win32') {
+        return;
+      }
+
+      // Write a valid secret file
+      await writeSonarTokenSecret(tempDir, 'super-secret-token-value');
+      const secretPath = getSonarTokenSecretPath(tempDir);
+
+      // Remove read permission to cause EACCES
+      await fs.chmod(secretPath, 0o000);
+
+      try {
+        const error = await readSonarTokenSecret(tempDir).catch((e) => e);
+        expect(error).toBeInstanceOf(SonarTokenSecretReadError);
+        // Error message should NOT contain the token value
+        expect(error.message).not.toContain('super-secret-token-value');
+        // Error message should contain the error code
+        expect(error.message).toContain('EACCES');
+      } finally {
+        // Restore permissions for cleanup
+        await fs.chmod(secretPath, 0o600);
+      }
+    });
   });
 
   describe('deleteSonarTokenSecret', () => {
@@ -366,6 +416,28 @@ describe('sonarTokenSecret', () => {
       const result = await hasToken(tempDir);
 
       expect(result).toBe(false);
+    });
+
+    it('throws SonarTokenSecretReadError for non-ENOENT errors (e.g., EACCES)', async () => {
+      // Skip on Windows where chmod doesn't fully control read permissions
+      if (process.platform === 'win32') {
+        return;
+      }
+
+      // Write a valid secret file
+      await writeSonarTokenSecret(tempDir, 'my-token');
+      const secretPath = getSonarTokenSecretPath(tempDir);
+
+      // Remove read permission to cause EACCES
+      await fs.chmod(secretPath, 0o000);
+
+      try {
+        // hasToken should propagate the error, NOT return false
+        await expect(hasToken(tempDir)).rejects.toThrow(SonarTokenSecretReadError);
+      } finally {
+        // Restore permissions for cleanup
+        await fs.chmod(secretPath, 0o600);
+      }
     });
   });
 

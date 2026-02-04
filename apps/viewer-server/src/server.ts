@@ -1077,6 +1077,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	      await runManager.setIssue(issueRef);
 	      await saveActiveIssue(dataDir, issueRef);
 	      await refreshFileTargets();
+
+	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
+	      const issue = runManager.getIssue();
+	      if (issue.issueRef && issue.stateDir) {
+	        try {
+	          await autoReconcileSonarToken(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
+	      }
+
 	      return reply.send({ ok: true, issue_ref: issueRef });
 	    } catch (err) {
 	      const mapped = errorToHttp(err);
@@ -1120,6 +1131,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	      await runManager.setIssue(res.issue_ref);
 	      await saveActiveIssue(dataDir, res.issue_ref);
 	      await refreshFileTargets();
+
+	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
+	      const issue = runManager.getIssue();
+	      if (issue.issueRef && issue.stateDir) {
+	        try {
+	          await autoReconcileSonarToken(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
+	      }
+
 	      return reply.send({ ok: true, ...res });
 	    } catch (err) {
 	      const msg = err instanceof Error ? err.message : String(err);
@@ -1424,6 +1446,77 @@ export async function buildServer(config: ViewerServerConfig) {
   /** Emit sonar-token-status event. */
   function emitSonarTokenStatus(status: SonarTokenStatus): void {
     hub.broadcast('sonar-token-status', status);
+  }
+
+  /**
+   * Best-effort auto-reconcile of sonar token to worktree.
+   * Called after /api/init/issue and /api/issues/select.
+   * Non-fatal: errors are recorded in status but do not propagate.
+   */
+  async function autoReconcileSonarToken(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+
+    // Read existing status to determine if we have a token
+    const secret = await readSonarTokenSecret(stateDir);
+    const hasToken = secret.exists;
+
+    // If no token configured, just emit current status
+    if (!hasToken) {
+      const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
+      emitSonarTokenStatus(status);
+      return;
+    }
+
+    // Read current env_var_name from issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+    const envVarName =
+      typeof sonarTokenStatus?.env_var_name === 'string' && sonarTokenStatus.env_var_name.trim()
+        ? sonarTokenStatus.env_var_name.trim()
+        : DEFAULT_ENV_VAR_NAME;
+
+    // Reconcile if worktree exists
+    let syncStatus: SonarSyncStatus = 'never_attempted';
+    let lastError: string | null = null;
+
+    if (workDir) {
+      const worktreeExists = (await fs.stat(workDir).catch(() => null))?.isDirectory();
+      if (worktreeExists) {
+        const tokenValue = secret.exists ? secret.data.token : undefined;
+
+        const reconcileResult = await reconcileSonarTokenToWorktree({
+          worktreeDir: workDir,
+          hasToken,
+          token: tokenValue,
+          envVarName,
+        });
+
+        syncStatus = reconcileResult.sync_status;
+        lastError = reconcileResult.last_error;
+      } else {
+        syncStatus = 'deferred_worktree_absent';
+      }
+    } else {
+      syncStatus = 'deferred_worktree_absent';
+    }
+
+    // Update status in issue.json
+    await updateSonarTokenStatusInIssueJson(stateDir, {
+      sync_status: syncStatus,
+      last_attempt_at: now,
+      last_success_at: syncStatus === 'in_sync' ? now : (sonarTokenStatus?.last_success_at as string | null) ?? null,
+      last_error: lastError,
+    });
+
+    // Build and emit final status
+    const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
+    emitSonarTokenStatus(status);
   }
 
   // GET /api/issue/sonar-token

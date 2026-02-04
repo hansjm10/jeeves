@@ -3039,4 +3039,326 @@ describe('sonar-token endpoints', () => {
     ws.close();
     await app.close();
   });
+
+  // ============================================================================
+  // Auto-reconcile on init/select tests (T5)
+  // ============================================================================
+
+  it('/api/issues/select triggers auto-reconcile and emits sonar-token-status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-autoreconcile-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-autoreconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    // Pre-create the token secret file directly (so it exists when we select)
+    await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, '.secrets', 'sonar-token.json'),
+      JSON.stringify({ schemaVersion: 1, token: 'select-test-token', updated_at: new Date().toISOString() }),
+      'utf-8',
+    );
+
+    // Create another issue state to select between
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef, // Start on the second issue
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select to the issue with the token - should trigger auto-reconcile
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(true);
+    expect(eventData.issue_ref).toBe(issueRef);
+    expect(eventData.sync_status).toBe('in_sync');
+
+    // Verify .env.jeeves was created by auto-reconcile
+    const envExists = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists).not.toBeNull();
+
+    ws.close();
+    await app.close();
+  });
+
+  it('/api/init/issue triggers auto-reconcile and emits sonar-token-status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-init-autoreconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    // Set up a local repo for init
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: true,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()), // Use real workflows dir
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Init issue (force=true to recreate if exists)
+    const initRes = await app.inject({
+      method: 'POST',
+      url: '/api/init/issue',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: `${owner}/${repo}`, issue: 42, force: true },
+    });
+    expect(initRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'), 5000);
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    // No token is configured yet, but event should still emit
+    expect(eventData.has_token).toBe(false);
+    expect(eventData.issue_ref).toBe(issueRef);
+
+    // Now save a token and verify it gets synced
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'init-test-token' },
+    });
+    expect(putRes.statusCode).toBe(200);
+
+    // Verify .env.jeeves was created
+    const envExists = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists).not.toBeNull();
+
+    // Verify the sync_status is recorded in issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+    expect(sonarTokenStatus?.sync_status).toBe('in_sync');
+    expect(sonarTokenStatus?.last_attempt_at).toBeTruthy();
+
+    ws.close();
+    await app.close();
+  });
+
+  it('auto-reconcile failures are non-fatal and surfaced in status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-nonfatal-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-nonfatal-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    // Create state dir but NO worktree to simulate deferred state
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, '.secrets', 'sonar-token.json'),
+      JSON.stringify({ schemaVersion: 1, token: 'nonfatal-test-token', updated_at: new Date().toISOString() }),
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    // Create another issue state to start on
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef, // Start on the second issue
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select to issue with token but no worktree - should succeed (non-fatal)
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200); // Select still succeeds even if reconcile can't sync
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(true);
+    // Should show deferred status since worktree doesn't exist
+    expect(eventData.sync_status).toBe('deferred_worktree_absent');
+
+    ws.close();
+    await app.close();
+  });
+
+  it('/api/issues/select emits sonar-token-status even when no token configured', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-notoken-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-notoken-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    // Create another issue state
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef,
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select issue with NO token
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(false);
+    expect(eventData.issue_ref).toBe(issueRef);
+
+    ws.close();
+    await app.close();
+  });
 });

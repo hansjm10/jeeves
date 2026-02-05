@@ -101,6 +101,22 @@ The viewer provides:
 - Prompts are in `prompts/issue.*.md` and can be edited in the viewer.
 - Minimal run artifacts: `issue.json`, `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
 
+## Codex + Pruned Read (MCP)
+
+Codex can reduce token usage by reading files through a pruned MCP tool instead of loading full file contents into context.
+
+One-time setup (configures Codex CLI MCP server):
+```bash
+codex mcp add jeeves_pruned -- node scripts/jeeves-pruned-mcp-server.mjs --root "$(pwd)"
+```
+
+When `JEEVES_PRUNER_URL` is set and `context_focus_question` is provided, `jeeves_pruned/Read` will call the pruner service and return `pruned_code`.
+
+Agent guidance:
+- Prefer using the MCP tool `Read` from server `jeeves_pruned` for file reads, especially for large files.
+- Pass `context_focus_question` as the current task question to focus pruning.
+- Avoid adding MCP tool names to `JEEVES_PRUNER_TARGET_TOOLS` to prevent double-pruning (the tool output is already pruned).
+
 ## Iteration Pattern (Ralph Wiggum)
 
 The viewer implements the "Ralph Wiggum" iteration pattern for fresh context runs:

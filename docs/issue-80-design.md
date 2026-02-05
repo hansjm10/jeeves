@@ -174,9 +174,28 @@ type RepoMetricsFileV1 = {
   processed_run_ids: string[]; // unique
 
   // Required metrics (Issue #80).
+  //
+  // Note: `iterations_per_phase_per_issue` is stored as **one sample per issue**
+  // (per workflow), not one sample per run. When multiple successful runs exist
+  // for the same `issue_ref`+`workflow`, we deterministically select a single
+  // “source run” (see `iterations_per_phase_per_issue_sources`).
   iterations_per_phase_per_issue: Record<
     string, // issue_ref: "owner/repo#N"
-    Record<string, Record<string, number>> // workflow -> (phase -> iteration count)
+    Record<string, Record<string, number>> // workflow -> (phase -> iteration count, missing => 0)
+  >;
+
+  // Source-run metadata for deterministic updates of `iterations_per_phase_per_issue`.
+  // Used to avoid ambiguous overwrite ordering when multiple runs exist for the
+  // same issue/workflow (e.g., due to reruns).
+  iterations_per_phase_per_issue_sources: Record<
+    string, // issue_ref: "owner/repo#N"
+    Record<
+      string, // workflow
+      {
+        run_id: string;
+        started_at: string; // ISO-8601 (from `STATE/.runs/<run_id>/run.json.started_at`)
+      }
+    >
   >;
 
   task_retry_counts: Record<
@@ -241,13 +260,38 @@ Both metrics and the estimate are derived from run archives.
 
 **Metrics extraction (Issue #80 required metrics)**
 - Iterations per phase per issue:
-  - Count `iteration.json.phase` occurrences per run and store under `iterations_per_phase_per_issue[issue_ref][workflow][phase]`.
+  - For each eligible run, count `iteration.json.phase` occurrences within that run.
+  - Store the resulting per-phase counts as the **single** sample for that `issue_ref`+`workflow`:
+    - Compute `issue_ref` from `STATE/.runs/<run_id>/run.json.issue_ref`.
+    - Compute `workflow` from the workflow-matching rules above.
+    - Determine the run’s “ordering key” as `(run.json.started_at, run_id)` where:
+      - `run.json.started_at` is `STATE/.runs/<run_id>/run.json.started_at` (ISO-8601 string)
+      - `run_id` is `STATE/.runs/<run_id>/run.json.run_id`
+    - Update semantics (deterministic overwrite):
+      - If no existing source exists for `issue_ref`+`workflow`, write:
+        - `iterations_per_phase_per_issue[issue_ref][workflow] = phaseCountsRun`
+        - `iterations_per_phase_per_issue_sources[issue_ref][workflow] = { run_id, started_at }`
+      - Else, compare ordering keys lexicographically by `started_at` first (ISO-8601), then by `run_id`:
+        - If the new run’s key is **greater**, overwrite both fields as above.
+        - If the new run’s key is **less or equal**, do nothing.
+    - Missing phase keys imply `0` (i.e., omit zero-count phases in storage; treat absent as `0` when reading).
 - Task retry counts:
-  - Use `iterations/*/tasks.json` snapshots and count each time a task transitions from `failed -> pending`.
-  - Store `task_retry_counts[workflow].total_retries` and `task_retry_counts[workflow].retries_per_task = total_retries / total_tasks_at_decomposition` (where `total_tasks_at_decomposition` is derived per-run; see “Per-run task count” below). If `total_tasks_at_decomposition === 0`, store `retries_per_task: null`.
+  - Use archived `STATE/.runs/<run_id>/iterations/<n>/tasks.json` snapshots, ordered by iteration number `n` (ascending), and compare **consecutive available** snapshots (skip iterations missing `tasks.json`).
+  - Match tasks by `task.id` and compare only `task.status` (ignore other fields).
+  - Define a “retry” as a transition where, for the same `task.id`, the status changes from `failed` in snapshot `i` to `in_progress` in snapshot `i+1` (i.e., the task was selected again for execution).
+    - If a task transitions `failed -> pending` (possible via manual edits), count it as a retry **only if** it later transitions to `in_progress` in a subsequent snapshot; do not double-count both transitions.
+    - A single run may contribute multiple retries (across tasks and/or repeated failures of the same task).
+  - Store `task_retry_counts[workflow].total_retries` as the sum of retries across all processed runs for that workflow.
+  - Store `task_retry_counts[workflow].retries_per_task = total_retries / total_tasks_at_decomposition`, where `total_tasks_at_decomposition` is the sum of `tasks_at_decomposition_run` across all processed runs for this workflow (see “Per-run task count” below). If `total_tasks_at_decomposition === 0`, store `retries_per_task: null`.
 - Design review pass rates:
-  - Count each `design_review` iteration as an `attempt`.
-  - Count a `pass` when the `design_review` result transitions to `pre_implementation_check` (i.e. `status.designApproved === true` and `status.designNeedsChanges !== true` in the archived issue state).
+  - Count each `design_review` iteration as an `attempt` by scanning `STATE/.runs/<run_id>/iterations/<n>/iteration.json` where `iteration.json.phase === "design_review"`.
+  - For each such attempt, read the archived issue snapshot at `STATE/.runs/<run_id>/iterations/<n>/issue.json` (copied by the run archiver).
+    - Count a `pass` when, in that snapshot:
+      - `status.designApproved === true`, AND
+      - `status.designNeedsChanges !== true`, AND
+      - `status.designFeedback == null` (missing or `null`)
+    - If `iterations/<n>/issue.json` is missing/unreadable, do not count a pass for that attempt (but still count the attempt).
+  - A single run can contribute multiple passes if multiple `design_review` iterations satisfy the pass condition (count per attempt).
 
 - Implementation iteration totals (for `iterationsPerTask`):
   - For each run: `implement_task_iterations_run = count(iterations where iteration.json.phase === "implement_task")`.
@@ -275,8 +319,16 @@ Both metrics and the estimate are derived from run archives.
      - `design = clamp(ceil(1 / max(designPassRate, MIN_DESIGN_PASS_RATE)), 1, MAX_EXPECTED_DESIGN_REVIEW_ATTEMPTS)`
    - `implementation`: `ceil(tasks * iterationsPerTask)`.
    - `specCheck`: buffer for retries computed as `ceil(tasks * retries_per_task)` where `retries_per_task = task_retry_counts[workflow].retries_per_task`. If `retries_per_task === null`, `estimate:null`.
-   - `completenessVerification`: mean iterations for `completeness_verification` (from `iterations_per_phase_per_issue` aggregates).
-   - `prAndReview`: mean iterations for `prepare_pr`, `code_review`, and `code_fix` (from `iterations_per_phase_per_issue` aggregates).
+     - Note: This “specCheck” bucket is a **retry buffer** across the whole workflow (derived from task retries in `tasks.json` snapshots), not an average of the `spec_check` phase.
+   - `completenessVerification`: mean iterations for `completeness_verification`, computed from `iterations_per_phase_per_issue`:
+     - Eligible population = all `issue_ref` where `iterations_per_phase_per_issue[issue_ref][workflow]` exists (one sample per issue).
+     - For each `issue_ref`, let `cv(issue_ref) = iterations_per_phase_per_issue[issue_ref][workflow]["completeness_verification"] ?? 0`.
+     - Let `meanCV = sum(cv(issue_ref)) / populationSize`. If `populationSize === 0`, `estimate:null` (insufficient history).
+     - Set `completenessVerification = ceil(meanCV)` (deterministic rounding).
+   - `prAndReview`: mean iterations for `prepare_pr` + `code_review` + `code_fix`, computed from `iterations_per_phase_per_issue`:
+     - For each `issue_ref`, let `pr(issue_ref) = (prepare_pr ?? 0) + (code_review ?? 0) + (code_fix ?? 0)` from that issue’s per-phase map.
+     - Let `meanPR = sum(pr(issue_ref)) / populationSize`. If `populationSize === 0`, `estimate:null`.
+     - Set `prAndReview = ceil(meanPR)` (deterministic rounding).
 5. Set `estimatedIterations = sum(breakdown.*)` and persist to `STATE/issue.json.estimate`.
 
 **Division edge cases (deterministic behavior)**

@@ -23,7 +23,7 @@ Jeeves agents currently have to ingest full file reads and command outputs, whic
 - Expanding beyond the core file/shell tool set into a general-purpose MCP tool suite.
 
 ### Boundaries
-- **In scope**: New `packages/mcp-pruner` package, MCP tool schemas/contracts for `read`/`bash`/`grep` with optional pruning, runner/provider wiring so both Claude and Codex runs can access the MCP server, and basic developer documentation/config via environment variables.
+- **In scope**: New `packages/mcp-pruner` package, MCP tool schemas/contracts for `read`/`bash`/`grep` with optional pruning, runner/provider wiring so both Claude and Codex runs can access the MCP server, and issue-required documentation updates in `packages/mcp-pruner/CLAUDE.md` and `packages/runner/CLAUDE.md`.
 - **Out of scope**: Swe-pruner service lifecycle management, persistent per-issue pruning settings, viewer UI/UX work, and broader security hardening beyond existing “trusted local automation” assumptions.
 - **Transport choice (issue-prescribed)**: Implement the MCP server using `@modelcontextprotocol/sdk` with `StdioServerTransport` (stdio). Providers spawn the MCP server via `{ command, args, env }` config.
 - **Tool schema scope (issue-prescribed)**: Tool schemas are a strict match to the issue examples (minimal args + optional `context_focus_question`, text-only outputs). No additional tool arguments or structured/metadata outputs are in scope.
@@ -395,8 +395,8 @@ T10 → depends on T1–T9
 | T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts`, `packages/runner/src/runner.ts` | When enabled, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
 | T8 | Codex provider wiring | Convert `options.mcpServers` into Codex CLI `--config mcp_servers.*` overrides for stdio servers. | `packages/runner/src/providers/codexSdk.ts` | Codex provider sets `mcp_servers.<name>.command/args/env` (no `url` / `streamable_http`). |
-| T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `README.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
-| T10 | Full validation | Run repo quality commands. | (none) | `pnpm lint && pnpm typecheck && pnpm test` pass. |
+| T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `packages/runner/CLAUDE.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
+| T10 | Full validation | Run repo quality commands and record validation evidence. | `.jeeves/progress.txt`, `packages/mcp-pruner/src/index.ts`, `packages/runner/src/mcpConfig.ts`, `packages/runner/src/providers/claudeAgentSdk.ts`, `packages/runner/src/providers/codexSdk.ts` | `pnpm lint && pnpm typecheck && pnpm test` pass and the command outcomes are recorded in `.jeeves/progress.txt`. |
 
 ### Task Details
 
@@ -512,7 +512,7 @@ T10 → depends on T1–T9
 - Summary: Document how to build/run the MCP pruner server and how to enable it in Jeeves (runner + providers).
 - Files:
   - `packages/mcp-pruner/CLAUDE.md` - usage + env vars + tool schemas.
-  - `README.md` - runner env vars and a minimal enable/verify example.
+  - `packages/runner/CLAUDE.md` - runner env vars and a minimal enable/verify example.
 - Acceptance Criteria:
   1. Docs list runner env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and server env vars (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`).
   2. Docs include a minimal `tools/call` example using `read.file_path` and `context_focus_question`.
@@ -520,12 +520,18 @@ T10 → depends on T1–T9
 - Verification: N/A
 
 **T10: Full validation**
-- Summary: Run repo quality commands after implementation.
-- Files: (none)
+- Summary: Run repo quality commands after implementation and record outcomes in a concrete validation artifact.
+- Files:
+  - `.jeeves/progress.txt` - append a validation checkpoint with command pass/fail outcomes.
+  - `packages/mcp-pruner/src/index.ts` - validate the MCP server entrypoint changes via lint/typecheck/test.
+  - `packages/runner/src/mcpConfig.ts` - validate runner MCP config wiring via lint/typecheck/test.
+  - `packages/runner/src/providers/claudeAgentSdk.ts` - validate Claude provider MCP wiring via lint/typecheck/test.
+  - `packages/runner/src/providers/codexSdk.ts` - validate Codex provider MCP wiring via lint/typecheck/test.
 - Acceptance Criteria:
   1. `pnpm lint` passes.
   2. `pnpm typecheck` passes.
   3. `pnpm test` passes.
+  4. Validation command outcomes are recorded in `.jeeves/progress.txt`.
 - Dependencies: T1–T9
 - Verification: `pnpm lint && pnpm typecheck && pnpm test`
 

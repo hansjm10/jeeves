@@ -175,6 +175,21 @@ export class ClaudeAgentProvider implements AgentProvider {
       ],
     };
 
+    // Convert runner McpServerConfig entries to SDK McpStdioServerConfig shape.
+    const sdkMcpServers = options.mcpServers
+      ? Object.fromEntries(
+          Object.entries(options.mcpServers).map(([name, cfg]) => [
+            name,
+            {
+              type: 'stdio' as const,
+              command: cfg.command,
+              ...(cfg.args ? { args: [...cfg.args] } : {}),
+              ...(cfg.env ? { env: { ...cfg.env } } : {}),
+            },
+          ]),
+        )
+      : undefined;
+
     const sdkOptions: Options = {
       cwd: options.cwd,
       includePartialMessages: false,
@@ -184,6 +199,7 @@ export class ClaudeAgentProvider implements AgentProvider {
       allowDangerouslySkipPermissions: true,
       hooks: hooks as Options['hooks'],
       ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(sdkMcpServers ? { mcpServers: sdkMcpServers } : {}),
     };
     const modelInfo = resolvedModel ? ` (model=${resolvedModel})` : '';
     yield {

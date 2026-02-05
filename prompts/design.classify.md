@@ -10,6 +10,7 @@ You do not design solutions yet. You establish scope and constraints that will g
 - Next phases: design_workflow, design_api, design_data, design_plan, design_review
 - The `.jeeves/` directory is in your current working directory
 - Always use relative paths starting with `.jeeves/`
+- Prefer reading files via MCP tool `jeeves_pruned/Read` (use `context_focus_question` to prune when helpful); avoid `cat`/`sed` for simple reads unless MCP is unavailable
 </context>
 
 <inputs>
@@ -24,9 +25,9 @@ You do not design solutions yet. You establish scope and constraints that will g
 
 ### Step 1: Gather Context
 
-1. Read `.jeeves/issue.json` to get the issue number
+1. Use `jeeves_pruned/Read` to read `.jeeves/issue.json` and get the issue number
 2. Run `gh issue view <issueNumber>` to get full requirements
-3. Read `.jeeves/progress.txt` for any prior context
+3. Use `jeeves_pruned/Read` to read `.jeeves/progress.txt` for any prior context
 4. Explore the codebase to understand:
    - Where this feature would live
    - What existing patterns apply

@@ -175,7 +175,7 @@ Supported methods:
 Tool schemas are a **strict match** to the GitHub issue examples:
 - Only `read.file_path`, `bash.command`, `grep.pattern` + optional `grep.path`
 - `context_focus_question` is optional for all tools
-- No additional tool arguments (timeouts, output limits, path lists, flags, etc.)
+- No additional tool arguments are allowed beyond `read.file_path`, `bash.command`, `grep.pattern`, optional `grep.path`, and optional `context_focus_question`.
 - No structured/metadata outputs are part of the public contract
 
 All tools return `result.content` with a single `{ type: "text", text: string }` item. `result.isError` is **not set** (omitted), including on failures; errors are represented as specific strings in `content[0].text` as described below. Parameter validation failures are JSON-RPC `-32602` (invalid params).

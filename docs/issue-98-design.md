@@ -147,7 +147,7 @@ Execution timeouts:
 |------------|----------|-----------|------------------|
 | `@jeeves/mcp-pruner` (server) | Run config via env (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`). | Writes logs to stderr only; stdout is reserved for MCP protocol. | Provider spawn/connect failure -> `run:mcp_pruner_disabled`; unexpected exit during run -> `run:mcp_pruner_degraded`. |
 | `bash` tool command | `command` (runs with `cwd=MCP_PRUNER_CWD`). | May write to filesystem as a normal shell command would (trusted local automation). | Exit code is surfaced in the **tool output text** (see Section 3). Non-zero exit is **not** a tool error (it still transitions to `req:raw_output_ready` and follows the normal prune-check path). Spawn error transitions to `req:tool_error` and returns `Error executing command: <message>` as tool output text. |
-| `grep` tool command (`grep`) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Exit code `0` (matches) -> stdout; `1` (no matches) -> success with `"(no matches found)"`; exit code `2` -> `req:tool_error` and returns `Error: <stderr>` as tool output text. |
+| `grep` tool command (`grep`) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Exit code `0` (matches) -> stdout; `1` (no matches) -> success with `"(no matches found)"`; exit code `2` -> `req:tool_error` and always returns an error string (`Error: <stderr>` when stderr is non-empty, otherwise `Error: grep exited with code 2`). |
 
 ## 3. Interfaces
 
@@ -217,7 +217,9 @@ Tool: `grep`
 - Exit-code handling:
   - `0` (matches): return `stdout` verbatim
   - `1` (no matches): return `(no matches found)` (exact string)
-  - `2` (error): if `stderr` is non-empty return `Error: <stderr>` (exact prefix); otherwise fall back to `stdout || "(no matches found)"`
+  - `2` (error): always return an error string and treat as `req:tool_error`:
+    - if `stderr` is non-empty, return `Error: <stderr>` (exact prefix)
+    - if `stderr` is empty, return `Error: grep exited with code 2` (exact string)
 - Spawn error: `Error executing grep: <error.message>` (exact prefix)
 - Pruning eligibility: only when `context_focus_question` is provided and truthy **and** `stdout` is non-empty. `(no matches found)` and error strings are never pruned (including when `stdout` is `""`).
 
@@ -392,7 +394,7 @@ T10 → depends on T1–T9
 |----|-------|---------|-------|---------------------|
 | T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/package.json`, `packages/mcp-pruner/tsconfig.json`, `packages/mcp-pruner/src/index.ts`, `tsconfig.json` | `packages/mcp-pruner/package.json` + `tsconfig.json` match issue Steps 1.2/1.3 (incl. `@modelcontextprotocol/sdk@^1.12.0`, `zod@^3.24.0`), `pnpm typecheck` includes the new package, and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
 | T2 | Implement pruner client | Implement `getPrunerConfig()` + `pruneContent()` with best-effort fallback to original content. | `packages/mcp-pruner/src/pruner.ts` | On timeout/non-2xx/invalid response, pruning falls back safely to the original content. |
-| T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`). |
+| T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`), including canonical `grep` exit-code-2 handling (`Error: <stderr>` when stderr non-empty, else `Error: grep exited with code 2`). |
 | T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server identifies as `name="mcp-pruner"`, `version="1.0.0"`, returns `-32602` with `message="Invalid params"`, and runs over stdio with stderr-only diagnostics. |
 | T5 | Extend runner options | Add `McpServerConfig` and `mcpServers` to `ProviderRunOptions` so providers can spawn MCP servers. | `packages/runner/src/provider.ts` | Providers can receive `mcpServers?: Record<string, { command, args?, env? }>` without type errors. |
 | T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts`, `packages/runner/src/runner.ts` | When enabled, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
@@ -449,7 +451,7 @@ T10 → depends on T1–T9
   1. Tool input schemas align with the issue examples: `read.file_path`, `bash.command`, `grep.pattern`, and optional `grep.path` (with `context_focus_question` optional for all).
   2. `read` path semantics: absolute `file_path` is used as-is; relative `file_path` resolves against `MCP_PRUNER_CWD` (no containment/sandbox rule). Read failures return `Error reading file: <message>`.
   3. `bash` output semantics match the issue example exactly: append `\\n[stderr]\\n<stderr>` when stderr non-empty; append `\\n[exit code: <code>]` when `code !== 0`; empty output becomes `(no output)`; spawn error is `Error executing command: <message>`.
-  4. `grep` uses `grep -rn --color=never <pattern> <path>` with `<path> = arguments.path ?? "."`; exit code `1` returns `(no matches found)`; exit code `2` with non-empty stderr returns `Error: <stderr>`; spawn error is `Error executing grep: <message>`.
+  4. `grep` uses `grep -rn --color=never <pattern> <path>` with `<path> = arguments.path ?? "."`; exit code `1` returns `(no matches found)`; exit code `2` always returns an error string (`Error: <stderr>` when stderr is non-empty, else `Error: grep exited with code 2`); spawn error is `Error executing grep: <message>`.
   5. Tool results never set `result.isError`; all failures are surfaced as strings in `content[0].text`.
   6. When `context_focus_question` is provided and truthy (and the tool’s pruning eligibility conditions are met), tools attempt pruning via `pruneContent(raw, context_focus_question, config)`; on any pruner failure, they fall back to unpruned output (query passed verbatim).
 - Dependencies: T2
@@ -549,7 +551,18 @@ T10 → depends on T1–T9
 - [ ] Types check: `pnpm typecheck`
 - [ ] Lint passes: `pnpm lint`
 - [ ] All tests pass: `pnpm test`
-- [ ] New tests added for (as applicable): `packages/mcp-pruner/src/tools/*.test.ts`, `packages/mcp-pruner/src/pruner.test.ts`, `packages/runner/src/mcpConfig.test.ts`, `packages/runner/src/providers/*.test.ts`
+- [ ] New test files added:
+  - `packages/mcp-pruner/src/tools/read.test.ts`
+  - `packages/mcp-pruner/src/tools/bash.test.ts`
+  - `packages/mcp-pruner/src/tools/grep.test.ts`
+  - `packages/mcp-pruner/src/pruner.test.ts`
+  - `packages/runner/src/mcpConfig.test.ts`
+  - `packages/runner/src/providers/claudeAgentSdk.test.ts`
+  - `packages/runner/src/providers/codexSdk.test.ts`
+- [ ] Targeted verification commands pass:
+  - `pnpm test -- packages/mcp-pruner/src/tools/read.test.ts packages/mcp-pruner/src/tools/bash.test.ts packages/mcp-pruner/src/tools/grep.test.ts`
+  - `pnpm test -- packages/mcp-pruner/src/pruner.test.ts packages/runner/src/mcpConfig.test.ts`
+  - `pnpm test -- packages/runner/src/providers/claudeAgentSdk.test.ts packages/runner/src/providers/codexSdk.test.ts`
 
 ### Manual Verification (if applicable)
 - [ ] Start the viewer-server and run a workflow with MCP enabled:

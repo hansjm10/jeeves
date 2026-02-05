@@ -54,6 +54,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 - **Reversibility**: Transitions are **not reversible** within a run/request. “Undo” happens only by starting a new run (runner lifecycle) or issuing a new request (tool pipeline).
 - **Global vs per-state errors**: Per-state errors are listed in **Error Handling**; for states not called out explicitly, the only error path is the global per-request handler (`req:* -> req:internal_error`).
 - **Crash recovery**: Fully specified under **Crash Recovery** (detection signals, recovery state selection, and cleanup steps).
+- **MCP server process ownership & shutdown**: The **provider** exclusively owns the `@jeeves/mcp-pruner` child process lifecycle (spawn, monitor, terminate). The runner never tracks PIDs or sends signals directly. On provider phase end (success/failure/cancel), the provider MUST terminate the MCP server process best-effort (`SIGTERM`, wait `2000ms`, then `SIGKILL`) and close stdio streams before returning control to the runner.
 - **Subprocess contract**: Inputs, writable surface, and failure handling for each subprocess are specified in **Subprocesses**. Subprocess results are collected as `(stdout, stderr, exit_code, duration_ms)` and then optionally transformed by pruning; the final response returns either raw or pruned tool output.
 
 ### States
@@ -87,9 +88,9 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `run:mcp_pruner_starting` | Provider successfully initializes MCP servers | `run:mcp_pruner_running` | Write a diagnostic log message (pruner available). |
 | `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Write a diagnostic log message (spawn/connect failed); continue run without MCP. |
 | `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Write a diagnostic log message (server failure); continue run without MCP. |
-| `run:mcp_pruner_running` | Provider phase ends (success/fail/cancel) | `run:shutdown` | No explicit server shutdown required by runner (provider owns child process lifecycle). |
+| `run:mcp_pruner_running` | Provider phase ends (success/fail/cancel) | `run:shutdown` | Provider terminates the MCP server best-effort (`SIGTERM` → wait `2000ms` → `SIGKILL`) and closes stdio streams; runner only logs. |
 | `run:mcp_pruner_disabled` | Provider phase ends | `run:shutdown` | No-op aside from a diagnostic log message (pruner not running). |
-| `run:mcp_pruner_degraded` | Provider phase ends | `run:shutdown` | Ensure any remaining child pid is terminated; write a diagnostic log message. |
+| `run:mcp_pruner_degraded` | Provider phase ends | `run:shutdown` | If the provider still has a live MCP server handle, it terminates it best-effort (`SIGTERM` → wait `2000ms` → `SIGKILL`) and closes stdio streams; runner only logs. |
 | `req:received` | Request accepted | `req:validating` | Assign `request_id`; write a diagnostic log message. |
 | `req:validating` | Arguments invalid for tool schema | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
 | `req:validating` | Arguments valid | `req:executing_tool` | Normalize args (defaults); write a diagnostic log message. |
@@ -98,8 +99,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:raw_output_ready` | Raw output captured | `req:prune_check` | Determine pruning eligibility. |
 | `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Skip pruning and return raw output. |
 | `req:prune_check` | Pruning disabled or pruner URL disabled (`PRUNER_URL` empty) | `req:respond_raw` | Skip pruning and return raw output. |
-| `req:prune_check` | Raw output is empty | `req:respond_raw` | Skip pruning and return raw output. |
-| `req:prune_check` | `context_focus_question` present and pruning eligible | `req:calling_pruner` | Call the pruner endpoint (best-effort); write a diagnostic log message. |
+| `req:prune_check` | `context_focus_question` provided and tool-specific pruning rules allow | `req:calling_pruner` | Call the pruner endpoint (best-effort); write a diagnostic log message. |
 | `req:calling_pruner` | HTTP 200 + valid pruned payload | `req:respond_pruned` | Return pruned output. |
 | `req:calling_pruner` | Timeout, network error, non-2xx, or invalid payload | `req:pruner_error_fallback` | Write a diagnostic log message; fall back to raw output. |
 | `req:pruner_error_fallback` | Fallback chosen | `req:respond_raw` | Return raw output. |
@@ -173,7 +173,7 @@ Tool schemas are a **strict match** to the GitHub issue examples:
 All tools return `result.content` with a single `{ type: "text", text: string }` item. `result.isError` is **not set** (omitted), including on failures; errors are represented as specific strings in `content[0].text` as described below. Parameter validation failures are JSON-RPC `-32602` (invalid params).
 
 **Common field**
-- `context_focus_question` (optional, `string`): If provided and truthy, triggers a best-effort prune request using the raw tool output as `code` and the question value as `query` (passed verbatim).
+- `context_focus_question` (optional, `string`): If provided and truthy, triggers a best-effort prune request using the raw tool output as `code` and the question value as `query` (passed verbatim), subject to the per-tool pruning rules below (e.g., `read` does not prune its error string; empty file content is still eligible).
 
 Tool: `read`
 - Arguments:
@@ -182,7 +182,7 @@ Tool: `read`
 - Output text:
   - Success: raw file contents (UTF-8), or pruned contents when pruning succeeds.
   - Failure (file read error): `Error reading file: <fs error message>` (exact prefix).
-  - Pruning eligibility: only when `context_focus_question` is provided and truthy; pruning is not attempted for the file-read error string (issue example returns early).
+  - Pruning eligibility: when `context_focus_question` is provided and truthy, pruning is attempted even if the file contents are the empty string (`""`). Pruning is **not** attempted for the file-read error string (issue example returns early).
 
 Tool: `bash`
 - Arguments:
@@ -194,7 +194,7 @@ Tool: `bash`
   - If `exit_code !== 0` (including `null`), append `\\n[exit code: <exit_code>]`.
   - If the final assembled output is empty, return `(no output)` (exact string).
   - Spawn error: `Error executing command: <error.message>` (exact prefix).
-  - Pruning eligibility: only when `context_focus_question` is provided and truthy **and** the assembled output is non-empty (prunes before returning).
+  - Pruning eligibility: when `context_focus_question` is provided and truthy, pruning is attempted on the **final** tool output text (after applying the `(no output)` placeholder when applicable). Pruning is not attempted for the spawn-error string.
 
 Tool: `grep`
 - Arguments:
@@ -210,7 +210,7 @@ Tool: `grep`
   - `1` (no matches): return `(no matches found)` (exact string)
   - `2` (error): if `stderr` is non-empty return `Error: <stderr>` (exact prefix); otherwise fall back to `stdout || "(no matches found)"`
 - Spawn error: `Error executing grep: <error.message>` (exact prefix)
-- Pruning eligibility: only when `context_focus_question` is provided and truthy **and** `stdout` is non-empty (the placeholder `(no matches found)` is never pruned).
+- Pruning eligibility: only when `context_focus_question` is provided and truthy **and** `stdout` is non-empty. `(no matches found)` and error strings are never pruned (including when `stdout` is `""`).
 
 ### Outbound HTTP (swe-pruner)
 The MCP server makes a best-effort HTTP call when a tool’s pruning eligibility conditions are met and pruning is enabled (`PRUNER_URL` is set and non-empty).
@@ -381,7 +381,7 @@ T10 → depends on T1–T9
 ### Task Breakdown
 | ID | Title | Summary | Files | Acceptance Criteria |
 |----|-------|---------|-------|---------------------|
-| T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/src/index.ts` | `pnpm typecheck` includes the new package and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
+| T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/src/index.ts` | `packages/mcp-pruner/package.json` + `tsconfig.json` match issue Steps 1.2/1.3 (incl. `@modelcontextprotocol/sdk@^1.12.0`, `zod@^3.24.0`), `pnpm typecheck` includes the new package, and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
 | T2 | Implement pruner client | Implement `getPrunerConfig()` + `pruneContent()` with best-effort fallback to original content. | `packages/mcp-pruner/src/pruner.ts` | On timeout/non-2xx/invalid response, pruning falls back safely to the original content. |
 | T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`). |
 | T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server identifies as `name="mcp-pruner"`, `version="1.0.0"`, returns `-32602` with `message="Invalid params"`, and runs over stdio with stderr-only diagnostics. |
@@ -402,9 +402,22 @@ T10 → depends on T1–T9
   - `packages/mcp-pruner/src/index.ts` - MCP server entrypoint (stdio transport).
   - `packages/mcp-pruner/CLAUDE.md` - package documentation.
   - `tsconfig.json` - add project reference to `./packages/mcp-pruner` (if required by repo conventions).
+- Required scaffold specifics (issue Steps 1.2/1.3):
+  - `packages/mcp-pruner/package.json` MUST include at minimum:
+    - `"name": "@jeeves/mcp-pruner"`, `"version": "0.0.0"`, `"private": true`, `"type": "module"`
+    - `"main": "./dist/index.js"`, `"types": "./dist/index.d.ts"`
+    - `"bin": { "mcp-pruner": "./dist/index.js" }`
+    - `"scripts": { "build": "tsc", "dev": "tsc --watch" }`
+    - `"dependencies": { "@modelcontextprotocol/sdk": "^1.12.0", "zod": "^3.24.0" }`
+    - `"devDependencies": { "@types/node": "^22.0.0" }`
+  - `packages/mcp-pruner/tsconfig.json` MUST include at minimum:
+    - `"extends": "../../tsconfig.base.json"`
+    - `"compilerOptions": { "outDir": "./dist", "rootDir": "./src", "declaration": true, "declarationMap": true }`
+    - `"include": ["src/**/*"]`, `"exclude": ["node_modules", "dist"]`
 - Acceptance Criteria:
   1. `pnpm build` emits `packages/mcp-pruner/dist/index.js` and `mcp-pruner` runs as a stdio MCP server.
   2. Root `tsconfig.json` includes the new package so `pnpm typecheck` builds it.
+  3. `packages/mcp-pruner/package.json` and `packages/mcp-pruner/tsconfig.json` include the issue-specified fields/versions above to prevent drift.
 - Dependencies: None
 - Verification: `pnpm typecheck && pnpm build`
 

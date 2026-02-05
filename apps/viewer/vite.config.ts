@@ -5,6 +5,9 @@ const proxyTarget = (process.env.VITE_VIEWER_SERVER_PROXY_TARGET ?? 'http://127.
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ['@dagrejs/dagre'],
+  },
   server: {
     host: true,
     port: 8080,

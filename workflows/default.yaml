@@ -102,7 +102,7 @@ phases:
     transitions:
       - to: design_edit
         when: status.designNeedsChanges == true
-      - to: pre_implementation_check
+      - to: task_decomposition
         when: status.designApproved == true
     model: gpt-5.3-codex
     reasoning_effort: xhigh
@@ -113,6 +113,16 @@ phases:
     description: Design state transitions and error handling
     transitions:
       - to: design_api
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  task_decomposition:
+    type: execute
+    provider: codex
+    prompt: task.decompose.md
+    description: Decompose design into implementable tasks
+    transitions:
+      - to: pre_implementation_check
         auto: true
     model: gpt-5.3-codex
     reasoning_effort: xhigh

@@ -306,7 +306,7 @@ Events are emitted as structured log lines (default JSON) on the MCP server stdo
 - **Versioning**: MCP server reports `jeeves.schemaVersion=1` in `initialize`. Consumers MUST ignore unknown fields and SHOULD gate behavior on `jeeves.schemaVersion`.
 
 ## 4. Data
-[To be completed in design_data phase]
+N/A - This feature does not add or modify data schemas.
 
 ## 5. Tasks
 [To be completed in design_plan phase]

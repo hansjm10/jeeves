@@ -1,5 +1,12 @@
+export type McpServerConfig = Readonly<{
+  command: string;
+  args?: readonly string[];
+  env?: Readonly<Record<string, string>>;
+}>;
+
 export type ProviderRunOptions = Readonly<{
   cwd: string;
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }>;
 
 export type ProviderEvent =

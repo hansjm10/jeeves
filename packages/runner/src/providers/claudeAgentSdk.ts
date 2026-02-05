@@ -184,6 +184,9 @@ export class ClaudeAgentProvider implements AgentProvider {
       allowDangerouslySkipPermissions: true,
       hooks: hooks as Options['hooks'],
       ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(options.mcpServers
+        ? { mcpServers: options.mcpServers as Record<string, { command: string; args?: string[]; env?: Record<string, string> }> }
+        : {}),
     };
     const modelInfo = resolvedModel ? ` (model=${resolvedModel})` : '';
     yield {

@@ -211,7 +211,142 @@ The `estimate` payload is **derived** data:
 | Crash recovery | Writes to `STATE/issue.json` use atomic JSON writes; on restart, if `estimate` is missing or invalid it is treated as `null` and can be recomputed after the next `task_decomposition` |
 
 ## 5. Tasks
-[To be completed in design_plan phase]
+
+### Planning Gates
+
+**Decomposition Gates**
+1. **Smallest independently testable unit**: a pure “estimate-from-archives” function that, given a repo+workflow and a set of historical run archives, returns either a valid `IterationEstimate` or `null` (deterministic median math; explicit insufficient-history behavior).
+2. **Dependencies between tasks**: yes — persistence wiring depends on the estimate computation utilities; API/stream exposure depends on the shared contract and runtime validation; viewer UI depends on viewer stream/types.
+3. **Parallelizable tasks**: yes — after core computation utilities exist, server persistence wiring (T2) and server API/stream exposure (T3) can proceed in parallel; viewer stream/types (T4) and UI work (T5) can proceed once T3 is in place.
+
+**Task Completeness Gates (applies to all tasks)**
+4. **Files**: each task below enumerates exact files to create/modify.
+5. **Acceptance criteria**: each task below lists concrete, verifiable outcomes.
+6. **Verification**: each task below includes a specific `pnpm test -- <file>` command (plus global `pnpm typecheck/lint/test` in §6).
+
+**Ordering Gates**
+7. **Must be done first**: define the `IterationEstimate` contract + runtime validation + estimate computation utilities (T1).
+8. **Must be done last**: viewer UI wiring and manual UX verification in `pnpm dev` (T5 + §6 manual checks).
+9. **Circular dependencies**: none (tasks form a DAG).
+
+**Infrastructure Gates**
+10. **Build/config changes needed**: none expected (additive TS files + tests only).
+11. **New dependencies**: none expected.
+12. **Env vars/secrets**: none new; uses existing `$JEEVES_DATA_DIR` behavior to locate run archives.
+
+### Goal → Task Mapping (Traceability)
+- Derive historical iteration counts per workflow phase → **T1**, **T2**
+- Compute and persist an estimate after `task_decomposition` completes → **T2**
+- Expose the estimate + phase breakdown to the viewer → **T3**, **T4**
+- Display estimated vs actual iterations in the viewer UI → **T5**
+
+### Task Dependency Graph
+```
+T1 (no deps)
+T2 → depends on T1
+T3 → depends on T1
+T4 → depends on T3
+T5 → depends on T4
+```
+
+### Task Breakdown
+| ID | Title | Summary | Files | Acceptance Criteria |
+|----|-------|---------|-------|---------------------|
+| T1 | Estimate computation utilities | Implement `IterationEstimate` contract, runtime validation, and “compute from run archives” logic (median per-phase). | `apps/viewer-server/src/iterationEstimate.ts` | Unit tests verify eligible-run filtering, median math, and `null` behavior on insufficient history. |
+| T2 | Persist estimate post-decomposition | Compute and atomically write `estimate` into `STATE/issue.json` when transitioning off `task_decomposition`; reset to `null` on workflow change/reset. | `apps/viewer-server/src/runManager.ts` | After a successful `task_decomposition` iteration, `STATE/issue.json.estimate` is present (or explicitly `null`) and never partial/invalid. |
+| T3 | Expose estimate over API + stream | Add `GET /api/issue/estimate`, extend `GET /api/state` + `state` event with `estimate`, and emit `issue-estimate` events on connect/change. | `apps/viewer-server/src/server.ts` | `GET /api/issue/estimate` returns validated `{ estimate }`; WS/SSE send `issue-estimate` after initial `state` and on estimate changes. |
+| T4 | Viewer stream support | Teach viewer stream layer to consume `issue-estimate` and merge it into client state. | `apps/viewer/src/stream/*`, `apps/viewer/src/api/types.ts` | Reducer/provider tests prove estimate updates without requiring a full `state` refresh. |
+| T5 | Watch UI display | Render estimated remaining/total iterations + phase breakdown on Watch page next to actual progress. | `apps/viewer/src/pages/WatchPage.tsx` | UI tests cover `estimate:null`, valid estimate rendering, and phase breakdown formatting. |
+
+### Task Details
+
+**T1: Estimate computation utilities**
+- Summary: Add a runtime-validated `IterationEstimate` contract and a deterministic computation that derives an estimate from historical run archives (`STATE/.runs/*/iterations/*/iteration.json` + `STATE/.runs/*/run.json`).
+- Files:
+  - `apps/viewer-server/src/iterationEstimate.ts` - define types + validation helpers + `computeIterationEstimateFromArchives(...)`
+  - `apps/viewer-server/src/iterationEstimate.test.ts` - unit tests for eligibility filtering, sample extraction, median, and insufficient-history behavior
+- Acceptance Criteria:
+  1. Eligible historical runs are filtered by `run.json` (`exit_code === 0` and `completed_via_state || completed_via_promise`) and by workflow name match.
+  2. Per remaining phase, median is computed over per-run counts **only when the phase appears in that run**; if any remaining phase has zero samples, the function returns `null`.
+  3. Output includes `basis.source='run_archives'`, `basis.total_sample_size` (eligible run count), and `method:'median'` on each breakdown entry.
+- Dependencies: None
+- Verification: `pnpm test -- apps/viewer-server/src/iterationEstimate.test.ts`
+
+**T2: Persist estimate post-decomposition**
+- Summary: Wire estimate computation into viewer-server orchestration: after a successful `task_decomposition` iteration, write `estimate` into `STATE/issue.json` (or `null` when unavailable) using existing atomic JSON write behavior.
+- Files:
+  - `apps/viewer-server/src/runManager.ts` - detect `currentPhase === 'task_decomposition'` success and phase transition; compute+persist estimate; clear estimate on workflow switch/reset
+  - `apps/viewer-server/src/runManager.test.ts` - integration test using a temporary `$JEEVES_DATA_DIR` fixture with synthetic `.runs` history
+- Acceptance Criteria:
+  1. When transitioning off `task_decomposition`, `STATE/issue.json.estimate` becomes either a fully valid `IterationEstimate` or `null` (never partially written).
+  2. `estimate.computed_at_iteration` equals the iteration that executed `task_decomposition`; `estimated_total_iterations` equals `computed_at_iteration + estimated_remaining_iterations`.
+  3. If the issue workflow is switched (no override) or the issue is reset to a pre-decomposition phase, `estimate` is set back to `null`.
+- Dependencies: T1
+- Verification: `pnpm test -- apps/viewer-server/src/runManager.test.ts`
+
+**T3: Expose estimate over API + stream**
+- Summary: Make estimates visible to clients via HTTP and streaming, without breaking existing consumers.
+- Files:
+  - `apps/viewer-server/src/types.ts` - add `IterationEstimate` type and extend `IssueStateSnapshot` with `estimate?: IterationEstimate | null`
+  - `apps/viewer-server/src/server.ts` - implement `GET /api/issue/estimate`; include validated `estimate` in `GET /api/state`; emit `issue-estimate` on connect and on changes (including resets)
+  - `apps/viewer-server/src/runManager.ts` - ensure `state` events broadcast during runs include `estimate` (and match the server snapshot shape)
+  - `apps/viewer-server/src/server.test.ts` - endpoint + streaming contract tests (HTTP + WS + SSE as applicable)
+- Acceptance Criteria:
+  1. `GET /api/issue/estimate` returns `400` when no issue is selected; returns `200` with `{ ok:true, issue_ref, estimate }` when selected (and `estimate` is validated or `null`).
+  2. `GET /api/state` and streamed `state` snapshots include `estimate` as `null` or a valid estimate object.
+  3. On new WS/SSE connections, an `issue-estimate` event is sent once after the initial `state` snapshot; subsequent `issue-estimate` events emit only when the estimate value changes.
+- Dependencies: T1
+- Verification: `pnpm test -- apps/viewer-server/src/server.test.ts`
+
+**T4: Viewer stream support**
+- Summary: Extend the viewer client’s stream contract to accept `issue-estimate` events and update local state immediately.
+- Files:
+  - `apps/viewer/src/api/types.ts` - add `IterationEstimate` type and `IssueEstimateEvent` payload contract
+  - `apps/viewer/src/stream/streamTypes.ts` - add an `issue-estimate` action type
+  - `apps/viewer/src/stream/ViewerStreamProvider.tsx` - dispatch the new action on `event === 'issue-estimate'`
+  - `apps/viewer/src/stream/streamReducer.ts` - merge `estimate` into `state` without clearing `runOverride`
+  - `apps/viewer/src/stream/streamReducer.test.ts` - reducer unit tests for estimate updates
+- Acceptance Criteria:
+  1. Receiving `issue-estimate` updates `stream.state.estimate` (and does not require a full `state` refresh).
+  2. Viewer continues to treat unknown events as SDK events (no breaking behavior).
+- Dependencies: T3
+- Verification: `pnpm test -- apps/viewer/src/stream/streamReducer.test.ts`
+
+**T5: Watch UI display**
+- Summary: Display “estimated remaining/total iterations” and a per-phase breakdown on the Watch page, alongside current iteration progress.
+- Files:
+  - `apps/viewer/src/pages/WatchPage.tsx` - render estimate block in the Watch/progress area; handle `null` (unavailable/calculating) states
+  - `apps/viewer/src/pages/WatchPage.css` - styles using existing tokens (no hex colors)
+  - `apps/viewer/src/pages/WatchPage.test.ts` - UI tests for estimate rendering and formatting
+- Acceptance Criteria:
+  1. When `estimate` is `null`, the Watch page shows a non-blocking “Estimate unavailable” (or “calculating…”) state without breaking layout.
+  2. When `estimate` is present, the Watch page shows `estimated_total_iterations`, `estimated_remaining_iterations`, and lists `phase_breakdown_remaining` with `iterations` and `sample_size`.
+  3. UI displays actual progress (current iteration) alongside estimate (e.g., “Actual: i/max, Estimated total: N”).
+- Dependencies: T4
+- Verification: `pnpm test -- apps/viewer/src/pages/WatchPage.test.ts`
 
 ## 6. Validation
-[To be completed in design_plan phase]
+
+### Pre-Implementation Checks
+- [ ] All dependencies installed: `pnpm install`
+- [ ] Types check: `pnpm typecheck`
+- [ ] Existing tests pass: `pnpm test`
+
+### Post-Implementation Checks
+- [ ] Types check: `pnpm typecheck`
+- [ ] Lint passes: `pnpm lint`
+- [ ] All tests pass: `pnpm test`
+- [ ] New tests added for:
+  - `apps/viewer-server/src/iterationEstimate.test.ts`
+  - `apps/viewer-server/src/server.test.ts` (estimate API + stream)
+  - `apps/viewer-server/src/runManager.test.ts` (persistence wiring)
+  - `apps/viewer/src/stream/streamReducer.test.ts` (client merge)
+  - `apps/viewer/src/pages/WatchPage.test.ts` (UI rendering)
+
+### Manual Verification (Viewer)
+- [ ] Start the stack: `pnpm dev`
+- [ ] Select an issue that has historical `.runs` archives under `$JEEVES_DATA_DIR/issues/<owner>/<repo>/*/.runs/*`
+- [ ] Start a run and observe:
+  - After `task_decomposition` completes, the Watch page shows an estimate (or “unavailable” if insufficient history)
+  - Refreshing the page preserves the estimate (read from `STATE/issue.json`)
+  - Changing workflow or resetting the issue clears the estimate (back to `null`) and emits a new `issue-estimate` event

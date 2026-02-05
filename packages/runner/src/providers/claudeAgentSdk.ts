@@ -2,7 +2,9 @@ import type { AgentProvider, ProviderEvent, ProviderRunOptions } from '../provid
 
 // NOTE: Keep all SDK imports in this file so the rest of the runner is provider-agnostic.
 import {
+  createSdkMcpServer,
   query,
+  tool,
   type HookCallbackMatcher,
   type HookInput,
   type Options,
@@ -11,9 +13,36 @@ import {
   type SDKResultMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import { z } from 'zod';
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function envFlag(name: string): boolean {
+  const raw = process.env[name];
+  if (!raw) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function envFloat(name: string): number | null {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+function envInt(name: string): number | null {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -39,6 +68,25 @@ function safeCompactString(value: unknown): string {
 function truncate(input: string, max = 2000): string {
   if (input.length <= max) return input;
   return input.slice(0, max);
+}
+
+function extractTextFromToolResponse(toolResponse: unknown): string {
+  if (typeof toolResponse === 'string') return toolResponse;
+  if (toolResponse && typeof toolResponse === 'object') {
+    const content = (toolResponse as { content?: unknown }).content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const b = block as { type?: unknown; text?: unknown };
+        if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+      }
+      if (parts.length) return parts.join('');
+    }
+  }
+
+  return safeCompactString(toolResponse);
 }
 
 function extractTextFromMessageParam(message: SDKUserMessage['message']): string {
@@ -114,6 +162,93 @@ export class ClaudeAgentProvider implements AgentProvider {
     const pendingEvents: ProviderEvent[] = [];
     const toolStartMsById = new Map<string, number>();
 
+    const prunerEnabled = envFlag('JEEVES_PRUNER_ENABLED');
+    const prunerUrl = process.env.JEEVES_PRUNER_URL ?? 'http://localhost:8000/prune';
+    const prunerThreshold = envFloat('JEEVES_PRUNER_THRESHOLD') ?? undefined;
+    const prunerDefaultQuery = process.env.JEEVES_PRUNER_QUERY ?? prompt;
+    const prunerTimeoutMs = envInt('JEEVES_PRUNER_TIMEOUT_MS') ?? 30_000;
+
+    const prunedReadServer = prunerEnabled
+      ? createSdkMcpServer({
+        name: 'jeeves_pruned',
+        version: '1.0.0',
+        tools: [
+          tool(
+            'Read',
+            [
+              'Read file contents (Jeeves pruned Read).',
+              'When pruning is enabled, this tool will call an external pruner service and return pruned output.',
+              '',
+              'ARGS:',
+              '- path (string): file path to read (relative to cwd or absolute under cwd)',
+              '- context_focus_question (string | null, optional): question used to focus pruning; defaults to current prompt',
+            ].join('\n'),
+            {
+              path: z.string(),
+              context_focus_question: z.string().nullable().optional(),
+            },
+            async (args) => {
+              const cwdAbs = path.resolve(options.cwd);
+              const requested = String(args.path);
+              const resolved = path.resolve(cwdAbs, requested);
+              if (resolved !== cwdAbs && !resolved.startsWith(`${cwdAbs}${path.sep}`)) {
+                return {
+                  isError: true,
+                  content: [{ type: 'text', text: `Read denied: path outside cwd (${requested})` }],
+                };
+              }
+
+              let content: string;
+              try {
+                content = await fs.readFile(resolved, 'utf-8');
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                  isError: true,
+                  content: [{ type: 'text', text: `Read failed: ${msg}` }],
+                };
+              }
+
+              const queryText = (args.context_focus_question ?? prunerDefaultQuery).trim();
+              if (!queryText) {
+                return { content: [{ type: 'text', text: content }] };
+              }
+
+              try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), prunerTimeoutMs);
+                try {
+                  const res = await fetch(prunerUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      query: queryText,
+                      code: content,
+                      ...(prunerThreshold !== undefined ? { threshold: prunerThreshold } : {}),
+                    }),
+                    signal: controller.signal,
+                  });
+                  if (!res.ok) return { content: [{ type: 'text', text: content }] };
+                  const data = (await res.json().catch(() => null)) as unknown;
+                  if (data && typeof data === 'object') {
+                    const prunedCode = (data as Record<string, unknown>).pruned_code;
+                    if (typeof prunedCode === 'string' && prunedCode.trim()) {
+                      return { content: [{ type: 'text', text: prunedCode }] };
+                    }
+                  }
+                  return { content: [{ type: 'text', text: content }] };
+                } finally {
+                  clearTimeout(timeout);
+                }
+              } catch {
+                return { content: [{ type: 'text', text: content }] };
+              }
+            },
+          ),
+        ],
+      })
+      : null;
+
     const hooks: Partial<Record<string, HookCallbackMatcher[]>> = {
       PreToolUse: [
         {
@@ -143,7 +278,7 @@ export class ClaudeAgentProvider implements AgentProvider {
               pendingEvents.push({
                 type: 'tool_result',
                 toolUseId: input.tool_use_id,
-                content: truncate(safeCompactString(input.tool_response)),
+                content: truncate(extractTextFromToolResponse(input.tool_response)),
                 durationMs,
                 isError: false,
                 timestamp: nowIso(),
@@ -183,6 +318,14 @@ export class ClaudeAgentProvider implements AgentProvider {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       hooks: hooks as Options['hooks'],
+      ...(prunedReadServer
+        ? {
+          // Replace built-in Read with our pruned MCP tool so pruning impacts
+          // the model's live context, not just recorded output.
+          disallowedTools: ['Read'],
+          mcpServers: { jeeves_pruned: prunedReadServer },
+        }
+        : {}),
       ...(resolvedModel ? { model: resolvedModel } : {}),
     };
     const modelInfo = resolvedModel ? ` (model=${resolvedModel})` : '';

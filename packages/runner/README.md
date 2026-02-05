@@ -52,6 +52,8 @@ For each run, the runner writes to the state directory:
 
 The runner can optionally pass `tool_result` payloads through a pruning hook before writing them to `sdk-output.json`.
 
+For the Claude provider, pruning can also be applied to the model's **live context** by replacing the built-in `Read` tool with a pruned MCP `Read` tool when `JEEVES_PRUNER_ENABLED` is set. This is required for actual token-cost reduction during the run.
+
 Environment variables:
 - `JEEVES_PRUNER_ENABLED`: enable the pruner hook (`true`/`1`/`yes`)
 - `JEEVES_PRUNER_URL`: pruner service URL (default: `http://localhost:8000/prune`)

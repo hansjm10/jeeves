@@ -301,11 +301,6 @@ function TransitionEdgeComponent({
           strokeWidth,
           strokeDasharray,
         }}
-        markerEnd={
-          selected
-            ? `url(#${id}__marker)`
-            : undefined
-        }
       />
       {hasLabel && (
         <EdgeLabelRenderer>
@@ -433,7 +428,11 @@ function WorkflowGraphInner(props: Readonly<{
         const edge = selectedEdges[0];
         props.onSelectionChange({ kind: 'edge', from: edge.source, to: edge.target });
       }
-      // If both are empty, a pane click will handle deselection
+      // Dispatch null when both arrays are empty (e.g. Escape key, programmatic
+      // deselection) so the parent selection state stays in sync.
+      else {
+        props.onSelectionChange(null);
+      }
     },
     [props.onSelectionChange],
   );
@@ -443,12 +442,14 @@ function WorkflowGraphInner(props: Readonly<{
     props.onSelectionChange(null);
   }, [props.onSelectionChange]);
 
-  // Fit view once nodes are initialized
+  // Fit view once nodes are initialized.
+  // The `fitView` prop handles the initial fit; onInit nudges it after React
+  // Flow finishes its internal node-measurement pass (requestAnimationFrame
+  // aligns with the next paint, avoiding a fragile fixed-ms timeout).
   const onInit = useCallback(() => {
-    // Small delay to let React Flow render nodes before fitting
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       reactFlowInstance.fitView({ padding: 0.15 });
-    }, 50);
+    });
   }, [reactFlowInstance]);
 
   if (!elements) {
@@ -485,11 +486,14 @@ function WorkflowGraphInner(props: Readonly<{
       nodesConnectable={false}
       elementsSelectable
       selectNodesOnDrag={false}
+      panOnScroll={false}
+      minZoom={0.2}
+      maxZoom={3}
       defaultEdgeOptions={{
         type: 'transition',
       }}
     >
-      <Background gap={20} size={1} />
+      <Background color="var(--color-border-subtle)" gap={20} size={1} />
       <Controls />
     </ReactFlow>
   );

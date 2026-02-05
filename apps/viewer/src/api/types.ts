@@ -300,3 +300,9 @@ export type ToolInput =
   | GrepToolInput
   | TaskToolInput
   | Record<string, unknown>;
+
+// ============================================================================
+// Sonar Token Types (re-exported from sonarTokenTypes for convenience)
+// ============================================================================
+
+export type { SonarTokenStatusEvent, SonarSyncStatus } from './sonarTokenTypes.js';

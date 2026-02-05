@@ -1,4 +1,4 @@
-import type { RunStatus } from '../api/types.js';
+import type { RunStatus, SonarTokenStatusEvent } from '../api/types.js';
 import type { StreamAction, StreamState } from './streamTypes.js';
 
 export const MAX_LOG_LINES = 10_000;
@@ -14,6 +14,8 @@ export type ExtendedStreamState = StreamState & {
   runOverride: RunStatus | null;
   /** Pre-computed effective run status: runOverride ?? state?.run. UI consumers should use this. */
   effectiveRun: RunStatus | null;
+  /** Latest sonar-token-status event (mirrors StreamState for direct access). */
+  sonarTokenStatus: SonarTokenStatusEvent | null;
 };
 
 /** Action for live run updates from the viewer-server */
@@ -38,6 +40,7 @@ export function streamReducer(
       return { ...state, connected: false, lastError: action.error ?? state.lastError };
     case 'state': {
       // Clear runOverride when a state snapshot arrives (snapshot supersedes prior run updates)
+      // Keep sonarTokenStatus as-is (it's updated by dedicated events, not snapshots)
       const newState = action.data;
       return { ...state, state: newState, runOverride: null, effectiveRun: newState.run };
     }
@@ -59,6 +62,11 @@ export function streamReducer(
     case 'sdk': {
       const next = [...state.sdkEvents, { event: action.event, data: action.data }];
       return { ...state, sdkEvents: capArray(next, MAX_SDK_EVENTS) };
+    }
+    case 'sonar-token-status': {
+      // Store the latest sonar-token-status event for direct access by consumers
+      // This does NOT add to sdkEvents (no noise)
+      return { ...state, sonarTokenStatus: action.data };
     }
     default:
       return state;

@@ -46,6 +46,7 @@ export function AppShell() {
             <TabLink to="/watch" label="watch" />
             <TabLink to="/workflows" label="workflows" />
             <TabLink to="/create-issue" label="create-issue" />
+            <TabLink to="/sonar-token" label="sonar-token" />
             <TabLink to="/prompts" label="prompts" />
           </div>
           <Outlet />

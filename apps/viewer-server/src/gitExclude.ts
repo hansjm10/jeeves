@@ -45,15 +45,46 @@ function hasExactIgnoreLine(content: string, pattern: string): boolean {
 }
 
 export async function ensureJeevesExcludedFromGitStatus(worktreeDir: string): Promise<void> {
-  const excludePath = await resolveInfoExcludePath(worktreeDir);
-  if (!excludePath) return;
+  await ensurePatternsExcluded(worktreeDir, ['.jeeves']);
+}
 
-  const pattern = '.jeeves';
-  const existing = await fs.readFile(excludePath, 'utf-8').catch(() => '');
-  if (hasExactIgnoreLine(existing, pattern)) return;
+/**
+ * Ensure multiple patterns are present in .git/info/exclude, deduped.
+ * Returns true if all patterns were ensured, false if the exclude file could not be updated.
+ *
+ * @param worktreeDir - The worktree directory
+ * @param patterns - Patterns to ensure are ignored (e.g., ['.env.jeeves', '.env.jeeves.tmp'])
+ * @returns true if successful, false if the exclude file could not be updated
+ */
+export async function ensurePatternsExcluded(worktreeDir: string, patterns: string[]): Promise<boolean> {
+  let excludePath: string | null;
+  try {
+    excludePath = await resolveInfoExcludePath(worktreeDir);
+  } catch {
+    // resolveInfoExcludePath can throw if git rev-parse fails (e.g., not a git repo)
+    return false;
+  }
+  if (!excludePath) return false;
 
-  await fs.mkdir(path.dirname(excludePath), { recursive: true }).catch(() => void 0);
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  await fs.appendFile(excludePath, `${prefix}${pattern}\n`, 'utf-8');
+  try {
+    const existing = await fs.readFile(excludePath, 'utf-8').catch(() => '');
+
+    // Find which patterns are missing
+    const missingPatterns = patterns.filter((p) => !hasExactIgnoreLine(existing, p));
+
+    if (missingPatterns.length === 0) return true;
+
+    // Ensure the directory exists
+    await fs.mkdir(path.dirname(excludePath), { recursive: true }).catch(() => void 0);
+
+    // Append missing patterns, ensuring proper newline handling
+    const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+    const linesToAdd = missingPatterns.join('\n') + '\n';
+    await fs.appendFile(excludePath, `${prefix}${linesToAdd}`, 'utf-8');
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 

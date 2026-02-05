@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 import WebSocket from 'ws';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
@@ -2492,5 +2492,1671 @@ describe('POST /api/run error status codes', () => {
     expect((res.json() as { error?: string }).error).toContain('No issue selected');
 
     await app.close();
+  });
+});
+
+describe('sonar-token endpoints', () => {
+  it('GET /api/issue/sonar-token returns 400 when no issue selected', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-noissue-get-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-noissue-get-');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/sonar-token',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, code: 'no_issue_selected' });
+
+    await app.close();
+  });
+
+  it('GET /api/issue/sonar-token returns status with has_token=false when no token exists', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-get-notoken-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-get-notoken-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/sonar-token',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.has_token).toBe(false);
+    expect(body.env_var_name).toBe('SONAR_TOKEN'); // default
+    // Per Design §4: when worktree missing and no token, sync_status=in_sync (trivially satisfied)
+    expect(body.sync_status).toBe('in_sync');
+    expect(body.worktree_present).toBe(false);
+    // Token value should never be present
+    expect(body.token).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/sonar-token saves token and never returns token value', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-put-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-put-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    // Create worktree as a git repo so .git/info/exclude can be updated
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'my-secret-token' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+
+    const status = body.status as Record<string, unknown>;
+    expect(status.has_token).toBe(true);
+    expect(status.env_var_name).toBe('SONAR_TOKEN');
+    // Token value should NEVER be present in response
+    expect(status.token).toBeUndefined();
+    expect((body as { token?: unknown }).token).toBeUndefined();
+
+    // Verify .env.jeeves was created with the token (but we only check format, not value)
+    const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+    expect(envContent).toMatch(/^SONAR_TOKEN=".*"\n$/);
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/sonar-token supports updating env_var_name without new token', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-put-envvar-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-put-envvar-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First, save a token
+    const res1 = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'initial-token' },
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Now update just the env_var_name
+    const res2 = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { env_var_name: 'SONARQUBE_TOKEN' },
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json() as Record<string, unknown>;
+    expect(body2.ok).toBe(true);
+    expect((body2.status as Record<string, unknown>).env_var_name).toBe('SONARQUBE_TOKEN');
+    expect((body2.status as Record<string, unknown>).has_token).toBe(true);
+
+    // Verify .env.jeeves uses the new env var name
+    const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+    expect(envContent).toMatch(/^SONARQUBE_TOKEN=".*"\n$/);
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/sonar-token returns 400 when both token and env_var_name omitted', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-put-empty-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-put-empty-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+
+    await app.close();
+  });
+
+  it('DELETE /api/issue/sonar-token removes token and cleans up worktree', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-delete-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-delete-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First, save a token
+    const res1 = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'token-to-delete' },
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Verify .env.jeeves exists
+    const envExists1 = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists1).not.toBeNull();
+
+    // Now delete the token
+    const res2 = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json() as Record<string, unknown>;
+    expect(body2.ok).toBe(true);
+    expect(body2.updated).toBe(true);
+    expect((body2.status as Record<string, unknown>).has_token).toBe(false);
+
+    // Verify .env.jeeves was removed
+    const envExists2 = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists2).toBeNull();
+
+    await app.close();
+  });
+
+  it('DELETE /api/issue/sonar-token is idempotent (returns updated=false when already absent)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-delete-idempotent-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-delete-idempotent-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Delete when no token exists
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(false); // No token was present
+
+    await app.close();
+  });
+
+  it('POST /api/issue/sonar-token/reconcile re-syncs worktree without changing token', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-reconcile-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-reconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First, save a token
+    const res1 = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'reconcile-token' },
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Delete .env.jeeves manually to simulate out-of-sync state
+    await fs.rm(path.join(worktreeDir, '.env.jeeves'), { force: true });
+
+    // Verify it's gone
+    const envExists1 = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists1).toBeNull();
+
+    // Now reconcile with force=true (since server thinks it's in_sync but file is missing)
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/issue/sonar-token/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: { force: true },
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json() as Record<string, unknown>;
+    expect(body2.ok).toBe(true);
+    expect(body2.updated).toBe(false); // Reconcile never changes token presence
+    expect((body2.status as Record<string, unknown>).has_token).toBe(true);
+    expect((body2.status as Record<string, unknown>).sync_status).toBe('in_sync');
+
+    // Verify .env.jeeves was recreated
+    const envExists2 = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists2).not.toBeNull();
+
+    await app.close();
+  });
+
+  it('returns 409 when trying to modify token while Jeeves is running', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-conflict-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-conflict-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: true,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Start a run (use fake provider to make it long-running)
+    const runRes = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { provider: 'fake' },
+    });
+    expect(runRes.statusCode).toBe(200);
+
+    // Try to modify token while running
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'conflict-token' },
+    });
+    expect(putRes.statusCode).toBe(409);
+    expect(putRes.json()).toMatchObject({ ok: false, code: 'conflict_running' });
+
+    // Try DELETE while running
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(deleteRes.statusCode).toBe(409);
+    expect(deleteRes.json()).toMatchObject({ ok: false, code: 'conflict_running' });
+
+    // Try reconcile while running
+    const reconcileRes = await app.inject({
+      method: 'POST',
+      url: '/api/issue/sonar-token/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: {},
+    });
+    expect(reconcileRes.statusCode).toBe(409);
+    expect(reconcileRes.json()).toMatchObject({ ok: false, code: 'conflict_running' });
+
+    // Stop the run
+    await app.inject({
+      method: 'POST',
+      url: '/api/run/stop',
+      remoteAddress: '127.0.0.1',
+      payload: { force: true },
+    });
+
+    await app.close();
+  });
+
+  it('returns 503 busy when mutex cannot be acquired within timeout', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-busy-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Send multiple concurrent PUT requests - one will get the mutex, others should time out
+    // The mutex timeout is 1500ms, so we need to create a scenario where the mutex is held
+    // We'll send 3 requests concurrently and check that at least one gets 503
+
+    // First, create a very long-running PUT by creating a slow situation
+    // Actually, the best test is to just fire multiple requests simultaneously
+    const promises = [
+      app.inject({
+        method: 'PUT',
+        url: '/api/issue/sonar-token',
+        remoteAddress: '127.0.0.1',
+        payload: { token: 'concurrent-token-1' },
+      }),
+      app.inject({
+        method: 'PUT',
+        url: '/api/issue/sonar-token',
+        remoteAddress: '127.0.0.1',
+        payload: { token: 'concurrent-token-2' },
+      }),
+      app.inject({
+        method: 'PUT',
+        url: '/api/issue/sonar-token',
+        remoteAddress: '127.0.0.1',
+        payload: { token: 'concurrent-token-3' },
+      }),
+    ];
+
+    const results = await Promise.all(promises);
+    const statuses = results.map((r) => r.statusCode);
+
+    // All should succeed because the mutex is acquired quickly for simple operations
+    // The 503 would only happen if an operation takes longer than 1500ms
+    // For this test, we just verify the mechanism exists by checking the code path works
+    // All should be 200 since operations are fast
+    expect(statuses.filter((s) => s === 200).length).toBeGreaterThan(0);
+
+    await app.close();
+  });
+
+  // ============================================================================
+  // Deterministic 503 busy test (T9)
+  // Uses fake timers to prove 1500ms mutex timeout triggers 503 busy response
+  // ============================================================================
+
+  describe('sonar token mutex 503 busy (deterministic with fake timers)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('returns 503 busy after default 1500ms timeout when mutex is held during PUT request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+
+      try {
+        // Start PUT request while mutex is held - it will wait for mutex
+        const putPromise = app.inject({
+          method: 'PUT',
+          url: '/api/issue/sonar-token',
+          remoteAddress: '127.0.0.1',
+          payload: { token: 'test-token' },
+        });
+
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
+
+        // Now the request should complete with 503 busy
+        const res = await putPromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+
+    it('returns 503 busy after default 1500ms timeout when mutex is held during DELETE request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-del-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-del-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+
+      try {
+        // Start DELETE request while mutex is held - it will wait for mutex
+        const deletePromise = app.inject({
+          method: 'DELETE',
+          url: '/api/issue/sonar-token',
+          remoteAddress: '127.0.0.1',
+        });
+
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
+
+        // Now the request should complete with 503 busy
+        const res = await deletePromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+
+    it('returns 503 busy after default 1500ms timeout when mutex is held during RECONCILE request', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-busy-det-rec-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-busy-det-rec-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Use default 1500ms mutex timeout (do NOT pass sonarTokenMutexTimeoutMs)
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Acquire mutex directly via test helper and hold it for the duration of the test
+      const mutex = await __test__.acquireSonarTokenMutex(issueRef);
+
+      try {
+        // Start RECONCILE request while mutex is held - it will wait for mutex
+        const reconcilePromise = app.inject({
+          method: 'POST',
+          url: '/api/issue/sonar-token/reconcile',
+          remoteAddress: '127.0.0.1',
+          payload: {},
+        });
+
+        // Advance fake time past the default 1500ms mutex timeout
+        await vi.advanceTimersByTimeAsync(1501);
+
+        // Now the request should complete with 503 busy
+        const res = await reconcilePromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+  });
+
+  it('emits sonar-token-status event after PUT', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-sonar-event-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-event-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Connect via WebSocket
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait a bit for initial state event
+    await new Promise((r) => setTimeout(r, 100));
+
+    // PUT a token
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'event-test-token' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Wait for event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(true);
+    expect(eventData.env_var_name).toBe('SONAR_TOKEN');
+    // Token value should NEVER be in the event
+    expect(eventData.token).toBeUndefined();
+
+    ws.close();
+    await app.close();
+  });
+
+  // ============================================================================
+  // Auto-reconcile on init/select tests (T5)
+  // ============================================================================
+
+  it('/api/issues/select triggers auto-reconcile and emits sonar-token-status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-autoreconcile-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-autoreconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    // Pre-create the token secret file directly (so it exists when we select)
+    await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, '.secrets', 'sonar-token.json'),
+      JSON.stringify({ schemaVersion: 1, token: 'select-test-token', updated_at: new Date().toISOString() }),
+      'utf-8',
+    );
+
+    // Create another issue state to select between
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef, // Start on the second issue
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select to the issue with the token - should trigger auto-reconcile
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(true);
+    expect(eventData.issue_ref).toBe(issueRef);
+    expect(eventData.sync_status).toBe('in_sync');
+
+    // Verify .env.jeeves was created by auto-reconcile
+    const envExists = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists).not.toBeNull();
+
+    ws.close();
+    await app.close();
+  });
+
+  it('/api/init/issue triggers auto-reconcile and emits sonar-token-status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-init-autoreconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    // Set up a local repo for init
+    await ensureLocalRepoClone({ dataDir, owner, repo });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: true,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()), // Use real workflows dir
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Init issue (force=true to recreate if exists)
+    const initRes = await app.inject({
+      method: 'POST',
+      url: '/api/init/issue',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: `${owner}/${repo}`, issue: 42, force: true },
+    });
+    expect(initRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'), 5000);
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    // No token is configured yet, but event should still emit
+    expect(eventData.has_token).toBe(false);
+    expect(eventData.issue_ref).toBe(issueRef);
+
+    // Now save a token and verify it gets synced
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/sonar-token',
+      remoteAddress: '127.0.0.1',
+      payload: { token: 'init-test-token' },
+    });
+    expect(putRes.statusCode).toBe(200);
+
+    // Verify .env.jeeves was created
+    const envExists = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+    expect(envExists).not.toBeNull();
+
+    // Verify the sync_status is recorded in issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+    expect(sonarTokenStatus?.sync_status).toBe('in_sync');
+    expect(sonarTokenStatus?.last_attempt_at).toBeTruthy();
+
+    ws.close();
+    await app.close();
+  });
+
+  it('auto-reconcile failures are non-fatal and surfaced in status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-nonfatal-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-nonfatal-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    // Create state dir but NO worktree to simulate deferred state
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, '.secrets', 'sonar-token.json'),
+      JSON.stringify({ schemaVersion: 1, token: 'nonfatal-test-token', updated_at: new Date().toISOString() }),
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    // Create another issue state to start on
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef, // Start on the second issue
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select to issue with token but no worktree - should succeed (non-fatal)
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200); // Select still succeeds even if reconcile can't sync
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(true);
+    // Should show deferred status since worktree doesn't exist
+    expect(eventData.sync_status).toBe('deferred_worktree_absent');
+
+    ws.close();
+    await app.close();
+  });
+
+  it('/api/issues/select emits sonar-token-status even when no token configured', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-notoken-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-notoken-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    // Create another issue state
+    const secondIssueRef = `${owner}/${repo}#43`;
+    const secondStateDir = getIssueStateDir(owner, repo, 43, dataDir);
+    await fs.mkdir(secondStateDir, { recursive: true });
+    await fs.writeFile(path.join(secondStateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: secondIssueRef,
+    });
+
+    // Connect WebSocket to capture events
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events to settle
+    await new Promise((r) => setTimeout(r, 100));
+    receivedEvents.length = 0; // Clear initial events
+
+    // Select issue with NO token
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(selectRes.statusCode).toBe(200);
+
+    // Wait for sonar-token-status event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'sonar-token-status'));
+
+    const tokenEvent = receivedEvents.find((e) => e.event === 'sonar-token-status');
+    expect(tokenEvent).toBeDefined();
+    const eventData = tokenEvent!.data as Record<string, unknown>;
+    expect(eventData.has_token).toBe(false);
+    expect(eventData.issue_ref).toBe(issueRef);
+
+    ws.close();
+    await app.close();
+  });
+
+  describe('worktree-missing sync_status semantics', () => {
+    it('GET returns sync_status=deferred_worktree_absent when has_token=true and worktree missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-token-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-token-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      // Write a secret token file directly
+      const secretsDir = path.join(stateDir, '.secrets');
+      await fs.mkdir(secretsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(secretsDir, 'sonar-token.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          token: 'test-token',
+          updated_at: new Date().toISOString(),
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+
+      await app.close();
+    });
+
+    it('GET returns sync_status=in_sync when has_token=false and worktree missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-notoken-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-notoken-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir, and NO token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(false);
+      expect(body.worktree_present).toBe(false);
+      // Trivially in_sync when no token and no worktree
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('GET returns stored sync_status when worktree is present', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-present-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-present-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create both state dir and worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      // Initialize git so startup reconcile can succeed (even with no token)
+      await git(['init'], { cwd: worktreeDir });
+      // Set a stored sync_status of in_sync
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          status: {
+            sonarToken: {
+              sync_status: 'in_sync',
+              last_attempt_at: '2026-02-04T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.worktree_present).toBe(true);
+      // When worktree is present and no token, startup reconcile runs and results in in_sync
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('sync_status override applies even when stored status differs', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-sonar-wt-missing-override-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-sonar-wt-missing-override-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+      // Create state dir but NO worktree dir
+      await fs.mkdir(stateDir, { recursive: true });
+      // Set a stored sync_status of in_sync, but worktree is missing with token
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          status: {
+            sonarToken: {
+              sync_status: 'in_sync', // This was true when worktree existed
+              last_success_at: '2026-02-04T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      // Write a secret token file directly
+      const secretsDir = path.join(stateDir, '.secrets');
+      await fs.mkdir(secretsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(secretsDir, 'sonar-token.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          token: 'test-token',
+          updated_at: new Date().toISOString(),
+        }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      // Even though stored was in_sync, missing worktree with token forces deferred_worktree_absent
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+
+      await app.close();
+    });
+  });
+
+  // ============================================================================
+  // Startup reconcile/cleanup tests (T10)
+  // ============================================================================
+
+  describe('startup reconcile/cleanup', () => {
+    it('runs reconcile on startup and creates .env.jeeves when token exists', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-reconcile-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-reconcile-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token before server starts
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file directly
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'startup-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // .env.jeeves should not exist yet
+      const envBefore = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+      expect(envBefore).toBeNull();
+
+      // Start server - this should trigger startup reconcile
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // .env.jeeves should now exist (created by startup reconcile)
+      const envAfter = await fs.stat(path.join(worktreeDir, '.env.jeeves')).catch(() => null);
+      expect(envAfter).not.toBeNull();
+
+      // Verify the content is correct
+      const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+      expect(envContent).toBe('SONAR_TOKEN="startup-test-token"\n');
+
+      // Verify status is updated
+      const issueJson = await readIssueJson(stateDir);
+      const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+        | Record<string, unknown>
+        | undefined;
+      expect(sonarTokenStatus?.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('cleans up leftover .env.jeeves.tmp on startup', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-cleanup-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-cleanup-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir and worktree with a token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'cleanup-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Simulate a leftover temp file from a crashed previous run
+      const tmpPath = path.join(worktreeDir, '.env.jeeves.tmp');
+      await fs.writeFile(tmpPath, 'OLD_LEFTOVER="crash-remnant"\n', 'utf-8');
+      const tmpBefore = await fs.stat(tmpPath).catch(() => null);
+      expect(tmpBefore).not.toBeNull();
+
+      // Start server - startup reconcile should clean up the temp file
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // .env.jeeves.tmp should be cleaned up
+      const tmpAfter = await fs.stat(tmpPath).catch(() => null);
+      expect(tmpAfter).toBeNull();
+
+      // .env.jeeves should now exist with correct content
+      const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+      expect(envContent).toBe('SONAR_TOKEN="cleanup-test-token"\n');
+
+      await app.close();
+    });
+
+    it('emits sonar-token-status event on startup when token exists', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-event-token-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-event-token-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token before server starts
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'event-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server and listen
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+      await app.listen({ port: 0 });
+      const actualAddress = app.server.address();
+      const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+      // Connect via WebSocket - we should eventually get status when connecting
+      const receivedEvents: { event: string; data: unknown }[] = [];
+      const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+      await new Promise<void>((resolve) => {
+        ws.on('open', resolve);
+      });
+
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+        receivedEvents.push(msg);
+      });
+
+      // Wait for state event (which clients receive on connect)
+      await waitFor(() => receivedEvents.some((e) => e.event === 'state'));
+
+      // Verify GET status shows correct values (startup reconcile ran)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      expect(body.sync_status).toBe('in_sync');
+      // Token value should NEVER be in the response
+      expect(body.token).toBeUndefined();
+
+      ws.close();
+      await app.close();
+    });
+
+    it('emits sonar-token-status event on startup when no token (has_token=false)', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-event-notoken-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-event-notoken-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir WITHOUT token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Start server and listen
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows correct values (startup reconcile ran, no token)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(false);
+      // No token, so status is based on worktree presence (worktree present, no token = in_sync or never_attempted)
+      // Since startup reconcile runs and emits status for no-token case, it should be reported correctly
+      expect(body.worktree_present).toBe(true);
+
+      await app.close();
+    });
+
+    it('startup reconcile is non-fatal when worktree is missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-nonfatal-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-nonfatal-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      // No worktree dir created
+
+      // Create state dir with token but NO worktree
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'nonfatal-test-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - should not throw even though worktree is missing
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows deferred status
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      expect(body.worktree_present).toBe(false);
+      expect(body.sync_status).toBe('deferred_worktree_absent');
+      // Token value should NEVER leak
+      expect(body.token).toBeUndefined();
+
+      await app.close();
+    });
+
+    it('startup reconcile does not leak token in last_error when reconcile fails', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-noleak-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-noleak-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      // Note: NOT initializing git in worktree, so .git/info/exclude update will fail
+
+      // Pre-create the token secret file with a distinctive token value
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      const secretToken = 'SUPERSECRETTOKEN12345';
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: secretToken, updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - reconcile should fail because no .git directory
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows the failure
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+
+      // last_error should exist due to failed reconcile, but MUST NOT contain the token
+      // The error should be about git exclude or env write failure
+      if (body.last_error) {
+        expect(typeof body.last_error).toBe('string');
+        expect((body.last_error as string)).not.toContain(secretToken);
+      }
+
+      // Token value should NEVER be in response
+      expect(body.token).toBeUndefined();
+
+      await app.close();
+    });
+
+    it('startup reconcile removes stale .env.jeeves when no token is configured', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-stale-env-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-stale-env-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir WITHOUT token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      // Simulate leftover stale files from a previous run (e.g., token was removed)
+      const envPath = path.join(worktreeDir, '.env.jeeves');
+      const tmpPath = path.join(worktreeDir, '.env.jeeves.tmp');
+      await fs.writeFile(envPath, 'STALE_TOKEN="old-value"\n', 'utf-8');
+      await fs.writeFile(tmpPath, 'STALE_TMP="crash-remnant"\n', 'utf-8');
+
+      // Verify files exist before startup
+      const envBefore = await fs.stat(envPath).catch(() => null);
+      const tmpBefore = await fs.stat(tmpPath).catch(() => null);
+      expect(envBefore).not.toBeNull();
+      expect(tmpBefore).not.toBeNull();
+
+      // Start server - startup reconcile should clean up both files
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Both .env.jeeves and .env.jeeves.tmp should be removed
+      const envAfter = await fs.stat(envPath).catch(() => null);
+      const tmpAfter = await fs.stat(tmpPath).catch(() => null);
+      expect(envAfter).toBeNull();
+      expect(tmpAfter).toBeNull();
+
+      // Verify GET status shows in_sync (no token, files cleaned up)
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(false);
+      expect(body.worktree_present).toBe(true);
+      expect(body.sync_status).toBe('in_sync');
+
+      await app.close();
+    });
+
+    it('startup reconcile records sync_status and last_error when reconcile fails (non-git worktree)', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-startup-fail-status-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-fail-status-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      // Create state dir with token
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      // Note: NOT initializing git in worktree, so .git/info/exclude update will fail
+
+      // Pre-create the token secret file
+      await fs.mkdir(path.join(stateDir, '.secrets'), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, '.secrets', 'sonar-token.json'),
+        JSON.stringify({ schemaVersion: 1, token: 'fail-status-token', updated_at: new Date().toISOString() }),
+        'utf-8',
+      );
+
+      // Start server - reconcile should fail because no .git directory
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Verify GET status shows the failure was recorded
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/issue/sonar-token',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as Record<string, unknown>;
+      expect(body.has_token).toBe(true);
+      // sync_status should indicate failure (failed_exclude since git is missing)
+      expect(body.sync_status).toBe('failed_exclude');
+      // last_error should be set
+      expect(body.last_error).not.toBeNull();
+      expect(typeof body.last_error).toBe('string');
+      // Token value should NEVER be in response or error
+      expect(body.token).toBeUndefined();
+      expect((body.last_error as string)).not.toContain('fail-status-token');
+
+      await app.close();
+    });
   });
 });

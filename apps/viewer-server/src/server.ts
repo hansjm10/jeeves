@@ -23,6 +23,16 @@ import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
+import { reconcileSonarTokenToWorktree } from './sonarTokenReconcile.js';
+import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret, SonarTokenSecretReadError } from './sonarTokenSecret.js';
+import {
+  validatePutRequest,
+  validateReconcileRequest,
+  sanitizeErrorForUi,
+  DEFAULT_ENV_VAR_NAME,
+  type SonarTokenStatus,
+  type SonarSyncStatus,
+} from './sonarTokenTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
@@ -370,6 +380,8 @@ export type ViewerServerConfig = Readonly<{
   dataDir?: string;
   initialIssue?: string;
   createGitHubIssue?: CreateGitHubIssueAdapter;
+  /** Mutex timeout for sonar token operations (ms). Default: 1500. For testing only. */
+  sonarTokenMutexTimeoutMs?: number;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -405,6 +417,61 @@ export async function buildServer(config: ViewerServerConfig) {
     dataDir,
     broadcast: (event, data) => hub.broadcast(event, data),
   });
+
+  // ============================================================================
+  // Sonar Token Mutex (must be declared early for startup reconcile)
+  // ============================================================================
+
+  /** Mutex timeout for sonar token operations (ms). */
+  const SONAR_TOKEN_MUTEX_TIMEOUT_MS = config.sonarTokenMutexTimeoutMs ?? 1500;
+
+  /** Per-issue mutex map for sonar token operations. */
+  const sonarTokenMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
+
+  /** Acquire mutex for issue - returns true if acquired, false if timed out. */
+  async function acquireSonarTokenMutex(issueRef: string): Promise<boolean> {
+    let mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) {
+      mutex = { locked: false, waiters: [] };
+      sonarTokenMutexes.set(issueRef, mutex);
+    }
+
+    if (!mutex.locked) {
+      mutex.locked = true;
+      return true;
+    }
+
+    // Wait for mutex with timeout
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        // Remove ourselves from the waiter queue
+        const idx = mutex!.waiters.indexOf(waiterCallback);
+        if (idx !== -1) mutex!.waiters.splice(idx, 1);
+        resolve(false);
+      }, SONAR_TOKEN_MUTEX_TIMEOUT_MS);
+
+      const waiterCallback = (acquired: boolean) => {
+        clearTimeout(timer);
+        resolve(acquired);
+      };
+
+      mutex!.waiters.push(waiterCallback);
+    });
+  }
+
+  /** Release mutex for issue. */
+  function releaseSonarTokenMutex(issueRef: string): void {
+    const mutex = sonarTokenMutexes.get(issueRef);
+    if (!mutex) return;
+
+    if (mutex.waiters.length > 0) {
+      // Pass to next waiter
+      const next = mutex.waiters.shift();
+      if (next) next(true);
+    } else {
+      mutex.locked = false;
+    }
+  }
 
   const logTailer = new LogTailer();
   const viewerLogTailer = new LogTailer();
@@ -507,6 +574,24 @@ export async function buildServer(config: ViewerServerConfig) {
   }
 
   await refreshFileTargets();
+
+  // Startup reconcile/cleanup: run best-effort reconcile for initially selected issue
+  // This converges worktree artifacts, cleans up leftover .env.jeeves.tmp files,
+  // and emits sonar-token-status event (Design §3 Worktree Filesystem Contracts).
+  // Non-fatal: failures are surfaced via sync_status/last_error without blocking startup.
+  const startupIssue = runManager.getIssue();
+  if (startupIssue.issueRef && startupIssue.stateDir) {
+    try {
+      await autoReconcileSonarToken(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    } catch (err) {
+      // Startup reconcile is best-effort: log error but don't block server startup
+      // (e.g., disk full, permission errors on writeIssueJson)
+      console.error(
+        'Startup sonar token reconcile failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 
   // Poll for log/sdk updates and file target changes
   async function pollTick(): Promise<void> {
@@ -1067,6 +1152,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	      await runManager.setIssue(issueRef);
 	      await saveActiveIssue(dataDir, issueRef);
 	      await refreshFileTargets();
+
+	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
+	      const issue = runManager.getIssue();
+	      if (issue.issueRef && issue.stateDir) {
+	        try {
+	          await autoReconcileSonarToken(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
+	      }
+
 	      return reply.send({ ok: true, issue_ref: issueRef });
 	    } catch (err) {
 	      const mapped = errorToHttp(err);
@@ -1110,6 +1206,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	      await runManager.setIssue(res.issue_ref);
 	      await saveActiveIssue(dataDir, res.issue_ref);
 	      await refreshFileTargets();
+
+	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
+	      const issue = runManager.getIssue();
+	      if (issue.issueRef && issue.stateDir) {
+	        try {
+	          await autoReconcileSonarToken(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
+	      }
+
 	      return reply.send({ ok: true, ...res });
 	    } catch (err) {
 	      const msg = err instanceof Error ? err.message : String(err);
@@ -1277,6 +1384,553 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
+  // ============================================================================
+  // Sonar Token Endpoints
+  // ============================================================================
+
+  /** Build SonarTokenStatus from current state (never includes token value). */
+  async function buildSonarTokenStatus(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<SonarTokenStatus> {
+    const secret = await readSonarTokenSecret(stateDir);
+    const hasToken = secret.exists;
+
+    const worktreePresent = Boolean(
+      workDir && (await fs.stat(workDir).catch(() => null))?.isDirectory(),
+    );
+
+    // Read status from issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+
+    const envVarName =
+      typeof sonarTokenStatus?.env_var_name === 'string' && sonarTokenStatus.env_var_name.trim()
+        ? sonarTokenStatus.env_var_name.trim()
+        : DEFAULT_ENV_VAR_NAME;
+
+    const storedSyncStatus = (sonarTokenStatus?.sync_status as SonarSyncStatus) ?? 'never_attempted';
+    const lastAttemptAt =
+      typeof sonarTokenStatus?.last_attempt_at === 'string' ? sonarTokenStatus.last_attempt_at : null;
+    const lastSuccessAt =
+      typeof sonarTokenStatus?.last_success_at === 'string' ? sonarTokenStatus.last_success_at : null;
+    const lastError =
+      typeof sonarTokenStatus?.last_error === 'string' ? sonarTokenStatus.last_error : null;
+
+    // Design §4 sync_status relationships when worktree is missing/deleted:
+    // - If worktree_present=false and has_token=true: sync_status=deferred_worktree_absent
+    // - If worktree_present=false and has_token=false: sync_status=in_sync (trivially satisfied)
+    let syncStatus: SonarSyncStatus;
+    if (!worktreePresent) {
+      syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
+    } else {
+      syncStatus = storedSyncStatus;
+    }
+
+    return {
+      issue_ref: issueRef,
+      worktree_present: worktreePresent,
+      has_token: hasToken,
+      env_var_name: envVarName,
+      sync_status: syncStatus,
+      last_attempt_at: lastAttemptAt,
+      last_success_at: lastSuccessAt,
+      last_error: lastError,
+    };
+  }
+
+  /** Update issue.json with sonar token status (never stores token value). */
+  async function updateSonarTokenStatusInIssueJson(
+    stateDir: string,
+    updates: Partial<{
+      env_var_name: string;
+      sync_status: SonarSyncStatus;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+    }>,
+  ): Promise<void> {
+    const issueJson = (await readIssueJson(stateDir)) ?? {};
+
+    // Ensure status object exists
+    if (!issueJson.status || typeof issueJson.status !== 'object') {
+      issueJson.status = {};
+    }
+    const status = issueJson.status as Record<string, unknown>;
+
+    // Ensure sonarToken object exists
+    if (!status.sonarToken || typeof status.sonarToken !== 'object') {
+      status.sonarToken = {};
+    }
+    const sonarToken = status.sonarToken as Record<string, unknown>;
+
+    // Apply updates
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        sonarToken[key] = value;
+      }
+    }
+
+    await writeIssueJson(stateDir, issueJson);
+  }
+
+  /** Emit sonar-token-status event. */
+  function emitSonarTokenStatus(status: SonarTokenStatus): void {
+    hub.broadcast('sonar-token-status', status);
+  }
+
+  /**
+   * Best-effort auto-reconcile of sonar token to worktree.
+   * Called after /api/init/issue, /api/issues/select, and on startup.
+   * Non-fatal: errors are recorded in status but do not propagate.
+   *
+   * IMPORTANT: This function handles BOTH token-present AND token-absent cases:
+   * - Token present: writes .env.jeeves with token, cleans up .env.jeeves.tmp
+   * - Token absent: removes .env.jeeves (if stale), cleans up .env.jeeves.tmp
+   *
+   * This ensures that on startup or issue select, any leftover artifacts from
+   * previous runs are cleaned up, regardless of whether a token is configured.
+   *
+   * MUTEX: This function acquires the per-issue Sonar token mutex to prevent
+   * concurrent writes with PUT/DELETE/RECONCILE endpoints. If the mutex cannot
+   * be acquired (busy), reconcile is skipped as a best-effort no-op.
+   */
+  async function autoReconcileSonarToken(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    // Acquire mutex to prevent concurrent writes with PUT/DELETE/RECONCILE
+    // If busy, skip reconcile as best-effort no-op (do not block or deadlock)
+    const acquired = await acquireSonarTokenMutex(issueRef);
+    if (!acquired) {
+      // Mutex is busy - another operation is in progress. Skip reconcile.
+      // This is fine for auto-reconcile since it's best-effort.
+      return;
+    }
+
+    try {
+      await autoReconcileSonarTokenCore(issueRef, stateDir, workDir);
+    } finally {
+      releaseSonarTokenMutex(issueRef);
+    }
+  }
+
+  /**
+   * Core implementation of auto-reconcile (called with mutex held).
+   */
+  async function autoReconcileSonarTokenCore(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+
+    // Read existing status to determine if we have a token
+    // If reading fails (e.g., EACCES), treat as error (not as "token absent")
+    let secret: Awaited<ReturnType<typeof readSonarTokenSecret>>;
+    try {
+      secret = await readSonarTokenSecret(stateDir);
+    } catch (err) {
+      // I/O error reading secret file - record error and abort reconcile
+      // Do NOT treat as "token absent" (would incorrectly delete .env.jeeves)
+      const lastError = err instanceof SonarTokenSecretReadError ? err.message : sanitizeErrorForUi(err);
+      await updateSonarTokenStatusInIssueJson(stateDir, {
+        sync_status: 'failed_secret_read',
+        last_attempt_at: now,
+        last_error: lastError,
+      });
+      // Best-effort: still try to emit status (may throw again, but that's fine)
+      try {
+        const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
+        emitSonarTokenStatus(status);
+      } catch {
+        // Ignore - we already recorded the error
+      }
+      return;
+    }
+
+    const hasToken = secret.exists;
+
+    // Read current env_var_name from issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const sonarTokenStatus = (issueJson?.status as Record<string, unknown> | undefined)?.sonarToken as
+      | Record<string, unknown>
+      | undefined;
+    const envVarName =
+      typeof sonarTokenStatus?.env_var_name === 'string' && sonarTokenStatus.env_var_name.trim()
+        ? sonarTokenStatus.env_var_name.trim()
+        : DEFAULT_ENV_VAR_NAME;
+
+    // Reconcile if worktree exists (handles both token present/absent cases)
+    let syncStatus: SonarSyncStatus = 'never_attempted';
+    let lastError: string | null = null;
+
+    if (workDir) {
+      const worktreeExists = (await fs.stat(workDir).catch(() => null))?.isDirectory();
+      if (worktreeExists) {
+        // Always call reconcile - it handles both:
+        // - hasToken=true: write .env.jeeves with token
+        // - hasToken=false: remove .env.jeeves if present
+        // In both cases, it cleans up .env.jeeves.tmp
+        const tokenValue = secret.exists ? secret.data.token : undefined;
+
+        try {
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: workDir,
+            hasToken,
+            token: tokenValue,
+            envVarName,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+        } catch (err) {
+          // reconcileSonarTokenToWorktree should not throw, but if it does
+          // (e.g., runGit throws in ensurePatternsExcluded), record the error
+          syncStatus = 'failed_exclude';
+          lastError = sanitizeErrorForUi(err);
+        }
+      } else {
+        syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
+      }
+    } else {
+      syncStatus = hasToken ? 'deferred_worktree_absent' : 'in_sync';
+    }
+
+    // Update status in issue.json
+    await updateSonarTokenStatusInIssueJson(stateDir, {
+      sync_status: syncStatus,
+      last_attempt_at: now,
+      last_success_at: syncStatus === 'in_sync' ? now : (sonarTokenStatus?.last_success_at as string | null) ?? null,
+      last_error: lastError,
+    });
+
+    // Build and emit final status
+    const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
+    emitSonarTokenStatus(status);
+  }
+
+  // GET /api/issue/sonar-token
+  app.get('/api/issue/sonar-token', async (_req, reply) => {
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    try {
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      return reply.send({ ok: true, ...status });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    }
+  });
+
+  // PUT /api/issue/sonar-token
+  app.put('/api/issue/sonar-token', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validatePutRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Read existing status to get current env_var_name if not provided
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Determine env_var_name to use
+      const envVarName = validation.env_var_name ?? existingStatus.env_var_name;
+
+      // Persist token if provided
+      if (validation.token !== undefined) {
+        await writeSonarTokenSecret(issue.stateDir, validation.token);
+      }
+
+      // Update env_var_name in issue.json if provided
+      if (validation.env_var_name !== undefined) {
+        await updateSonarTokenStatusInIssueJson(issue.stateDir, { env_var_name: validation.env_var_name });
+      }
+
+      // Track whether meaningful changes were made that invalidate current sync state
+      const tokenChanged = validation.token !== undefined;
+      const envVarNameChanged =
+        validation.env_var_name !== undefined && validation.env_var_name !== existingStatus.env_var_name;
+      const meaningfulChange = tokenChanged || envVarNameChanged;
+
+      // Reconcile if sync_now is true and worktree exists
+      let syncStatus: SonarSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (validation.sync_now && issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          // Read the token for reconciliation (we need the actual value to write to .env.jeeves)
+          const secretResult = await readSonarTokenSecret(issue.stateDir);
+          const tokenValue = secretResult.exists ? secretResult.data.token : undefined;
+          const hasTokenNow = secretResult.exists;
+
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: hasTokenNow,
+            token: tokenValue,
+            envVarName,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+
+          await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+            last_error: lastError,
+          });
+        } else {
+          syncStatus = 'deferred_worktree_absent';
+          await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_error: null,
+          });
+        }
+      } else if (meaningfulChange) {
+        // Token or env_var_name changed without reconciliation - reset sync_status
+        // so the UI shows that syncing is needed (per design, sync_status should
+        // reflect actual state, not stale prior state)
+        syncStatus = 'never_attempted';
+        lastError = null;
+        await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+          sync_status: syncStatus,
+          last_error: null,
+        });
+      }
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      return reply.send({ ok: true, updated: true, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
+    }
+  });
+
+  // DELETE /api/issue/sonar-token
+  app.delete('/api/issue/sonar-token', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Check if token existed before deletion
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      const hadToken = existingStatus.has_token;
+
+      // Delete the secret file
+      await deleteSonarTokenSecret(issue.stateDir);
+
+      // Reconcile (remove .env.jeeves) if worktree exists
+      let syncStatus: SonarSyncStatus = 'never_attempted';
+      let lastError: string | null = null;
+
+      if (issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: false,
+            envVarName: existingStatus.env_var_name,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+        } else {
+          syncStatus = 'in_sync'; // No worktree, so nothing to sync - trivially satisfied
+        }
+      } else {
+        syncStatus = 'in_sync'; // No worktree, trivially satisfied
+      }
+
+      await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      return reply.send({ ok: true, updated: hadToken, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
+    }
+  });
+
+  // POST /api/issue/sonar-token/reconcile
+  app.post('/api/issue/sonar-token/reconcile', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validateReconcileRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireSonarTokenMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another token operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+      const forceReconcile = validation.value?.force ?? false;
+
+      // Get current status
+      const existingStatus = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Skip reconcile if already in_sync and force is not set
+      if (existingStatus.sync_status === 'in_sync' && !forceReconcile) {
+        // Already in desired state; no-op
+        return reply.send({
+          ok: true,
+          updated: false,
+          status: existingStatus,
+          warnings: ['Already in sync; use force=true to re-run reconciliation.'],
+        });
+      }
+
+      // Reconcile only if worktree exists
+      let syncStatus: SonarSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (!issue.workDir) {
+        syncStatus = existingStatus.has_token ? 'deferred_worktree_absent' : 'in_sync';
+        warnings.push('Worktree not present; deferred.');
+      } else {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (!worktreeExists) {
+          syncStatus = existingStatus.has_token ? 'deferred_worktree_absent' : 'in_sync';
+          warnings.push('Worktree directory does not exist; deferred.');
+        } else {
+          // Read token for reconciliation
+          const secretResult = await readSonarTokenSecret(issue.stateDir);
+          const tokenValue = secretResult.exists ? secretResult.data.token : undefined;
+          const hasTokenNow = secretResult.exists;
+
+          const reconcileResult = await reconcileSonarTokenToWorktree({
+            worktreeDir: issue.workDir,
+            hasToken: hasTokenNow,
+            token: tokenValue,
+            envVarName: existingStatus.env_var_name,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+          warnings.push(...reconcileResult.warnings);
+        }
+      }
+
+      await updateSonarTokenStatusInIssueJson(issue.stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildSonarTokenStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitSonarTokenStatus(status);
+
+      // Reconcile never changes token presence, so updated is always false
+      return reply.send({ ok: true, updated: false, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseSonarTokenMutex(issue.issueRef);
+    }
+  });
+
   app.get('/api/stream', async (req, reply) => {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
     reply.raw.writeHead(200, {
@@ -1334,7 +1988,19 @@ export async function buildServer(config: ViewerServerConfig) {
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
   });
 
-  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun, createGitHubIssue };
+  // Test helpers for direct mutex control (used only in tests)
+  const __test__ = {
+    /** Acquire the sonar token mutex for the given issue. Returns release function. */
+    acquireSonarTokenMutex: async (issueRef: string): Promise<{ release: () => void }> => {
+      const acquired = await acquireSonarTokenMutex(issueRef);
+      if (!acquired) {
+        throw new Error('Failed to acquire sonar token mutex (timeout)');
+      }
+      return { release: () => releaseSonarTokenMutex(issueRef) };
+    },
+  };
+
+  return { app, dataDir, repoRoot, workflowsDir, promptsDir, allowRemoteRun, createGitHubIssue, __test__ };
 }
 
 export async function startServer(config: ViewerServerConfig): Promise<void> {

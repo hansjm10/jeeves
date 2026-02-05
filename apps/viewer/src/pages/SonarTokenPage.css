@@ -1,0 +1,178 @@
+/* SonarTokenPage styles */
+/* Uses shared design tokens from styles/tokens.css */
+
+.sonar-token-page {
+  padding: var(--space-4);
+  height: 100%;
+  overflow-y: auto;
+}
+
+.sonar-token-empty,
+.sonar-token-loading,
+.sonar-token-error {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.sonar-token-error .btn {
+  margin-top: var(--space-4);
+}
+
+/* Status Section */
+.sonar-token-status-section {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+}
+
+.sonar-token-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+}
+
+.sonar-token-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sonar-token-status-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sonar-token-status-value {
+  font-size: 14px;
+}
+
+.sonar-token-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sonar-token-badge.configured {
+  background: rgba(var(--color-accent-green-rgb, 34, 197, 94), 0.15);
+  color: var(--color-accent-green);
+}
+
+.sonar-token-badge.not-configured {
+  background: rgba(var(--color-text-muted-rgb, 128, 128, 128), 0.15);
+  color: var(--color-text-muted);
+}
+
+.sonar-token-last-error {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sonar-token-last-error .errorBox {
+  margin-top: var(--space-2);
+  font-size: 13px;
+}
+
+/* Warning Banner */
+.sonar-token-warning {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(var(--color-accent-amber-rgb, 245, 158, 11), 0.1);
+  border: 1px solid rgba(var(--color-accent-amber-rgb, 245, 158, 11), 0.3);
+  border-radius: var(--radius-md);
+  color: var(--color-accent-amber);
+  font-size: 13px;
+}
+
+/* Form Section */
+.sonar-token-form-section {
+  margin-bottom: var(--space-6);
+}
+
+.sonar-token-form-section .label {
+  margin-bottom: var(--space-4);
+}
+
+.sonar-token-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.sonar-token-actions .btn.danger {
+  background: var(--color-accent-red);
+  color: white;
+}
+
+.sonar-token-actions .btn.danger:hover:not(:disabled) {
+  background: var(--color-accent-red);
+  opacity: 0.9;
+}
+
+/* Help Section */
+.sonar-token-help {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sonar-token-help summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.sonar-token-help summary:hover {
+  color: var(--color-text);
+}
+
+.sonar-token-help-content {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.sonar-token-help-content ul {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.sonar-token-help-content li {
+  margin-bottom: var(--space-2);
+}
+
+.sonar-token-help-content code {
+  padding: var(--space-1) var(--space-2);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .sonar-token-page {
+    padding: var(--space-3);
+  }
+
+  .sonar-token-status-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sonar-token-actions {
+    flex-direction: column;
+  }
+
+  .sonar-token-actions .btn {
+    width: 100%;
+  }
+}

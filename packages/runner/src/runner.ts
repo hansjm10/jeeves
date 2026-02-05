@@ -22,6 +22,14 @@ function truncate(input: string, maxChars: number): string {
   return input.slice(0, maxChars);
 }
 
+function envInt(name: string): number | null {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
   promptPath: string;
@@ -67,6 +75,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
         .split(',')
         .map((t) => t.trim())
         .filter(Boolean);
+      const timeoutMs = envInt('JEEVES_PRUNER_TIMEOUT_MS') ?? 30_000;
 
       pipeline.addHook(
         new PrunerHook({
@@ -74,6 +83,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
           enabled: true,
           targetTools,
           query,
+          timeoutMs,
         }),
       );
     }

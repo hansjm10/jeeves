@@ -14,7 +14,7 @@ describe('PrunerHook (integration)', () => {
       enabled: true,
       targetTools: ['Read'],
       query: 'Keep only the IMPORTANT line.',
-      timeoutMs: 15_000,
+      timeoutMs: 30_000,
     });
 
     const original = [
@@ -34,4 +34,3 @@ describe('PrunerHook (integration)', () => {
     expect(out.content.length).toBeLessThanOrEqual(original.length);
   });
 });
-

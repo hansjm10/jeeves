@@ -57,6 +57,7 @@ Environment variables:
 - `JEEVES_PRUNER_URL`: pruner service URL (default: `http://localhost:8000/prune`)
 - `JEEVES_PRUNER_TARGET_TOOLS`: comma-separated tool names to prune (default: `Read,Bash,Grep,command_execution`)
 - `JEEVES_PRUNER_QUERY`: override the pruning query (default: current phase prompt, truncated)
+- `JEEVES_PRUNER_TIMEOUT_MS`: request timeout in milliseconds (default: `30000`)
 
 ## Provider defaults
 

@@ -53,7 +53,7 @@ export class PrunerHook implements EventHook {
     if (!event.content) return event;
 
     const controller = new AbortController();
-    const timeoutMs = this.opts.timeoutMs ?? 8000;
+    const timeoutMs = this.opts.timeoutMs ?? 30_000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(this.opts.prunerUrl, {
@@ -83,4 +83,3 @@ export class PrunerHook implements EventHook {
     }
   }
 }
-

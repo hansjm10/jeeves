@@ -64,7 +64,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `run:mcp_pruner_disabled` | MCP pruner server is not configured for this run; agents use provider-native tools only. | `JEEVES_PRUNER_ENABLED=false`, or runner cannot build a valid `mcpServers` config. |
 | `run:mcp_pruner_starting` | Provider starts `@jeeves/mcp-pruner` as a stdio MCP server using runner-provided `{ command, args, env }` config. | `run:init` decides MCP pruner is enabled and injects `mcpServers`. |
 | `run:mcp_pruner_running` | MCP pruner server is available to the agent (provider successfully spawned/connected). | Provider successfully initializes MCP servers for the run. |
-| `run:mcp_pruner_degraded` | MCP pruner was enabled but is now unavailable; it is disabled for the remainder of this run. | Provider reports MCP server failure (spawn/connect failure or unexpected exit). |
+| `run:mcp_pruner_degraded` | MCP pruner was enabled but is now unavailable; it is disabled for the remainder of this run. | Provider reports MCP server failure after successful startup (unexpected exit or runtime unavailability). |
 | `run:shutdown` | Runner ends the provider phase and releases resources. | The provider phase ends (success, failure, or cancel). |
 | `req:received` | MCP server accepts an incoming tool request and assigns `request_id`. | A client connects and submits an MCP request. |
 | `req:validating` | MCP server validates tool name and arguments, applies defaults, and normalizes inputs. | `req:received` begins processing. |
@@ -129,7 +129,10 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
   - Runner: detects MCP failures via provider-reported spawn/connect errors or tool-call failures.
   - Server: detects client disconnects via socket close; treats subprocess failures as tool errors.
 - **Recovery state**:
-  - Within the same run: runner transitions to `run:mcp_pruner_degraded` and continues the run with MCP pruner tools unavailable.
+  - Within the same run:
+    - Spawn/connect failure during `run:mcp_pruner_starting` -> `run:mcp_pruner_disabled`.
+    - Failure after successful startup (`run:mcp_pruner_running`) -> `run:mcp_pruner_degraded`.
+    - In both cases, the run continues with MCP pruner tools unavailable.
   - On a subsequent run (fresh process): runner always restarts from `run:init` and attempts `run:mcp_pruner_starting` again if enabled.
   - Per-request: client retries by issuing a new MCP request (new `request_id`); there is no in-request replay after a process crash.
 - **Cleanup**:

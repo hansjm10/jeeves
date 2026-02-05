@@ -353,6 +353,22 @@ export class CodexSdkProvider implements AgentProvider {
     args.push('--skip-git-repo-check');
     args.push('--config', 'approval_policy="never"');
 
+    // Wire MCP server configs as --config mcp_servers.* overrides
+    if (options.mcpServers) {
+      for (const [name, serverConfig] of Object.entries(options.mcpServers)) {
+        args.push('--config', `mcp_servers.${name}.command="${serverConfig.command}"`);
+        if (serverConfig.args && serverConfig.args.length > 0) {
+          const argsJson = JSON.stringify([...serverConfig.args]);
+          args.push('--config', `mcp_servers.${name}.args=${argsJson}`);
+        }
+        if (serverConfig.env) {
+          for (const [key, value] of Object.entries(serverConfig.env)) {
+            args.push('--config', `mcp_servers.${name}.env.${key}="${value}"`);
+          }
+        }
+      }
+    }
+
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (typeof value === 'string') env[key] = value;

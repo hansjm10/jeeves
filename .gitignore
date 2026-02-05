@@ -18,6 +18,7 @@ viewer-run.log
 
 # Secrets
 .env.sonarcloud
+.env
 
 # Archive is optional to commit
 # archive/

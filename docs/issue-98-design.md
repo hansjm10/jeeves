@@ -26,6 +26,7 @@ Jeeves agents currently have to ingest full file reads and command outputs, whic
 - **In scope**: New `packages/mcp-pruner` package, MCP tool schemas/contracts for `read`/`bash`/`grep` with optional pruning, runner/provider wiring so both Claude and Codex runs can access the MCP server, and basic developer documentation/config via environment variables.
 - **Out of scope**: Swe-pruner service lifecycle management, persistent per-issue pruning settings, viewer UI/UX work, and broader security hardening beyond existing “trusted local automation” assumptions.
 - **Transport choice (issue-prescribed)**: Implement the MCP server using `@modelcontextprotocol/sdk` with `StdioServerTransport` (stdio). Providers spawn the MCP server via `{ command, args, env }` config.
+- **Tool schema scope (issue-prescribed)**: Tool schemas are a strict match to the issue examples (minimal args + optional `context_focus_question`, text-only outputs). No additional tool arguments or structured/metadata outputs are in scope.
 - **Configuration names (final)**:
   - Runner env: `JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`.
   - Server env: `PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`.
@@ -49,11 +50,11 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
   - Runner: `run:shutdown` (end-of-phase cleanup; no further transitions).
   - Request: `req:invalid_request`, `req:tool_error`, `req:responded`, `req:internal_error` (request is complete; caller must retry with a new request if desired).
 - **Next states for each non-terminal**: Enumerated exhaustively by the **Transitions** table (each non-terminal state only transitions to the listed `To` states).
-- **Transition triggers & side effects**: Each transition’s condition and side effects are fully specified in the **Transitions** table (process management, logging events, response metadata).
+- **Transition triggers & side effects**: Each transition’s condition and side effects are fully specified in the **Transitions** table (process management and diagnostic logging).
 - **Reversibility**: Transitions are **not reversible** within a run/request. “Undo” happens only by starting a new run (runner lifecycle) or issuing a new request (tool pipeline).
 - **Global vs per-state errors**: Per-state errors are listed in **Error Handling**; for states not called out explicitly, the only error path is the global per-request handler (`req:* -> req:internal_error`).
 - **Crash recovery**: Fully specified under **Crash Recovery** (detection signals, recovery state selection, and cleanup steps).
-- **Subprocess contract**: Inputs, writable surface, and failure handling for each subprocess are specified in **Subprocesses**. Subprocess results are collected as `(stdout, stderr, exit_code, duration_ms)` and then optionally transformed by pruning; the final response always includes the raw/pruned payload plus pruning metadata.
+- **Subprocess contract**: Inputs, writable surface, and failure handling for each subprocess are specified in **Subprocesses**. Subprocess results are collected as `(stdout, stderr, exit_code, duration_ms)` and then optionally transformed by pruning; the final response returns either raw or pruned tool output.
 
 ### States
 | State | Description | Entry Condition |
@@ -69,63 +70,62 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:invalid_request` | MCP server rejects the request with a client error; no tool execution occurs. **Terminal (per-request).** | Validation fails (schema/type/range/path rules). |
 | `req:executing_tool` | MCP server executes the underlying operation (`read` file, run `bash`, or run `grep`). | `req:validating` succeeds. |
 | `req:tool_error` | Underlying tool operation fails; MCP server returns a tool error. **Terminal (per-request).** | Tool execution fails (e.g., ENOENT, non-zero exit, timeout). |
-| `req:raw_output_ready` | Raw (unpruned) tool output is available in memory along with exit code/metadata. | `req:executing_tool` completes successfully. |
+| `req:raw_output_ready` | Raw (unpruned) tool output is available in memory. | `req:executing_tool` completes successfully. |
 | `req:prune_check` | MCP server decides whether pruning will be attempted. | `req:raw_output_ready` completes. |
 | `req:calling_pruner` | MCP server calls the configured HTTP pruner endpoint with raw output + `context_focus_question`. | `req:prune_check` determines pruning is eligible. |
 | `req:pruner_error_fallback` | Pruner call failed; MCP server falls back to returning raw output. | Pruner times out, returns non-2xx, or returns an invalid payload. |
-| `req:respond_raw` | MCP server formats and returns raw output (optionally with pruning metadata stating it was skipped/failed). | Pruning is not attempted or pruning failed. |
-| `req:respond_pruned` | MCP server formats and returns pruned output (with metadata indicating pruning applied). | Pruner returns a valid pruned result. |
+| `req:respond_raw` | MCP server formats and returns raw output. | Pruning is not attempted or pruning failed. |
+| `req:respond_pruned` | MCP server formats and returns pruned output. | Pruner returns a valid pruned result. |
 | `req:responded` | MCP response has been successfully written and the request is complete. **Terminal (per-request).** | `req:respond_raw` or `req:respond_pruned` finishes writing. |
 | `req:internal_error` | Unexpected server error; MCP server returns an internal error response. **Terminal (per-request).** | An unhandled exception occurs at any request state. |
 
 ### Transitions
 | From | Event/Condition | To | Side Effects |
 |------|-----------------|-----|--------------|
-| `run:init` | `JEEVES_PRUNER_ENABLED=false` | `run:mcp_pruner_disabled` | Log `mcp_pruner.disabled` (reason=`config_disabled`). |
+| `run:init` | `JEEVES_PRUNER_ENABLED=false` | `run:mcp_pruner_disabled` | Write a diagnostic log message (pruner disabled by config). |
 | `run:init` | `JEEVES_PRUNER_ENABLED=true` and MCP config resolves | `run:mcp_pruner_starting` | Build `mcpServers` config and pass it to the provider (provider owns spawn/connect). |
-| `run:mcp_pruner_starting` | Provider successfully initializes MCP servers | `run:mcp_pruner_running` | Log `mcp_pruner.ready` (server configured). |
-| `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Log `mcp_pruner.start_failed` with error; continue run without MCP. |
-| `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Log `mcp_pruner.degraded`; continue run without MCP. |
+| `run:mcp_pruner_starting` | Provider successfully initializes MCP servers | `run:mcp_pruner_running` | Write a diagnostic log message (pruner available). |
+| `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Write a diagnostic log message (spawn/connect failed); continue run without MCP. |
+| `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Write a diagnostic log message (server failure); continue run without MCP. |
 | `run:mcp_pruner_running` | Provider phase ends (success/fail/cancel) | `run:shutdown` | No explicit server shutdown required by runner (provider owns child process lifecycle). |
-| `run:mcp_pruner_disabled` | Provider phase ends | `run:shutdown` | No-op aside from logging `mcp_pruner.not_running`. |
-| `run:mcp_pruner_degraded` | Provider phase ends | `run:shutdown` | Ensure any remaining child pid is terminated; log `mcp_pruner.shutdown_after_degraded`. |
-| `req:received` | Request accepted | `req:validating` | Assign `request_id`; log `tool.request_received` (tool, request_id). |
-| `req:validating` | Arguments invalid for tool schema | `req:invalid_request` | Return MCP client error; log `tool.request_invalid` (validation_errors). |
-| `req:validating` | Arguments valid | `req:executing_tool` | Normalize args (defaults); log `tool.exec_start` (tool, request_id). |
-| `req:executing_tool` | Underlying operation fails (ENOENT, exit!=0, timeout) | `req:tool_error` | Return tool error; log `tool.exec_failed` (error/exit_code/duration_ms). |
-| `req:executing_tool` | Underlying operation succeeds | `req:raw_output_ready` | Capture raw output + metadata; log `tool.exec_ok` (duration_ms, bytes). |
-| `req:raw_output_ready` | Raw output captured | `req:prune_check` | Compute `raw_bytes` and pruning eligibility inputs. |
-| `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="no_focus_question"`. |
-| `req:prune_check` | Pruning disabled or pruner URL disabled (`PRUNER_URL` empty) | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="disabled_or_unconfigured"`. |
-| `req:prune_check` | Raw output is empty | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="output_empty"`. |
-| `req:prune_check` | `context_focus_question` present and pruning eligible | `req:calling_pruner` | Start pruner timeout timer; log `pruner.call_start` (endpoint, request_id). |
-| `req:calling_pruner` | HTTP 200 + valid pruned payload | `req:respond_pruned` | Set `pruning.attempted=true` and `pruning.applied=true`; log `pruner.call_ok` (duration_ms, pruned_bytes). |
-| `req:calling_pruner` | Timeout, network error, non-2xx, or invalid payload | `req:pruner_error_fallback` | Set `pruning.attempted=true`, `pruning.applied=false`, `pruning.fallback=true`, `pruning.reason="pruner_error"`, and `pruning.error.code`; log `pruner.call_failed` (reason, duration_ms). |
-| `req:pruner_error_fallback` | Fallback chosen | `req:respond_raw` | Return raw output with the pruning metadata set above (include error message). |
-| `req:respond_raw` | Response serialized and written | `req:responded` | Return raw output + pruning metadata; log `tool.respond_ok` (mode=`raw`). |
-| `req:respond_pruned` | Response serialized and written | `req:responded` | Return pruned output + pruning metadata; log `tool.respond_ok` (mode=`pruned`). |
-| `req:*` | Unhandled exception anywhere in pipeline | `req:internal_error` | Return MCP internal error; log `tool.internal_error` with stack/request_id/tool. |
+| `run:mcp_pruner_disabled` | Provider phase ends | `run:shutdown` | No-op aside from a diagnostic log message (pruner not running). |
+| `run:mcp_pruner_degraded` | Provider phase ends | `run:shutdown` | Ensure any remaining child pid is terminated; write a diagnostic log message. |
+| `req:received` | Request accepted | `req:validating` | Assign `request_id`; write a diagnostic log message. |
+| `req:validating` | Arguments invalid for tool schema | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
+| `req:validating` | Arguments valid | `req:executing_tool` | Normalize args (defaults); write a diagnostic log message. |
+| `req:executing_tool` | Underlying operation fails (ENOENT, exit!=0) | `req:tool_error` | Return tool error; write a diagnostic log message. |
+| `req:executing_tool` | Underlying operation succeeds | `req:raw_output_ready` | Capture raw output; write a diagnostic log message. |
+| `req:raw_output_ready` | Raw output captured | `req:prune_check` | Determine pruning eligibility. |
+| `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Skip pruning and return raw output. |
+| `req:prune_check` | Pruning disabled or pruner URL disabled (`PRUNER_URL` empty) | `req:respond_raw` | Skip pruning and return raw output. |
+| `req:prune_check` | Raw output is empty | `req:respond_raw` | Skip pruning and return raw output. |
+| `req:prune_check` | `context_focus_question` present and pruning eligible | `req:calling_pruner` | Call the pruner endpoint (best-effort); write a diagnostic log message. |
+| `req:calling_pruner` | HTTP 200 + valid pruned payload | `req:respond_pruned` | Return pruned output. |
+| `req:calling_pruner` | Timeout, network error, non-2xx, or invalid payload | `req:pruner_error_fallback` | Write a diagnostic log message; fall back to raw output. |
+| `req:pruner_error_fallback` | Fallback chosen | `req:respond_raw` | Return raw output. |
+| `req:respond_raw` | Response serialized and written | `req:responded` | Return raw output. |
+| `req:respond_pruned` | Response serialized and written | `req:responded` | Return pruned output. |
+| `req:*` | Unhandled exception anywhere in pipeline | `req:internal_error` | Return MCP internal error; write a diagnostic log message. |
 
 ### Error Handling
 | State | Error | Recovery State | Actions |
 |-------|-------|----------------|---------|
-| `run:init` | Invalid env/config values (e.g., non-integer timeouts) | `run:mcp_pruner_disabled` | Log `mcp_pruner.config_invalid`; continue run without MCP pruner. |
-| `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Log `mcp_pruner.spawn_error`; continue run without MCP pruner. |
-| `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Log `mcp_pruner.degraded`; continue run without MCP pruner. |
-| `req:received` | Request body parse error | `req:invalid_request` | Return MCP client error; log `tool.request_parse_failed`. |
-| `req:validating` | Schema/type/range validation errors | `req:invalid_request` | Return MCP client error with field errors; log `tool.request_invalid`. |
-| `req:executing_tool` | File read error (ENOENT, EACCES) | `req:tool_error` | Return tool error; log `tool.exec_failed` (error_code). |
-| `req:executing_tool` | Subprocess timeout for `bash`/`grep` | `req:tool_error` | Kill subprocess; return tool error; log `tool.exec_timeout` (timeout_ms). |
-| `req:calling_pruner` | HTTP timeout | `req:pruner_error_fallback` | Abort request; log `pruner.timeout`; include `pruning.error.code="timeout"` in metadata. |
-| `req:calling_pruner` | HTTP non-2xx / network error | `req:pruner_error_fallback` | Log `pruner.http_error`; include `pruning.error.code="http_error"` in metadata. |
-| `req:calling_pruner` | Invalid pruner response (bad JSON / missing fields) | `req:pruner_error_fallback` | Log `pruner.invalid_response`; include `pruning.error.code="invalid_response"` in metadata. |
-| `req:respond_raw` / `req:respond_pruned` | Response serialization/write error | `req:internal_error` | Log `tool.respond_failed`; close connection. |
-| `req:*` | Any unhandled exception | `req:internal_error` | Log `tool.internal_error` with stack; return MCP internal error. |
+| `run:init` | Invalid env/config values | `run:mcp_pruner_disabled` | Write a diagnostic log message; continue run without MCP pruner. |
+| `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Write a diagnostic log message; continue run without MCP pruner. |
+| `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Write a diagnostic log message; continue run without MCP pruner. |
+| `req:received` | Request body parse error | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
+| `req:validating` | Schema/type/range validation errors | `req:invalid_request` | Return MCP client error with field errors; write a diagnostic log message. |
+| `req:executing_tool` | File read error (ENOENT, EACCES) | `req:tool_error` | Return tool error; write a diagnostic log message. |
+| `req:calling_pruner` | Pruner timeout | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
+| `req:calling_pruner` | Pruner non-2xx / network error | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
+| `req:calling_pruner` | Invalid pruner response | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
+| `req:respond_raw` / `req:respond_pruned` | Response serialization/write error | `req:internal_error` | Write a diagnostic log message; close connection. |
+| `req:*` | Any unhandled exception | `req:internal_error` | Write a diagnostic log message; return MCP internal error. |
 
 ### Crash Recovery
 - **Detection**:
   - Runner: detects MCP failures via provider-reported spawn/connect errors or tool-call failures.
-  - Server: detects client disconnects via socket close; detects hung subprocesses via per-tool timeouts.
+  - Server: detects client disconnects via socket close; treats subprocess failures as tool errors.
 - **Recovery state**:
   - Within the same run: runner transitions to `run:mcp_pruner_degraded` and continues the run with MCP pruner tools unavailable.
   - On a subsequent run (fresh process): runner always restarts from `run:init` and attempts `run:mcp_pruner_starting` again if enabled.
@@ -138,8 +138,8 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | Subprocess | Receives | Can Write | Failure Handling |
 |------------|----------|-----------|------------------|
 | `@jeeves/mcp-pruner` (server) | Run config via env (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`). | Writes logs to stderr only; stdout is reserved for MCP protocol. | Provider spawn/connect failure -> `run:mcp_pruner_disabled`; unexpected exit during run -> `run:mcp_pruner_degraded`. |
-| `bash` tool command | `cmd`, `cwd` (default runner cwd), `env` (sanitized merge), `timeout_ms`. | May write to filesystem as a normal shell command would (trusted local automation). | Timeout -> kill process and return `req:tool_error`; non-zero exit -> `req:tool_error`; stdout/stderr captured into raw output. |
-| `grep` tool command (`rg` or equivalent) | `pattern`, `paths`, `cwd`, `timeout_ms`, `max_matches`/`max_bytes` limits. | None (read-only scan), aside from process stdout/stderr. | Timeout/non-zero exit -> `req:tool_error` (include stderr); large output should be truncated before optional pruning eligibility check. |
+| `bash` tool command | `command` (runs in server root dir). | May write to filesystem as a normal shell command would (trusted local automation). | Non-zero exit -> `req:tool_error`; stdout/stderr captured into raw output text. |
+| `grep` tool command (`rg` or equivalent) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Non-zero tool exit -> `req:tool_error` (include stderr if available). |
 
 ## 3. Interfaces
 
@@ -161,7 +161,7 @@ Supported methods:
 |-----------|--------------------|--------|--------|--------|
 | `initialize` | JSON-RPC request | `{ protocolVersion: string, clientInfo?: { name: string, version?: string }, capabilities?: object }` | `{ protocolVersion: string, serverInfo: { name: "@jeeves/mcp-pruner", version: string }, capabilities: { tools: { listChanged?: false } }, jeeves: { schemaVersion: 1 } }` | JSON-RPC `-32602` if required fields missing/invalid |
 | `tools/list` | JSON-RPC request | `{}` or omitted | `{ tools: Array<{ name: "read" | "bash" | "grep", description: string, inputSchema: JSONSchema }> }` | JSON-RPC `-32601` for unknown method; `-32602` for invalid params |
-| `tools/call` | JSON-RPC request | `{ name: "read" | "bash" | "grep", arguments: object }` | `{ content: Array<{ type: "text", text: string }>, structuredContent?: object, isError?: boolean }` | JSON-RPC `-32602` invalid params; tool-level errors return `result.isError=true` (not JSON-RPC errors) |
+| `tools/call` | JSON-RPC request | `{ name: "read" | "bash" | "grep", arguments: object }` | `{ content: Array<{ type: "text", text: string }>, isError?: boolean }` | JSON-RPC `-32602` invalid params; tool-level errors return `result.isError=true` (not JSON-RPC errors) |
 
 #### Invalid params (`-32602`) contract (deterministic)
 The server does **not** treat SDK-generated error strings as a public contract. All request/param validation failures for supported methods are mapped to the following JSON-RPC error shape:
@@ -178,113 +178,65 @@ The server does **not** treat SDK-generated error strings as a public contract. 
     - `message`: equals `code` (stable, implementation-defined; avoids version-dependent wording)
     - Ordering: `issues` are sorted lexicographically by `(path, code)` before being returned
 
-### MCP Tools
-Each tool accepts an optional `context_focus_question` to request output pruning. When provided and pruning is configured+eligible, the server calls the pruner and returns pruned output with explicit metadata; otherwise it returns raw output with `pruning.applied=false`.
+### MCP Tools (issue-aligned)
+Tool schemas are a **strict match** to the GitHub issue examples:
+- Only `read.file_path`, `bash.command`, `grep.pattern` + optional `grep.path`
+- `context_focus_question` is optional for all tools
+- No additional tool arguments (timeouts, output limits, path lists, flags, etc.)
+- No structured/metadata outputs are part of the public contract
 
-**Common fields**
+All tools return `result.content` with a single `{ type: "text", text: string }` item. On tool execution failure, the tool returns `result.isError=true` and includes a human-readable error string in `content[0].text`. Parameter validation failures remain JSON-RPC `-32602` per the deterministic contract above.
+
+**Common field**
 - `context_focus_question` (optional, `string`): Non-empty question used to focus/prune the raw tool output.
-- `max_output_bytes` (optional, `number`): If provided, raw tool output is truncated to at most this many UTF-8 bytes **before** pruning eligibility is evaluated.
 
 Tool: `read`
 - Arguments:
-  - `file_path` (required, `string`): Path to read. Resolved against the server root dir; must resolve to a location within the root dir. (Issue-aligned name; replaces prior `path`.)
-  - `encoding` (optional, `"utf-8"` only; default `"utf-8"`).
-  - `max_output_bytes` (optional, `number`): Output truncation cap (see common fields).
+  - `file_path` (required, `string`): Absolute or relative path to the file to read (see **Tool argument validation**).
   - `context_focus_question` (optional, `string`).
-- Success `structuredContent`:
-  - `{ tool: "read", file_path: string, encoding: "utf-8", content: string, truncated: boolean, bytes: number, duration_ms: number, pruning: PruningMetadata }`
-- Tool error `structuredContent` (`isError=true`):
-  - `{ tool: "read", error: { code: "not_found" | "permission_denied" | "invalid_path" | "io_error", message: string }, pruning: PruningMetadata }`
+- Output text: raw file contents (UTF-8), or pruned contents when pruning succeeds.
 
 Tool: `bash`
 - Arguments:
-  - `command` (required, `string`): Shell command to run (executed via the platform shell; default `bash -lc` on POSIX). (Issue-aligned name; replaces prior `cmd`.)
-  - `cwd` (optional, `string`): Working directory. Resolved against server root dir; must stay within root dir.
-  - `env` (optional, `Record<string, string>`): Environment overrides merged over the server process env after sanitization.
-  - `timeout_ms` (optional, `number`): Hard timeout for the subprocess.
-  - `max_output_bytes` (optional, `number`): Output truncation cap (see common fields).
+  - `command` (required, `string`): Shell command to run.
   - `context_focus_question` (optional, `string`).
-- Success `structuredContent`:
-  - `{ tool: "bash", command: string, cwd: string, stdout: string, stderr: string, exit_code: number, timed_out: boolean, truncated: boolean, duration_ms: number, pruning: PruningMetadata }`
-- Tool error `structuredContent` (`isError=true`):
-  - `{ tool: "bash", error: { code: "timeout" | "spawn_error" | "nonzero_exit" | "invalid_cwd", message: string, exit_code?: number }, stdout?: string, stderr?: string, pruning: PruningMetadata }`
+- Output text:
+  - Captured `stdout`, plus `\\n` + captured `stderr` if `stderr` is non-empty.
+  - Non-zero exit returns `isError=true` and includes the same captured text.
 
 Tool: `grep`
 - Arguments:
-  - `pattern` (required, `string`): Pattern to search for (regex by default).
-  - `path` (optional, `string`): Single file/dir path to search. (Issue-aligned name; default `"."`.) Mutually exclusive with `paths`.
-  - `paths` (optional, `string[]`): One or more file/dir paths to search. Each resolved against server root dir; all must stay within root dir.
-  - `cwd` (optional, `string`): Working directory for the grep command (same constraints as `bash.cwd`).
-  - `fixed_string` (optional, `boolean`; default `false`): If true, pattern is treated as a literal.
-  - `case_sensitive` (optional, `boolean`; default `true`).
-  - `timeout_ms` (optional, `number`).
-  - `max_matches` (optional, `number`): Hard cap on match count returned.
-  - `max_output_bytes` (optional, `number`): Output truncation cap (see common fields).
+  - `pattern` (required, `string`): Pattern to search for (regex).
+  - `path` (optional, `string`): File/dir path to search. Defaults to `"."` (see **Tool argument validation**).
   - `context_focus_question` (optional, `string`).
-- Success `structuredContent`:
-  - `{ tool: "grep", pattern: string, paths: string[], matches: Array<{ path: string, line: number, column: number | null, text: string }>, match_count: number, truncated: boolean, duration_ms: number, pruning: PruningMetadata }`
-- Tool error `structuredContent` (`isError=true`):
-  - `{ tool: "grep", error: { code: "timeout" | "spawn_error" | "invalid_path" | "rg_error", message: string, exit_code?: number }, pruning: PruningMetadata }`
+- Output text: line-oriented search results (e.g., `path:line:match`), as produced by the underlying engine.
 
 **Execution strategy (preferred `rg`, deterministic fallback)**
 - Engine selection:
   1. Attempt `rg` from `PATH`.
   2. If `rg` is not executable / spawn fails with `ENOENT`, fall back to system `grep`.
-- Preferred (`rg`) command (machine-parseable output):
-  - Base args: `rg --json`
-  - Add `-F` when `fixed_string=true`
-  - Add `-i` when `case_sensitive=false`
-  - Always pass `--` then resolved search paths derived from `grep.paths` or `[grep.path ?? "."]`
-  - Parse `--json` events and emit one `matches[]` entry per match (first submatch start used for `column` when present).
-  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error with `code="rg_error"` and `exit_code=2`.
-- Fallback (`grep`) command (line-oriented output):
-  - Base args: `grep -R -n -H`
-  - Use `-F` when `fixed_string=true`, else `-E` (POSIX ERE)
-  - Add `-i` when `case_sensitive=false`
-  - Always pass `--` then resolved search paths derived from `grep.paths` or `[grep.path ?? "."]`
-  - Output parsing: parse each line as `path:line:text` (split on the first two `:`); `column` is `indexOf(pattern)+1` when `fixed_string=true`, otherwise `null`.
-  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error with `code="rg_error"` and `exit_code=2`.
-- Limits (both engines):
-  - `timeout_ms`: kill the child process and return a tool error with `code="timeout"`.
-  - `max_matches`: stop reading once `max_matches` matches are collected, terminate the child process, and set `truncated=true`.
-  - `max_output_bytes`: cap the UTF-8 bytes across returned `matches[].text` (stop early, terminate process, and set `truncated=true`).
-
-Type: `PruningMetadata`
-- Shape:
-  - `{ attempted: boolean, applied: boolean, fallback: boolean, reason?: "disabled_or_unconfigured" | "no_focus_question" | "too_large" | "output_empty" | "pruner_error", raw_bytes: number, pruned_bytes?: number, pruner_duration_ms?: number, error?: { code: "timeout" | "http_error" | "invalid_response", message: string } }`
-- Semantics:
-  - `attempted=true` iff an outbound `swe-pruner` HTTP request was made.
-  - `applied=true` iff pruning succeeded and the response payload was applied to the tool output.
-  - `fallback=true` iff pruning was attempted but raw output was returned (always implies `attempted=true` and `applied=false`).
-  - `reason` is set whenever `applied=false` to explain why pruning was not applied (including skip reasons like `no_focus_question` and failure reasons like `pruner_error`).
-  - `raw_bytes` is measured after any tool-level `max_output_bytes` truncation (i.e., bytes that were eligible for pruning).
-  - `pruned_bytes` is present only when `applied=true`.
-  - `error` is present only when `reason="pruner_error"` (and `fallback=true`).
+- Preferred (`rg`) command:
+  - `rg -n -- <pattern> <resolved_path>`
+  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success** (empty output for `1`); `2` is a tool error.
+- Fallback (`grep`) command:
+  - `grep -R -n -H -E -- <pattern> <resolved_path>`
+  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error.
 
 ### Outbound HTTP (swe-pruner)
-The MCP server makes a best-effort HTTP call when pruning is requested.
+The MCP server makes a best-effort HTTP call when `context_focus_question` is provided and pruning is enabled (`PRUNER_URL` is set and non-empty).
 
 - **URL**: `PRUNER_URL` (full URL, including path)
 - **Method**: `POST`
 - **Headers**: `Content-Type: application/json`
 - **Timeout**: `PRUNER_TIMEOUT_MS` (defaults to a safe value; see **Validation Rules**)
-- **Request body (issue-aligned adapter)**: `{ code: string, query: string }`
-  - Tool → `code` mapping (after any tool-level `max_output_bytes` truncation):
-    - `read`: `code = content`
-    - `bash`: `code = stdout` if `stdout` is non-empty, else `code = stderr` (the pruned output replaces the same field used as input)
-    - `grep`: `code = matches` rendered as newline-separated `path:line:column:text` lines (column omitted when `null`)
+- **Request body (issue-aligned)**: `{ code: string, query: string }`
+  - `code` is the raw tool output text prior to pruning (the same text that would be returned without pruning).
   - `query = context_focus_question.trim()`
 - **Success response (200)**:
   - Response MUST be JSON, and the pruned text is read from the first string field present in this order: `pruned_code`, then `content`, then `text`.
   - If none of these fields is present as a string, treat as `invalid_response`.
-- **Applying the pruned text**:
-  - `read`: replace `structuredContent.content` with the pruned text.
-  - `bash`: replace the chosen stream (`stdout` or `stderr`) with the pruned text.
-  - `grep`: replace `structuredContent.matches` by parsing the pruned text back into `matches[]` using the same `path:line:column?:text` rules; if parsing fails, treat as `invalid_response` and fall back to the raw matches.
-- **Error mapping (all treated as pruning failure with raw output returned)**:
-  - Timeout → `pruning.reason="pruner_error"`, `pruning.fallback=true`, `pruning.error.code="timeout"`
-  - Network error / non-2xx → `pruning.error.code="http_error"`
-  - JSON parse error / missing pruned field / grep re-parse failure → `pruning.error.code="invalid_response"`
+- **Applying the pruned text**: replace the tool output text with the pruned text.
+- **Error mapping**: timeout/network/non-2xx/invalid response all return the raw tool output text (best-effort fallback).
 
 ### CLI Commands (if applicable)
 | Command | Arguments | Options | Output |
@@ -295,23 +247,12 @@ The MCP server makes a best-effort HTTP call when pruning is requested.
 - Providers spawn the server using a `ProviderRunOptions.mcpServers` entry shaped like `{ command, args, env }` and connect over stdio.
 - The `mcp-pruner` process MUST keep stdout reserved for MCP protocol messages; all diagnostics go to stderr.
 
-### Events (if applicable)
-Events are emitted as structured log lines (default JSON) on the MCP server stderr. Each event is a single JSON object:
-- `{ ts: string, level: "debug" | "info" | "warn" | "error", event: string, request_id?: string, data?: object }`
+### Diagnostics & Logging
+This design does not introduce a new cross-component structured “event” contract. Diagnostics are conventional logs:
+- `@jeeves/mcp-pruner` writes diagnostics to stderr (stdout reserved for MCP protocol).
+- Runner/provider diagnostics (including whether MCP servers were injected/spawned) are emitted by the runner/provider processes themselves.
 
-| Event | Trigger | Payload | Consumers |
-|-------|---------|---------|-----------|
-| `mcp_pruner.disabled` | Server/runner decides pruning server is not enabled for the run | `{ reason: "config_disabled" \| "config_invalid" \| "start_failed" }` | Runner logs; viewer log stream |
-| `mcp_pruner.ready` | Server connects via stdio transport and is ready to serve MCP requests | `{ root: string }` | Runner diagnostics; viewer logs |
-| `mcp_pruner.start_failed` | Server process fails before readiness | `{ message: string }` | Runner; viewer logs |
-| `mcp_pruner.degraded` | Provider detects server exit/unreachability during a run | `{ reason: "exited" \| "unreachable", exit_code?: number, signal?: string }` | Runner; viewer logs |
-| `mcp_pruner.stopped` | Server process exits after the run/phase completes | `{ graceful: boolean, duration_ms: number }` | Runner; viewer logs |
-| `tool.request_invalid` | MCP request fails schema validation | `{ tool?: string, message: string }` | Debugging; viewer logs |
-| `tool.exec_failed` | Tool execution fails (IO/spawn/nonzero exit) | `{ tool: string, code: string, message: string, exit_code?: number }` | Debugging; viewer logs |
-| `tool.exec_timeout` | Tool execution exceeds timeout | `{ tool: string, timeout_ms: number }` | Debugging; viewer logs |
-| `pruner.call_start` | Pruner HTTP call initiated | `{ endpoint: string, tool: string, input_bytes: number }` | Debugging; viewer logs |
-| `pruner.call_ok` | Pruner HTTP call succeeded | `{ tool: string, pruner_duration_ms: number, pruned_bytes: number }` | Debugging; viewer logs |
-| `pruner.call_failed` | Pruner call failed (timeout/http/invalid response) | `{ tool: string, reason: "timeout" \| "http_error" \| "invalid_response", pruner_duration_ms?: number, message?: string }` | Debugging; viewer logs |
+The viewer already captures run logs for both Claude and Codex runs, including stderr/stdout from spawned processes, so no additional forwarding mechanism is required.
 
 ### Configuration & Validation Rules
 
@@ -325,9 +266,9 @@ Events are emitted as structured log lines (default JSON) on the MCP server stde
 **MCP server environment (`mcp-pruner` process)**
 | Field | Type | Constraints | Behavior |
 |-------|------|-------------|----------|
-| `PRUNER_URL` | string | optional; default `http://localhost:8000/prune`; empty string disables pruning | Used for outbound HTTP to `swe-pruner`. If empty, pruning is skipped with `reason="disabled_or_unconfigured"`. When spawned by the Jeeves runner (and enabled), this env var is always set explicitly (default or empty). |
+| `PRUNER_URL` | string | optional; default `http://localhost:8000/prune`; empty string disables pruning | Used for outbound HTTP to `swe-pruner`. If empty, pruning is skipped and tools return raw output. When spawned by the Jeeves runner (and enabled), this env var is always set explicitly (default or empty). |
 | `PRUNER_TIMEOUT_MS` | number (env string) | optional; default `30000`; integer `100..300000` | Timeout for the outbound pruner call. |
-| `MCP_PRUNER_CWD` | string | optional; default process `cwd`; must exist and be a directory | Root directory for resolving relative paths and for executing tool subprocesses. |
+| `MCP_PRUNER_CWD` | string | optional; default process `cwd`; must exist and be a directory | Root directory for resolving relative paths, default working dir for subprocesses, and the allowlist root for absolute-path inputs. |
 
 **Precedence**
 - Runner env vars determine whether MCP is injected and what env is passed to the provider-spawned server.
@@ -340,33 +281,25 @@ To reliably support both monorepo workspace runs and installed-package usage, `@
 3. If neither exists/readable, treat the pruner config as invalid for the run and do not inject `mcpServers`.
 
 **Tool argument validation (MCP request params)**
+Path handling is issue-aligned and consistent across tools:
+- Path inputs may be **absolute or relative**.
+- All paths are resolved to an absolute path using `MCP_PRUNER_CWD` as the root for relative inputs.
+- After resolution (and after resolving symlinks), the final path **must remain within** `MCP_PRUNER_CWD`. If it escapes, validation fails with JSON-RPC `-32602`.
+
 | Field | Type | Constraints | Error |
 |-------|------|-------------|-------|
-| `read.file_path` | string | required; non-empty; no `\\0`; resolves within server root dir (`MCP_PRUNER_CWD`); must refer to a regular file | JSON-RPC `-32602` |
-| `read.encoding` | string | optional; must equal `"utf-8"` | JSON-RPC `-32602` |
+| `read.file_path` | string | required; non-empty; no `\\0`; absolute or relative; resolves within server root dir (`MCP_PRUNER_CWD`); must refer to a regular file | JSON-RPC `-32602` |
 | `read.context_focus_question` | string | optional; if provided must be non-empty after trim; max 1000 chars | JSON-RPC `-32602` |
-| `read.max_output_bytes` | number | optional; integer `1024..10485760` | JSON-RPC `-32602` |
 | `bash.command` | string | required; non-empty; max 50000 chars | JSON-RPC `-32602` |
-| `bash.cwd` | string | optional; resolves within server root dir (`MCP_PRUNER_CWD`); must exist and be a directory | JSON-RPC `-32602` |
-| `bash.env` | object | optional; keys match `/^[A-Z_][A-Z0-9_]*$/`; values max 4000 chars; total entries max 200 | JSON-RPC `-32602` |
-| `bash.timeout_ms` | number | optional; integer `100..300000`; default `30000` | JSON-RPC `-32602` |
 | `bash.context_focus_question` | string | optional; same constraints as `read.context_focus_question` | JSON-RPC `-32602` |
-| `bash.max_output_bytes` | number | optional; integer `1024..10485760` | JSON-RPC `-32602` |
 | `grep.pattern` | string | required; non-empty; max 10000 chars | JSON-RPC `-32602` |
-| `grep.path` | string | optional; if provided resolves within server root dir (`MCP_PRUNER_CWD`) | JSON-RPC `-32602` |
-| `grep.paths` | string[] | optional; length `1..100`; each resolves within server root dir (`MCP_PRUNER_CWD`) | JSON-RPC `-32602` |
-| `grep.cwd` | string | optional; same constraints as `bash.cwd` | JSON-RPC `-32602` |
-| `grep.fixed_string` | boolean | optional | JSON-RPC `-32602` |
-| `grep.case_sensitive` | boolean | optional | JSON-RPC `-32602` |
-| `grep.timeout_ms` | number | optional; integer `100..300000`; default `30000` | JSON-RPC `-32602` |
-| `grep.max_matches` | number | optional; integer `1..5000`; default `500` | JSON-RPC `-32602` |
+| `grep.path` | string | optional; absolute or relative; if provided resolves within server root dir (`MCP_PRUNER_CWD`) | JSON-RPC `-32602` |
 | `grep.context_focus_question` | string | optional; same constraints as `read.context_focus_question` | JSON-RPC `-32602` |
-| `grep.max_output_bytes` | number | optional; integer `1024..10485760` | JSON-RPC `-32602` |
 
 **Validation failure behavior**
 - MCP request validation is **synchronous** (schema/type/range checks) and fails fast with JSON-RPC `error.code=-32602` (invalid params) using the deterministic contract defined above.
 - Tool execution and filesystem checks are **asynchronous** and surface as tool-level errors (`result.isError=true`), not JSON-RPC errors.
-- Pruner call validation is **asynchronous**; any failure results in `pruning.fallback=true` and raw output returned.
+- Pruner call validation is **asynchronous**; any failure returns raw output (best-effort fallback).
 
 ### Provider Wiring (Claude + Codex)
 This section reconciles the provider wiring to match the issue’s expected shape: providers spawn stdio MCP servers from `ProviderRunOptions.mcpServers` entries shaped like `{ command, args, env }`.
@@ -389,7 +322,7 @@ This section reconciles the provider wiring to match the issue’s expected shap
 ### UI Interactions (if applicable)
 | Action | Request | Loading State | Success | Error |
 |--------|---------|---------------|---------|-------|
-| Start a run (existing viewer) | Existing run start flow; runner injects `mcpServers` config and providers spawn `@jeeves/mcp-pruner` via stdio | Viewer shows normal run “in progress” states; tool calls appear as they occur | Viewer logs show `mcp:*/*` tool calls when the agent uses the MCP server | Failures are non-fatal to runs; viewer logs show `mcp_pruner.*` events and the run continues without MCP tools |
+| Start a run (existing viewer) | Existing run start flow; runner injects `mcpServers` config and providers spawn `@jeeves/mcp-pruner` via stdio | Viewer shows normal run “in progress” states; tool calls appear as they occur | Viewer logs show `mcp:*/*` tool calls when the agent uses the MCP server | Failures are non-fatal to runs; viewer logs show diagnostic output from the runner/provider and the `mcp-pruner` stderr stream, and the run continues without MCP tools |
 
 ### Contract Gates (Explicit)
 - **Breaking change**: No. This is a new optional MCP server and new optional tool argument; existing runs continue unchanged when disabled.
@@ -404,7 +337,7 @@ N/A - This feature does not add or modify data schemas.
 ### Inputs From Sections 1–4 (Traceability)
 - **Goals (Section 1)**:
   1. Standalone MCP server package `@jeeves/mcp-pruner` with tools `read`, `bash`, `grep`, each optionally accepting `context_focus_question`.
-  2. When `context_focus_question` is provided, attempt pruning via configured `swe-pruner` HTTP endpoint; on any error/timeout, safely fall back to unpruned output with explicit metadata.
+  2. When `context_focus_question` is provided, attempt pruning via configured `swe-pruner` HTTP endpoint; on any error/timeout, safely fall back to unpruned output.
   3. Integrate into Jeeves runtime so both Claude Agent SDK and Codex runs can use the MCP tools, controlled by an explicit enable/disable switch.
 - **Workflow (Section 2)**:
   - Runner lifecycle states to implement: `run:init → run:mcp_pruner_disabled | run:mcp_pruner_starting → run:mcp_pruner_running → run:mcp_pruner_degraded → run:shutdown` (with best-effort behavior; degraded/disabled must not fail the run).
@@ -417,7 +350,7 @@ N/A - This feature does not add or modify data schemas.
 
 ### Planning Gates (Explicit)
 **Decomposition Gates**
-1. **Smallest independently testable unit**: a single tool handler (e.g., `read`) + its argument validation + its `PruningMetadata` output, verified via unit tests (and optionally a minimal MCP SDK stdio integration test).
+1. **Smallest independently testable unit**: a single tool handler (e.g., `read`) + its argument validation + its pruning fallback behavior, verified via unit tests (and optionally a minimal MCP SDK stdio integration test).
 2. **Dependencies between tasks**: Yes. The MCP server entrypoint (SDK + stdio transport) must exist before end-to-end provider wiring; runner integration depends on the provider spawn config shape.
 3. **Parallelizable tasks**: Yes. Tool handlers can be developed in parallel with runner/provider wiring after the package scaffold exists.
 
@@ -598,4 +531,4 @@ T10 → depends on T1–T9
 - [ ] Start the viewer-server and run a workflow with MCP enabled:
   - `pnpm dev` (in another terminal)
   - Set env `JEEVES_PRUNER_ENABLED=true` for the viewer-server process
-  - Start a run; confirm viewer logs include `mcp_pruner.ready` and subsequent `mcp:*/*` tool calls when the agent uses `read`/`bash`/`grep` with `context_focus_question`.
+  - Start a run; confirm viewer logs show `mcp:*/*` tool calls when the agent uses `read`/`bash`/`grep` with `context_focus_question` and that the spawned `mcp-pruner` stderr output is visible in the run logs.

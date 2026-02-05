@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiJson } from '../api/http.js';
-import type { CreateIssueRequest, CreateIssueResponse, StartRunInput } from '../api/types.js';
+import type { CreateIssueRequest, CreateIssueResponse, SetTaskExecutionRequest, SetTaskExecutionResponse, StartRunInput } from '../api/types.js';
 import { encodePathPreservingSlashes } from '../api/paths.js';
 import { queryKeys } from '../query/queryKeys.js';
 
@@ -71,6 +71,21 @@ export function useSetIssuePhaseMutation(baseUrl: string) {
     mutationFn: async (phase: string) => apiJson(baseUrl, '/api/issue/status', { method: 'POST', body: JSON.stringify({ phase }) }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.workflow(baseUrl) });
+    },
+  });
+}
+
+export function useSetTaskExecutionMutation(baseUrl: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: SetTaskExecutionRequest) =>
+      apiJson<SetTaskExecutionResponse>(baseUrl, '/api/issue/task-execution', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: async () => {
+      // settings are reflected in state snapshots; ensure issue list and workflow re-fetch if needed
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.issues(baseUrl) }),
+        qc.invalidateQueries({ queryKey: queryKeys.workflow(baseUrl) }),
+      ]);
     },
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { validateIterations, ITERATIONS_STORAGE_KEY } from './Sidebar.js';
+import { MAX_PARALLEL_TASKS, validateIterations, validateMaxParallelTasks, ITERATIONS_STORAGE_KEY } from './Sidebar.js';
 
 /**
  * Tests for Sidebar iterations input UI behavior.
@@ -146,6 +146,27 @@ describe('Test: invalid inputs (0, -1, 2.5, abc) show inline error message', () 
     expect(deriveUIState('').iterationsError).toBeNull();
     expect(deriveUIState('5').iterationsError).toBeNull();
     expect(deriveUIState('  10  ').iterationsError).toBeNull();
+  });
+});
+
+describe('validateMaxParallelTasks', () => {
+  it('treats blank input as null (omit from payload)', () => {
+    expect(validateMaxParallelTasks('')).toBeNull();
+    expect(validateMaxParallelTasks('   ')).toBeNull();
+  });
+
+  it('accepts integers in range', () => {
+    expect(validateMaxParallelTasks('1')).toEqual({ value: 1 });
+    expect(validateMaxParallelTasks(String(MAX_PARALLEL_TASKS))).toEqual({ value: MAX_PARALLEL_TASKS });
+    expect(validateMaxParallelTasks('  3  ')).toEqual({ value: 3 });
+  });
+
+  it('rejects non-numeric, non-integer, and out-of-range values', () => {
+    expect(validateMaxParallelTasks('abc')).toEqual({ error: 'Must be a number' });
+    expect(validateMaxParallelTasks('2.5')).toEqual({ error: 'Must be a whole number' });
+    expect(validateMaxParallelTasks('0')).toEqual({ error: `Must be between 1 and ${MAX_PARALLEL_TASKS}` });
+    expect(validateMaxParallelTasks('-1')).toEqual({ error: `Must be between 1 and ${MAX_PARALLEL_TASKS}` });
+    expect(validateMaxParallelTasks(String(MAX_PARALLEL_TASKS + 1))).toEqual({ error: `Must be between 1 and ${MAX_PARALLEL_TASKS}` });
   });
 });
 

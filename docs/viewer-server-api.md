@@ -48,6 +48,8 @@ JSON endpoints:
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`. See [`POST /api/run`](#post-apirun) below.
 - `POST /api/run/stop`: stop the current run. Body: `{ "force"?: boolean }`.
 - `POST /api/issue/status`: update current issue phase. Body: `{ "phase": "design_draft" }`.
+- `GET /api/issue/task-execution`: get current issue task execution settings (parallel/sequential).
+- `POST /api/issue/task-execution`: update current issue task execution settings. Body: `{ "mode": "sequential" | "parallel", "maxParallelTasks"?: number }`.
 - `GET /api/workflow`: returns workflow metadata (phases, current phase, ordering).
 
 Streaming endpoints:
@@ -150,6 +152,7 @@ Request body:
   "provider": "claude",           // optional; "claude" | "codex" | "fake"
   "workflow": "default",          // optional; workflow name
   "max_iterations": 10,           // optional; default 10
+  "max_parallel_tasks": 4,        // optional; integer 1..8 (only used when issue task execution mode is "parallel")
   "inactivity_timeout_sec": 600,  // optional
   "iteration_timeout_sec": 3600   // optional
 }

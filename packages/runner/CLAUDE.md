@@ -81,6 +81,64 @@ pnpm typecheck
 pnpm lint
 ```
 
+## MCP Server Configuration
+
+The runner can optionally spawn stdio MCP servers alongside agent providers. Configuration is driven by environment variables.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JEEVES_PRUNER_ENABLED` | Yes (to enable) | — | Must be exactly `"true"` to enable the MCP pruner server. When not set or any other value, the runner does not pass `mcpServers` to providers. |
+| `JEEVES_PRUNER_URL` | No | `http://localhost:8000/prune` | Forwarded as `PRUNER_URL` to the MCP pruner server. Empty string disables pruning in the server. |
+| `JEEVES_MCP_PRUNER_PATH` | No | Auto-resolved | Explicit path to the mcp-pruner entrypoint JS file. When unset, resolved via `require.resolve('@jeeves/mcp-pruner/dist/index.js')` or workspace fallback at `../../mcp-pruner/dist/index.js`. |
+
+### Server-Side Environment Variables
+
+These are set by the runner in the spawned MCP server process:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRUNER_URL` | `http://localhost:8000/prune` | Full URL of the swe-pruner HTTP endpoint. Empty string disables pruning. |
+| `PRUNER_TIMEOUT_MS` | `30000` | Timeout in milliseconds for pruner HTTP calls (range: 100–300000). |
+| `MCP_PRUNER_CWD` | Run working directory | Working directory used to resolve relative file paths in the MCP pruner `read` tool. |
+
+### MCP Pruner tools/call Example
+
+When enabled, the MCP pruner server exposes `read`, `bash`, and `grep` tools. Example using `read` with `context_focus_question`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "read",
+    "arguments": {
+      "file_path": "src/index.ts",
+      "context_focus_question": "What are the exported functions?"
+    }
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "...pruned or full file contents..."
+      }
+    ]
+  }
+}
+```
+
 ## Conventions
 
 - Providers are async iterables yielding `ProviderEvent`

@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@dagrejs/dagre": "^2.0.3",
+    "@dagrejs/dagre": "^2.0.0",
     "@tanstack/react-query": "^5.66.0",
     "@xyflow/react": "^12.10.0",
     "react": "^18.3.1",

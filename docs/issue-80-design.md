@@ -137,7 +137,78 @@ type IterationEstimate = {
 - **Versioning**: no new API version required for v1. Consumers must treat unknown fields and unknown events as ignorable.
 
 ## 4. Data
-[To be completed in design_data phase]
+
+This feature persists an iteration-based estimate in issue state so the viewer can display it across refreshes/restarts.
+
+**Terminology**
+- `STATE` = the selected issue state directory, i.e. `$JEEVES_DATA_DIR/issues/<owner>/<repo>/<issueNumber>`
+
+### Schema Changes
+| Location | Field | Type | Required | Default | Constraints |
+|----------|-------|------|----------|---------|-------------|
+| `STATE/issue.json` | `estimate` | `IterationEstimate \| null` | no | `null` | If non-null, must satisfy all constraints below |
+| `STATE/issue.json` | `estimate.computed_at` | `string` | yes* | — (invalid ⇒ treat `estimate` as `null`) | ISO-8601 timestamp; required when `estimate` is non-null |
+| `STATE/issue.json` | `estimate.computed_at_iteration` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ 1; required when `estimate` is non-null |
+| `STATE/issue.json` | `estimate.estimated_remaining_iterations` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ 0; required when `estimate` is non-null |
+| `STATE/issue.json` | `estimate.estimated_total_iterations` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ `estimate.computed_at_iteration`; required when `estimate` is non-null |
+| `STATE/issue.json` | `estimate.phase_breakdown_remaining` | `{ phase, iterations, sample_size, method }[]` | yes* | — (invalid ⇒ treat `estimate` as `null`) | required when `estimate` is non-null; each entry constrained below |
+| `STATE/issue.json` | `estimate.phase_breakdown_remaining[].phase` | `string` | yes* | — (invalid ⇒ treat `estimate` as `null`) | non-empty; must be a phase id in the current workflow; must be a “remaining” phase (after `task_decomposition`) |
+| `STATE/issue.json` | `estimate.phase_breakdown_remaining[].iterations` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ 0 |
+| `STATE/issue.json` | `estimate.phase_breakdown_remaining[].sample_size` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ 0 |
+| `STATE/issue.json` | `estimate.phase_breakdown_remaining[].method` | `'median'` | yes* | — (invalid ⇒ treat `estimate` as `null`) | enum: `'median'` |
+| `STATE/issue.json` | `estimate.basis.source` | `'run_archives'` | yes* | — (invalid ⇒ treat `estimate` as `null`) | enum: `'run_archives'` |
+| `STATE/issue.json` | `estimate.basis.total_sample_size` | `number` | yes* | — (invalid ⇒ treat `estimate` as `null`) | integer ≥ 0 |
+
+\* “Required” means required when `estimate` is non-null.
+
+### Field Definitions
+**`estimate`**
+- Purpose: Persist a stable, iteration-count estimate after `task_decomposition` so the viewer can show “estimated remaining/total iterations” without recomputing on every refresh.
+- Set by: Viewer-server orchestration after `task_decomposition` completes (i.e. once tasks are decomposed and the workflow advances past `task_decomposition`).
+- Read by: `GET /api/state` (as `state.estimate`), `GET /api/issue/estimate`, and the `issue-estimate` stream event (viewer Watch UI).
+- References/relationships: `estimate.phase_breakdown_remaining[].phase` must correspond to phase ids in the currently selected workflow; no foreign keys.
+- Deletion/invalidation:
+  - If the issue is reset (phase reset / rerun from scratch): set `estimate` back to `null`.
+  - If the workflow selection changes (and therefore phase ids/order can change): set `estimate` back to `null` and wait to recompute after the next `task_decomposition`.
+- Ordering dependency: The estimate is computed only after tasks are available (post-`task_decomposition`) and before subsequent phases execute, so the UI can show the estimate early in the run.
+
+### Derivation (How the Estimate is Computed)
+The `estimate` payload is **derived** data:
+- Source: historical run archives in `$JEEVES_DATA_DIR/issues/<owner>/<repo>/*/.runs/*/iterations/*/iteration.json` for the same `<owner>/<repo>` and the same workflow name as the active issue.
+- Eligible historical runs:
+  - MUST have a `run.json` with `completed_via_state === true` OR `completed_via_promise === true`
+  - MUST have `exit_code === 0`
+  - MUST have at least 1 `iterations/*/iteration.json`
+- Per-phase sample extraction:
+  - For each eligible run, count iterations per phase by grouping `iteration.json.phase` values.
+  - For each remaining phase (workflow phases strictly after `task_decomposition`), collect the per-run counts into a sample list.
+  - Compute `phase_breakdown_remaining[].iterations` as the **median** of that sample list and set `sample_size` to the sample list length.
+- Availability rules:
+  - If there is no eligible history for the repo+workflow, persist `estimate: null`.
+  - If any remaining phase has `sample_size === 0`, persist `estimate: null` (avoid presenting a misleading “0 iteration” guess).
+- Timing:
+  - Computed on write (once) at the moment `task_decomposition` completes.
+  - Not automatically recomputed when new run archives appear; recomputation occurs only on the next `task_decomposition` for that issue (or if the estimate is explicitly reset to `null` and recomputed).
+- If referenced history is deleted:
+  - If historical `.runs` archives are later deleted, the persisted `estimate` remains readable (it is a cached snapshot), but any future recomputation may produce `estimate: null` due to insufficient samples.
+
+### Migrations
+| Change | Existing Data | Migration | Rollback |
+|--------|---------------|-----------|----------|
+| Add `issue.json.estimate` | Field absent | Treat as `null` (estimate unavailable) until computed | Remove `estimate` field (or set to `null`) |
+
+### Artifacts
+| Artifact | Location | Created | Updated | Deleted |
+|----------|----------|---------|---------|---------|
+| `estimate` (stored inside issue state) | `STATE/issue.json` | Immediately after `task_decomposition` completes and an estimate is available | When recomputed after a subsequent `task_decomposition` for the same issue | Set to `null` on issue reset or workflow change |
+| Archived copies including `estimate` | `STATE/.runs/<run_id>/final-issue.json` and `STATE/.runs/<run_id>/iterations/<n>/issue.json` | Automatically by existing run archiving when `estimate` is present in `STATE/issue.json` | N/A | Never (archives are immutable once written) |
+
+### Artifact Lifecycle
+| Scenario | Artifact Behavior |
+|----------|-------------------|
+| Success | `STATE/issue.json` includes a valid `estimate` object; archived copies capture it when runs are archived |
+| Failure | If estimate computation or validation fails, persist `estimate: null` (do not write partial/invalid objects) and emit a non-blocking `viewer-error` |
+| Crash recovery | Writes to `STATE/issue.json` use atomic JSON writes; on restart, if `estimate` is missing or invalid it is treated as `null` and can be recomputed after the next `task_decomposition` |
 
 ## 5. Tasks
 [To be completed in design_plan phase]

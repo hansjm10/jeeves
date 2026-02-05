@@ -397,7 +397,7 @@ T10 → depends on T1–T9
 | T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`), including issue-aligned `grep` exit-code-2 handling (error only when stderr is non-empty; otherwise `stdout` or `(no matches found)`). |
 | T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server identifies as `name="mcp-pruner"`, `version="1.0.0"`, returns `-32602` with `message="Invalid params"`, and runs over stdio with stderr-only diagnostics. |
 | T5 | Extend runner options | Add `McpServerConfig` and `mcpServers` to `ProviderRunOptions` so providers can spawn MCP servers. | `packages/runner/src/provider.ts` | Providers can receive `mcpServers?: Record<string, { command, args?, env? }>` without type errors. |
-| T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts`, `packages/runner/src/runner.ts` | When `JEEVES_PRUNER_ENABLED === "true"`, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
+| T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`, including explicit type/plumbing updates on runner params. | `packages/runner/src/mcpConfig.ts`, `packages/runner/src/runner.ts` | When `JEEVES_PRUNER_ENABLED === "true"`, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path, and `runner.ts` explicitly plumbs `mcpServers` through `RunPhaseParams`, `RunWorkflowParams`, and `RunSinglePhaseParams`. |
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
 | T8 | Codex provider wiring | Convert `options.mcpServers` into Codex CLI `--config mcp_servers.*` overrides for stdio servers. | `packages/runner/src/providers/codexSdk.ts` | Codex provider sets `mcp_servers.<name>.command/args/env` (no `url` / `streamable_http`). |
 | T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `packages/runner/CLAUDE.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
@@ -489,6 +489,7 @@ T10 → depends on T1–T9
   2. When `JEEVES_PRUNER_ENABLED === "true"`, runner passes `mcpServers.pruner={ command: "node", args: [<mcp-pruner path>], env: { PRUNER_URL, MCP_PRUNER_CWD } }` where:
      - `PRUNER_URL` is always set (default `http://localhost:8000/prune` when `JEEVES_PRUNER_URL` is unset; `""` disables pruning).
      - `<mcp-pruner path>` is either `JEEVES_MCP_PRUNER_PATH` or the default resolution described in Section 3.
+  3. `packages/runner/src/runner.ts` explicitly adds/uses `mcpServers` plumbing in `RunPhaseParams`, `RunWorkflowParams`, and `RunSinglePhaseParams`, and passes the resolved value into `provider.run(...)`.
 - Dependencies: T1, T5
 - Verification: `pnpm typecheck` (and unit tests if added)
 
@@ -548,9 +549,14 @@ T10 → depends on T1–T9
 - [ ] Existing tests pass: `pnpm test`
 
 ### Post-Implementation Checks
+- [ ] Build passes: `pnpm build`
+- [ ] Build artifact exists: `ls packages/mcp-pruner/dist/index.js`
+- [ ] Build artifact exists: `ls packages/runner/dist/mcpConfig.js`
 - [ ] Types check: `pnpm typecheck`
 - [ ] Lint passes: `pnpm lint`
 - [ ] All tests pass: `pnpm test`
+- [ ] Standalone MCP initialize smoke test passes:
+  - `echo '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"capabilities":{}}}' | node packages/mcp-pruner/dist/index.js 2>&1 | head -5`
 - [ ] New test files added:
   - `packages/mcp-pruner/src/tools/read.test.ts`
   - `packages/mcp-pruner/src/tools/bash.test.ts`

@@ -149,7 +149,7 @@ phases:
       - to: implement_task
         when: status.preCheckPassed == true
     model: gpt-5.3-codex
-    reasoning_effort: high
+    reasoning_effort: xhigh
   prepare_pr:
     type: execute
     provider: claude

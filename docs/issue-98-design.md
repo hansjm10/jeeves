@@ -70,7 +70,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:validating` | MCP server validates tool name and arguments, applies defaults, and normalizes inputs. | `req:received` begins processing. |
 | `req:invalid_request` | MCP server rejects the request with a client error; no tool execution occurs. **Terminal (per-request).** | Validation fails (schema/type rules). |
 | `req:executing_tool` | MCP server executes the underlying operation (`read` file, run `bash`, or run `grep`). | `req:validating` succeeds. |
-| `req:tool_error` | Underlying tool operation fails; MCP server returns an **error text** in a normal tool response. **Terminal (per-request).** | Tool execution fails (e.g., file read error, spawn error, `grep` exit code 2, non-zero `bash` exit code). |
+| `req:tool_error` | Underlying tool operation fails; MCP server returns an **error text** in a normal tool response. **Terminal (per-request).** | Tool execution fails (e.g., file read error, subprocess spawn error, `grep` exit code 2). |
 | `req:raw_output_ready` | Raw (unpruned) tool output is available in memory. | `req:executing_tool` completes successfully. |
 | `req:prune_check` | MCP server decides whether pruning will be attempted. | `req:raw_output_ready` completes. |
 | `req:calling_pruner` | MCP server calls the configured HTTP pruner endpoint with raw output + `context_focus_question`. | `req:prune_check` determines pruning is eligible. |
@@ -94,7 +94,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:received` | Request accepted | `req:validating` | Assign `request_id`; write a diagnostic log message. |
 | `req:validating` | Arguments invalid for tool schema | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
 | `req:validating` | Arguments valid | `req:executing_tool` | Normalize args (defaults); write a diagnostic log message. |
-| `req:executing_tool` | Underlying operation fails (ENOENT, exit!=0) | `req:tool_error` | Return tool error; write a diagnostic log message. |
+| `req:executing_tool` | Underlying operation fails (file read error, subprocess spawn error, or `grep` exit code 2) | `req:tool_error` | Return tool error; write a diagnostic log message. |
 | `req:executing_tool` | Underlying operation succeeds | `req:raw_output_ready` | Capture raw output; write a diagnostic log message. |
 | `req:raw_output_ready` | Raw output captured | `req:prune_check` | Determine pruning eligibility. |
 | `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Skip pruning and return raw output. |
@@ -116,6 +116,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:received` | Request body parse error | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
 | `req:validating` | Schema/type validation errors | `req:invalid_request` | Return MCP client error with field errors; write a diagnostic log message. |
 | `req:executing_tool` | File read error (ENOENT, EACCES) | `req:tool_error` | Return tool error; write a diagnostic log message. |
+| `req:executing_tool` | Subprocess spawn error, or `grep` exit code 2 | `req:tool_error` | Return tool error; write a diagnostic log message. |
 | `req:calling_pruner` | Pruner timeout | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
 | `req:calling_pruner` | Pruner non-2xx / network error | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
 | `req:calling_pruner` | Invalid pruner response | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
@@ -138,7 +139,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | Subprocess | Receives | Can Write | Failure Handling |
 |------------|----------|-----------|------------------|
 | `@jeeves/mcp-pruner` (server) | Run config via env (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`). | Writes logs to stderr only; stdout is reserved for MCP protocol. | Provider spawn/connect failure -> `run:mcp_pruner_disabled`; unexpected exit during run -> `run:mcp_pruner_degraded`. |
-| `bash` tool command | `command` (runs with `cwd=MCP_PRUNER_CWD`). | May write to filesystem as a normal shell command would (trusted local automation). | Exit code is surfaced in the **tool output text** (see Section 3). Non-zero exit transitions to `req:tool_error` but still returns a normal tool response (`result.content[0].text`), not a JSON-RPC error. |
+| `bash` tool command | `command` (runs with `cwd=MCP_PRUNER_CWD`). | May write to filesystem as a normal shell command would (trusted local automation). | Exit code is surfaced in the **tool output text** (see Section 3). Non-zero exit is **not** a tool error (it still transitions to `req:raw_output_ready` and follows the normal prune-check path). Spawn error transitions to `req:tool_error` and returns `Error executing command: <message>` as tool output text. |
 | `grep` tool command (`grep`) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Exit code `0` (matches) -> stdout; `1` (no matches) -> success with `"(no matches found)"`; exit code `2` -> `req:tool_error` and returns `Error: <stderr>` as tool output text. |
 
 ## 3. Interfaces
@@ -173,7 +174,7 @@ Tool schemas are a **strict match** to the GitHub issue examples:
 All tools return `result.content` with a single `{ type: "text", text: string }` item. `result.isError` is **not set** (omitted), including on failures; errors are represented as specific strings in `content[0].text` as described below. Parameter validation failures are JSON-RPC `-32602` (invalid params).
 
 **Common field**
-- `context_focus_question` (optional, `string`): If provided and truthy, triggers a best-effort prune request using the raw tool output as `code` and the question value as `query` (passed verbatim), subject to the per-tool pruning rules below (e.g., `read` does not prune its error string; empty file content is still eligible).
+- `context_focus_question` (optional, `string`): If provided and truthy, triggers a best-effort prune request using the tool’s pruning-candidate text as `code` and the question value as `query` (passed verbatim), subject to the per-tool pruning rules below (e.g., `read` does not prune its error string; empty file content is still eligible; `bash` does not prune the `(no output)` placeholder).
 
 Tool: `read`
 - Arguments:
@@ -189,12 +190,13 @@ Tool: `bash`
   - `command` (required, `string`): Shell command to run.
   - `context_focus_question` (optional, `string`).
 - Output text (issue-aligned; exact markers):
-  - Start with captured `stdout` (may be empty).
-  - If `stderr` is non-empty, append `\\n[stderr]\\n` + captured `stderr`.
-  - If `exit_code !== 0` (including `null`), append `\\n[exit code: <exit_code>]`.
-  - If the final assembled output is empty, return `(no output)` (exact string).
+  - Assemble an `output` string as:
+    - Start with captured `stdout` (may be empty).
+    - If `stderr` is non-empty, append `\\n[stderr]\\n` + captured `stderr`.
+    - If `exit_code !== 0` (including `null`), append `\\n[exit code: <exit_code>]`.
+  - If the assembled `output` is empty, return `(no output)` (exact string).
   - Spawn error: `Error executing command: <error.message>` (exact prefix).
-  - Pruning eligibility: when `context_focus_question` is provided and truthy, pruning is attempted on the **final** tool output text (after applying the `(no output)` placeholder when applicable). Pruning is not attempted for the spawn-error string.
+  - Pruning eligibility: when `context_focus_question` is provided and truthy, pruning is attempted on the assembled `output` **before** the `(no output)` fallback. This matches the issue example: `(no output)` is never pruned. Pruning is not attempted for the spawn-error string.
 
 Tool: `grep`
 - Arguments:
@@ -220,7 +222,7 @@ The MCP server makes a best-effort HTTP call when a tool’s pruning eligibility
 - **Headers**: `Content-Type: application/json`
 - **Timeout**: `PRUNER_TIMEOUT_MS` (defaults to a safe value; see **Validation Rules**)
 - **Request body (issue-aligned)**: `{ code: string, query: string }`
-  - `code` is the raw tool output text prior to pruning (the same text that would be returned without pruning).
+  - `code` is the tool’s pruning-candidate text prior to pruning (per-tool rules above; e.g., `bash` uses the assembled `output` before the `(no output)` fallback).
   - `query = context_focus_question` (passed verbatim; no trimming)
 - **Success response (200)**:
   - Response MUST be JSON, and the pruned text is read from the first string field present in this order: `pruned_code`, then `content`, then `text`.
@@ -443,7 +445,7 @@ T10 → depends on T1–T9
   3. `bash` output semantics match the issue example exactly: append `\\n[stderr]\\n<stderr>` when stderr non-empty; append `\\n[exit code: <code>]` when `code !== 0`; empty output becomes `(no output)`; spawn error is `Error executing command: <message>`.
   4. `grep` uses `grep -rn --color=never <pattern> <path>` with `<path> = arguments.path ?? "."`; exit code `1` returns `(no matches found)`; exit code `2` with non-empty stderr returns `Error: <stderr>`; spawn error is `Error executing grep: <message>`.
   5. Tool results never set `result.isError`; all failures are surfaced as strings in `content[0].text`.
-  6. When `context_focus_question` is provided and truthy, tools attempt pruning via `pruneContent(raw, context_focus_question, config)`; on any pruner failure, they fall back to unpruned output (query passed verbatim).
+  6. When `context_focus_question` is provided and truthy (and the tool’s pruning eligibility conditions are met), tools attempt pruning via `pruneContent(raw, context_focus_question, config)`; on any pruner failure, they fall back to unpruned output (query passed verbatim).
 - Dependencies: T2
 - Verification: `pnpm typecheck` (and tool unit tests if added)
 

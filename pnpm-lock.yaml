@@ -115,8 +115,8 @@ importers:
   packages/runner:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.25
-        version: 0.2.25(zod@4.3.6)
+        specifier: ^0.2.32
+        version: 0.2.32(zod@4.3.6)
       '@jeeves/core':
         specifier: workspace:*
         version: link:../core
@@ -128,8 +128,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.25':
-    resolution: {integrity: sha512-YIP3I40+XSkC3zE1Z8KRQY02VA7UfofFamF1cFrLe7FbtCnjpslyDl9coGBh2DAi9xj2yQcKZZf751jEWpB+dQ==}
+  '@anthropic-ai/claude-agent-sdk@0.2.32':
+    resolution: {integrity: sha512-8AtsSx/M9jxd0ihS08eqa7VireTEuwQy0i1+6ZJX93LECT6Svlf47dPJiAm7JB+BhVMmwTfQeS6x1akIcCfvbQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.0.0
@@ -2471,7 +2471,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.25(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.2.32(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:

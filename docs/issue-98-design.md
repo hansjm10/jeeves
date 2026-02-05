@@ -25,6 +25,10 @@ Jeeves agents currently have to ingest full file reads and command outputs, whic
 ### Boundaries
 - **In scope**: New `packages/mcp-pruner` package, MCP tool schemas/contracts for `read`/`bash`/`grep` with optional pruning, runner/provider wiring so both Claude and Codex runs can access the MCP server, and basic developer documentation/config via environment variables.
 - **Out of scope**: Swe-pruner service lifecycle management, persistent per-issue pruning settings, viewer UI/UX work, and broader security hardening beyond existing “trusted local automation” assumptions.
+- **Configuration names (final)**:
+  - Runner env: `JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`, `JEEVES_MCP_PRUNER_HOST`, `JEEVES_MCP_PRUNER_PORT`.
+  - Server env: `PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`, `MCP_PRUNER_MAX_PRUNE_INPUT_BYTES`.
+  - CLI entry: `mcp-pruner` (provided by `@jeeves/mcp-pruner`).
 
 ---
 
@@ -54,7 +58,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | State | Description | Entry Condition |
 |-------|-------------|-----------------|
 | `run:init` | Runner loads config and decides whether to enable the MCP pruner server for this run. | A workflow run begins (provider about to start a phase). |
-| `run:mcp_pruner_disabled` | MCP pruner server is not available for this run; agents may use provider-native tools only. | `JEEVES_MCP_PRUNER_ENABLED=false`, or runner cannot start the server. |
+| `run:mcp_pruner_disabled` | MCP pruner server is not available for this run; agents may use provider-native tools only. | `JEEVES_PRUNER_ENABLED=false`, or runner cannot start the server. |
 | `run:mcp_pruner_starting` | Runner spawns `@jeeves/mcp-pruner` and waits for readiness. | `run:init` decides MCP pruner is enabled. |
 | `run:mcp_pruner_running` | MCP pruner server is ready; runner advertises MCP endpoint to the provider. | Server reports ready (health check passes) within startup timeout. |
 | `run:mcp_pruner_degraded` | MCP pruner was running but is now unavailable; it is disabled for the remainder of this run. | Runner detects child process exit or repeated connection failures. |
@@ -76,8 +80,8 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 ### Transitions
 | From | Event/Condition | To | Side Effects |
 |------|-----------------|-----|--------------|
-| `run:init` | `JEEVES_MCP_PRUNER_ENABLED=false` | `run:mcp_pruner_disabled` | Log `mcp_pruner.disabled` (reason=`config_disabled`). |
-| `run:init` | `JEEVES_MCP_PRUNER_ENABLED=true` | `run:mcp_pruner_starting` | Spawn subprocess `@jeeves/mcp-pruner` with env/config; start startup timer. |
+| `run:init` | `JEEVES_PRUNER_ENABLED=false` | `run:mcp_pruner_disabled` | Log `mcp_pruner.disabled` (reason=`config_disabled`). |
+| `run:init` | `JEEVES_PRUNER_ENABLED=true` | `run:mcp_pruner_starting` | Spawn subprocess `@jeeves/mcp-pruner` with env/config; start startup timer. |
 | `run:mcp_pruner_starting` | Health check succeeds before timeout | `run:mcp_pruner_running` | Store MCP endpoint in run context; log `mcp_pruner.ready` (host/port). |
 | `run:mcp_pruner_starting` | Spawn fails or health check timeout | `run:mcp_pruner_disabled` | Kill any partially started process; log `mcp_pruner.start_failed` with error/timeout. |
 | `run:mcp_pruner_running` | Child process exits or becomes unreachable (N consecutive connect failures) | `run:mcp_pruner_degraded` | Mark MCP server unavailable for remainder of run; log `mcp_pruner.degraded` with exit code/signal. |
@@ -90,13 +94,14 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:executing_tool` | Underlying operation fails (ENOENT, exit!=0, timeout) | `req:tool_error` | Return tool error; log `tool.exec_failed` (error/exit_code/duration_ms). |
 | `req:executing_tool` | Underlying operation succeeds | `req:raw_output_ready` | Capture raw output + metadata; log `tool.exec_ok` (duration_ms, bytes). |
 | `req:raw_output_ready` | Raw output captured | `req:prune_check` | Compute `raw_bytes` and pruning eligibility inputs. |
-| `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason=no_question`. |
-| `req:prune_check` | Pruning disabled or pruner endpoint missing (`JEEVES_PRUNER_ENDPOINT` unset) | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason=disabled_or_unconfigured`. |
-| `req:prune_check` | Raw output exceeds `max_prune_input_bytes` | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason=input_too_large`. |
+| `req:prune_check` | No `context_focus_question` provided | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="no_focus_question"`. |
+| `req:prune_check` | Pruning disabled or pruner URL disabled (`PRUNER_URL` empty) | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="disabled_or_unconfigured"`. |
+| `req:prune_check` | Raw output is empty | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="output_empty"`. |
+| `req:prune_check` | Raw output exceeds `MCP_PRUNER_MAX_PRUNE_INPUT_BYTES` | `req:respond_raw` | Set `pruning.attempted=false` and `pruning.reason="too_large"`. |
 | `req:prune_check` | `context_focus_question` present and pruning eligible | `req:calling_pruner` | Start pruner timeout timer; log `pruner.call_start` (endpoint, request_id). |
-| `req:calling_pruner` | HTTP 200 + valid pruned payload | `req:respond_pruned` | Set `pruning.applied=true`; log `pruner.call_ok` (duration_ms, pruned_bytes). |
-| `req:calling_pruner` | Timeout, network error, non-2xx, or invalid payload | `req:pruner_error_fallback` | Set `pruning.applied=false`; log `pruner.call_failed` (reason, duration_ms). |
-| `req:pruner_error_fallback` | Fallback chosen | `req:respond_raw` | Set `pruning.attempted=true` and `pruning.fallback=true` (include error summary). |
+| `req:calling_pruner` | HTTP 200 + valid pruned payload | `req:respond_pruned` | Set `pruning.attempted=true` and `pruning.applied=true`; log `pruner.call_ok` (duration_ms, pruned_bytes). |
+| `req:calling_pruner` | Timeout, network error, non-2xx, or invalid payload | `req:pruner_error_fallback` | Set `pruning.attempted=true`, `pruning.applied=false`, `pruning.fallback=true`, `pruning.reason="pruner_error"`, and `pruning.error.code`; log `pruner.call_failed` (reason, duration_ms). |
+| `req:pruner_error_fallback` | Fallback chosen | `req:respond_raw` | Return raw output with the pruning metadata set above (include error message). |
 | `req:respond_raw` | Response serialized and written | `req:responded` | Return raw output + pruning metadata; log `tool.respond_ok` (mode=`raw`). |
 | `req:respond_pruned` | Response serialized and written | `req:responded` | Return pruned output + pruning metadata; log `tool.respond_ok` (mode=`pruned`). |
 | `req:*` | Unhandled exception anywhere in pipeline | `req:internal_error` | Return MCP internal error; log `tool.internal_error` with stack/request_id/tool. |
@@ -114,9 +119,9 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `req:validating` | Schema/type/range validation errors | `req:invalid_request` | Return MCP client error with field errors; log `tool.request_invalid`. |
 | `req:executing_tool` | File read error (ENOENT, EACCES) | `req:tool_error` | Return tool error; log `tool.exec_failed` (error_code). |
 | `req:executing_tool` | Subprocess timeout for `bash`/`grep` | `req:tool_error` | Kill subprocess; return tool error; log `tool.exec_timeout` (timeout_ms). |
-| `req:calling_pruner` | HTTP timeout | `req:pruner_error_fallback` | Abort request; log `pruner.timeout`; include `pruning.error=timeout` in metadata. |
-| `req:calling_pruner` | HTTP non-2xx / network error | `req:pruner_error_fallback` | Log `pruner.http_error`; include `pruning.error=http_error` in metadata. |
-| `req:calling_pruner` | Invalid pruner response (bad JSON / missing fields) | `req:pruner_error_fallback` | Log `pruner.invalid_response`; include `pruning.error=invalid_response` in metadata. |
+| `req:calling_pruner` | HTTP timeout | `req:pruner_error_fallback` | Abort request; log `pruner.timeout`; include `pruning.error.code="timeout"` in metadata. |
+| `req:calling_pruner` | HTTP non-2xx / network error | `req:pruner_error_fallback` | Log `pruner.http_error`; include `pruning.error.code="http_error"` in metadata. |
+| `req:calling_pruner` | Invalid pruner response (bad JSON / missing fields) | `req:pruner_error_fallback` | Log `pruner.invalid_response`; include `pruning.error.code="invalid_response"` in metadata. |
 | `req:respond_raw` / `req:respond_pruned` | Response serialization/write error | `req:internal_error` | Log `tool.respond_failed`; close connection. |
 | `req:*` | Any unhandled exception | `req:internal_error` | Log `tool.internal_error` with stack; return MCP internal error. |
 
@@ -135,7 +140,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 ### Subprocesses (if applicable)
 | Subprocess | Receives | Can Write | Failure Handling |
 |------------|----------|-----------|------------------|
-| `@jeeves/mcp-pruner` (server) | Run config via env (enabled flag, listen host/port, pruner endpoint, timeouts, `max_prune_input_bytes`); working directory from runner. | Writes logs to stdout/stderr (captured by runner); no direct writes to Jeeves state files. | Runner startup timeout -> disable; unexpected exit/unreachable -> `run:mcp_pruner_degraded` until run ends. |
+| `@jeeves/mcp-pruner` (server) | Run config via env (listen host/port, `PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_MAX_PRUNE_INPUT_BYTES`); working directory from runner. | Writes logs to stdout/stderr (captured by runner); no direct writes to Jeeves state files. | Runner startup timeout -> disable; unexpected exit/unreachable -> `run:mcp_pruner_degraded` until run ends. |
 | `bash` tool command | `cmd`, `cwd` (default runner cwd), `env` (sanitized merge), `timeout_ms`. | May write to filesystem as a normal shell command would (trusted local automation). | Timeout -> kill process and return `req:tool_error`; non-zero exit -> `req:tool_error`; stdout/stderr captured into raw output. |
 | `grep` tool command (`rg` or equivalent) | `pattern`, `paths`, `cwd`, `timeout_ms`, `max_matches`/`max_bytes` limits. | None (read-only scan), aside from process stdout/stderr. | Timeout/non-zero exit -> `req:tool_error` (include stderr); large output should be truncated before optional pruning eligibility check. |
 
@@ -215,30 +220,73 @@ Tool: `grep`
 - Tool error `structuredContent` (`isError=true`):
   - `{ tool: "grep", error: { code: "timeout" | "spawn_error" | "invalid_path" | "rg_error", message: string, exit_code?: number }, pruning: PruningMetadata }`
 
+**Execution strategy (preferred `rg`, deterministic fallback)**
+- Engine selection:
+  1. Attempt `rg` from `PATH`.
+  2. If `rg` is not executable / spawn fails with `ENOENT`, fall back to system `grep`.
+- Preferred (`rg`) command (machine-parseable output):
+  - Base args: `rg --json`
+  - Add `-F` when `fixed_string=true`
+  - Add `-i` when `case_sensitive=false`
+  - Always pass `--` then resolved search `paths[]`
+  - Parse `--json` events and emit one `matches[]` entry per match (first submatch start used for `column` when present).
+  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error with `code="rg_error"` and `exit_code=2`.
+- Fallback (`grep`) command (line-oriented output):
+  - Base args: `grep -R -n -H`
+  - Use `-F` when `fixed_string=true`, else `-E` (POSIX ERE)
+  - Add `-i` when `case_sensitive=false`
+  - Always pass `--` then resolved search `paths[]`
+  - Output parsing: parse each line as `path:line:text` (split on the first two `:`); `column` is `indexOf(pattern)+1` when `fixed_string=true`, otherwise `null`.
+  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error with `code="rg_error"` and `exit_code=2`.
+- Limits (both engines):
+  - `timeout_ms`: kill the child process and return a tool error with `code="timeout"`.
+  - `max_matches`: stop reading once `max_matches` matches are collected, terminate the child process, and set `truncated=true`.
+  - `max_output_bytes`: cap the UTF-8 bytes across returned `matches[].text` (stop early, terminate process, and set `truncated=true`).
+
 Type: `PruningMetadata`
-- `{ attempted: boolean, applied: boolean, fallback: boolean, reason?: "disabled_or_unconfigured" | "no_focus_question" | "too_large" | "output_empty" | "pruner_error", raw_bytes: number, pruned_bytes?: number, pruner_duration_ms?: number, error?: { code: "timeout" | "http_error" | "invalid_response", message: string } }`
+- Shape:
+  - `{ attempted: boolean, applied: boolean, fallback: boolean, reason?: "disabled_or_unconfigured" | "no_focus_question" | "too_large" | "output_empty" | "pruner_error", raw_bytes: number, pruned_bytes?: number, pruner_duration_ms?: number, error?: { code: "timeout" | "http_error" | "invalid_response", message: string } }`
+- Semantics:
+  - `attempted=true` iff an outbound `swe-pruner` HTTP request was made.
+  - `applied=true` iff pruning succeeded and the response payload was applied to the tool output.
+  - `fallback=true` iff pruning was attempted but raw output was returned (always implies `attempted=true` and `applied=false`).
+  - `reason` is set whenever `applied=false` to explain why pruning was not applied (including skip reasons like `no_focus_question` and failure reasons like `pruner_error`).
+  - `raw_bytes` is measured after any tool-level `max_output_bytes` truncation (i.e., bytes that were eligible for pruning).
+  - `pruned_bytes` is present only when `applied=true`.
+  - `error` is present only when `reason="pruner_error"` (and `fallback=true`).
 
 ### Outbound HTTP (swe-pruner)
 The MCP server makes a best-effort HTTP call when pruning is requested.
 
-- **URL**: `JEEVES_PRUNER_ENDPOINT` (full URL, including path)
+- **URL**: `PRUNER_URL` (full URL, including path)
 - **Method**: `POST`
 - **Headers**: `Content-Type: application/json`
-- **Timeout**: `JEEVES_PRUNER_TIMEOUT_MS` (defaults to a safe value; see **Validation Rules**)
-- **Request body**:
-  - `{ request_id: string, tool: "read" | "bash" | "grep", focus_question: string, input: string, input_bytes: number, max_output_bytes?: number }`
+- **Timeout**: `PRUNER_TIMEOUT_MS` (defaults to a safe value; see **Validation Rules**)
+- **Request body (issue-aligned adapter)**: `{ code: string, query: string }`
+  - Tool → `code` mapping (after any tool-level `max_output_bytes` truncation):
+    - `read`: `code = content`
+    - `bash`: `code = stdout` if `stdout` is non-empty, else `code = stderr` (the pruned output replaces the same field used as input)
+    - `grep`: `code = matches` rendered as newline-separated `path:line:column:text` lines (column omitted when `null`)
+  - `query = context_focus_question.trim()`
 - **Success response (200)**:
-  - `{ output: string, output_bytes: number }`
-- **Error responses (any non-2xx, network errors, JSON parse errors)**:
-  - Treated as pruning failure; MCP server returns raw output and sets `pruning.fallback=true` with `pruning.error`.
+  - Response MUST be JSON, and the pruned text is read from the first string field present in this order: `pruned_code`, then `content`, then `text`.
+  - If none of these fields is present as a string, treat as `invalid_response`.
+- **Applying the pruned text**:
+  - `read`: replace `structuredContent.content` with the pruned text.
+  - `bash`: replace the chosen stream (`stdout` or `stderr`) with the pruned text.
+  - `grep`: replace `structuredContent.matches` by parsing the pruned text back into `matches[]` using the same `path:line:column?:text` rules; if parsing fails, treat as `invalid_response` and fall back to the raw matches.
+- **Error mapping (all treated as pruning failure with raw output returned)**:
+  - Timeout → `pruning.reason="pruner_error"`, `pruning.fallback=true`, `pruning.error.code="timeout"`
+  - Network error / non-2xx → `pruning.error.code="http_error"`
+  - JSON parse error / missing pruned field / grep re-parse failure → `pruning.error.code="invalid_response"`
 
 ### CLI Commands (if applicable)
 | Command | Arguments | Options | Output |
 |---------|-----------|---------|--------|
-| `jeeves-mcp-pruner` | (none) | `--host <ip>` (default `127.0.0.1`), `--port <n>` (default `0` = ephemeral), `--root <dir>` (default process `cwd`), `--log-format <json|text>` (default `json`) | Starts server; logs readiness and all requests to stdout/stderr |
+| `mcp-pruner` | (none) | `--host <ip>` (default `127.0.0.1`), `--port <n>` (default `0` = ephemeral), `--cwd <dir>` (default process `cwd`), `--log-format <json|text>` (default `json`) | Starts server; logs readiness and all requests to stdout/stderr |
 
 **Runner → server invocation contract**
-- Runner MUST pass `--root` as the run working directory and SHOULD pass `--port 0` unless a fixed port is required.
+- Runner MUST pass `--cwd` as the run working directory and SHOULD pass `--port 0` unless a fixed port is required.
 - Server MUST bind only to loopback by default (`127.0.0.1`) unless explicitly configured.
 - Runner determines readiness by polling `GET /healthz` until timeout; it MUST NOT assume readiness based only on a log line.
 
@@ -260,28 +308,44 @@ Events are emitted as structured log lines (default JSON) on the MCP server stdo
 | `pruner.call_ok` | Pruner HTTP call succeeded | `{ tool: string, pruner_duration_ms: number, pruned_bytes: number }` | Debugging; viewer logs |
 | `pruner.call_failed` | Pruner call failed (timeout/http/invalid response) | `{ tool: string, reason: "timeout" \| "http_error" \| "invalid_response", pruner_duration_ms?: number, message?: string }` | Debugging; viewer logs |
 
-### Validation Rules
+### Configuration & Validation Rules
+
+**Runner environment (Jeeves runner / viewer-server process)**
+| Field | Type | Constraints | Behavior |
+|-------|------|-------------|----------|
+| `JEEVES_PRUNER_ENABLED` | boolean (env string) | optional; truthy: `1/true/yes/on`, falsy otherwise | When falsy, runner does not spawn `mcp-pruner` (feature off). |
+| `JEEVES_PRUNER_URL` | string | optional; if set must be a valid absolute URL with `http:` or `https:` | Runner forwards to the child process as `PRUNER_URL`. |
+| `JEEVES_MCP_PRUNER_PATH` | string | optional; if set must be an executable path | Runner uses this binary instead of resolving `mcp-pruner` from `@jeeves/mcp-pruner`. |
+| `JEEVES_MCP_PRUNER_HOST` | string | optional; default `127.0.0.1`; must be loopback (`127.0.0.1`/`::1`) | Runner passes as `--host`. |
+| `JEEVES_MCP_PRUNER_PORT` | number (env string) | optional; default `0`; integer `0..65535` | Runner passes as `--port` (`0` = ephemeral). |
+
+**MCP server environment (`mcp-pruner` process)**
+| Field | Type | Constraints | Behavior |
+|-------|------|-------------|----------|
+| `PRUNER_URL` | string | optional; default `http://localhost:8000/prune`; empty string disables pruning | Used for outbound HTTP to `swe-pruner`. If empty, pruning is skipped with `reason="disabled_or_unconfigured"`. |
+| `PRUNER_TIMEOUT_MS` | number (env string) | optional; default `30000`; integer `100..300000` | Timeout for the outbound pruner call. |
+| `MCP_PRUNER_CWD` | string | optional; default process `cwd`; must exist and be a directory | Root directory for path confinement when `--cwd` is not provided. |
+| `MCP_PRUNER_MAX_PRUNE_INPUT_BYTES` | number (env string) | optional; default `262144` (256 KiB); integer `1024..2097152` | If raw output exceeds this, pruning is skipped with `reason="too_large"`. |
+
+**Precedence**
+- CLI flags (e.g., `--cwd`) override MCP server env vars.
+- Runner env vars affect only runner behavior and what it forwards to the child.
+
+**Tool argument validation (MCP request params)**
 | Field | Type | Constraints | Error |
 |-------|------|-------------|-------|
-| `config.JEEVES_MCP_PRUNER_ENABLED` | boolean (env string) | optional; truthy: `1/true/yes/on`, falsy otherwise | invalid values treated as `false` with `mcp_pruner.config_invalid` |
-| `config.JEEVES_MCP_PRUNER_HOST` | string | optional; default `127.0.0.1`; must be a loopback address (`127.0.0.1`/`::1`) | `invalid_host` |
-| `config.JEEVES_MCP_PRUNER_PORT` | number (env string) | optional; default `0`; integer `0..65535` | `invalid_port` |
-| `config.JEEVES_MCP_PRUNER_ROOT_DIR` | string | optional; default process `cwd`; must exist and be a directory | `invalid_root_dir` |
-| `config.JEEVES_PRUNER_ENDPOINT` | string | optional; if set must be a valid absolute URL with `http:` or `https:` | `invalid_pruner_endpoint` |
-| `config.JEEVES_PRUNER_TIMEOUT_MS` | number (env string) | optional; default `2000`; integer `100..30000` | `invalid_timeout_ms` |
-| `config.JEEVES_MCP_PRUNER_MAX_PRUNE_INPUT_BYTES` | number (env string) | optional; default `262144` (256 KiB); integer `1024..2097152` | `invalid_max_prune_input_bytes` |
-| `read.path` | string | required; non-empty; no `\\0`; resolves within root dir; must refer to a regular file | JSON-RPC `-32602` + `field_errors` |
+| `read.path` | string | required; non-empty; no `\\0`; resolves within server root dir (`--cwd`); must refer to a regular file | JSON-RPC `-32602` + `field_errors` |
 | `read.encoding` | string | optional; must equal `"utf-8"` | JSON-RPC `-32602` |
 | `read.context_focus_question` | string | optional; if provided must be non-empty after trim; max 1000 chars | JSON-RPC `-32602` |
 | `read.max_output_bytes` | number | optional; integer `1024..10485760` | JSON-RPC `-32602` |
 | `bash.cmd` | string | required; non-empty; max 50000 chars | JSON-RPC `-32602` |
-| `bash.cwd` | string | optional; resolves within root dir; must exist and be a directory | JSON-RPC `-32602` |
+| `bash.cwd` | string | optional; resolves within server root dir (`--cwd`); must exist and be a directory | JSON-RPC `-32602` |
 | `bash.env` | object | optional; keys match `/^[A-Z_][A-Z0-9_]*$/`; values max 4000 chars; total entries max 200 | JSON-RPC `-32602` |
 | `bash.timeout_ms` | number | optional; integer `100..300000`; default `30000` | JSON-RPC `-32602` |
 | `bash.context_focus_question` | string | optional; same constraints as `read.context_focus_question` | JSON-RPC `-32602` |
 | `bash.max_output_bytes` | number | optional; integer `1024..10485760` | JSON-RPC `-32602` |
 | `grep.pattern` | string | required; non-empty; max 10000 chars | JSON-RPC `-32602` |
-| `grep.paths` | string[] | required; length `1..100`; each resolves within root dir | JSON-RPC `-32602` |
+| `grep.paths` | string[] | required; length `1..100`; each resolves within server root dir (`--cwd`) | JSON-RPC `-32602` |
 | `grep.cwd` | string | optional; same constraints as `bash.cwd` | JSON-RPC `-32602` |
 | `grep.fixed_string` | boolean | optional | JSON-RPC `-32602` |
 | `grep.case_sensitive` | boolean | optional | JSON-RPC `-32602` |
@@ -321,7 +385,7 @@ N/A - This feature does not add or modify data schemas.
 - **Interfaces (Section 3)**:
   - HTTP endpoints: `GET /healthz`, `POST /mcp` (JSON-RPC 2.0; methods: `initialize`, `tools/list`, `tools/call`).
   - Tools: `read`, `bash`, `grep` with optional `context_focus_question`, `max_output_bytes`, and `PruningMetadata`.
-  - Outbound HTTP contract to pruner: `POST` to `JEEVES_PRUNER_ENDPOINT` with timeout `JEEVES_PRUNER_TIMEOUT_MS`.
+  - Outbound HTTP contract to pruner: `POST` to `PRUNER_URL` with timeout `PRUNER_TIMEOUT_MS`.
 - **Data (Section 4)**: N/A (no schema changes, no migrations).
 
 ### Planning Gates (Explicit)
@@ -344,8 +408,9 @@ N/A - This feature does not add or modify data schemas.
 10. **Build/config changes**: Yes. Add a new workspace package `packages/mcp-pruner`, update root `tsconfig.json` references, and add `@jeeves/mcp-pruner` as a dependency of `@jeeves/runner`.
 11. **New dependencies**: Prefer **none** (use Node 20 built-ins: `http`, `fetch`, `child_process`). Only add third-party deps if provider MCP wiring requires it.
 12. **Env vars / secrets**:
-  - Required to enable: `JEEVES_MCP_PRUNER_ENABLED` (truthy values).
-  - Optional: `JEEVES_PRUNER_ENDPOINT`, `JEEVES_PRUNER_TIMEOUT_MS`, `JEEVES_MCP_PRUNER_HOST`, `JEEVES_MCP_PRUNER_PORT`, `JEEVES_MCP_PRUNER_MAX_PRUNE_INPUT_BYTES`.
+  - Required to enable: `JEEVES_PRUNER_ENABLED` (truthy values).
+  - Optional (runner): `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`, `JEEVES_MCP_PRUNER_HOST`, `JEEVES_MCP_PRUNER_PORT`.
+  - Optional (MCP server): `PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`, `MCP_PRUNER_MAX_PRUNE_INPUT_BYTES`.
   - No secrets required beyond existing provider API keys (Claude/OpenAI), already handled elsewhere.
 
 ### Task Dependency Graph
@@ -367,24 +432,24 @@ T10 → depends on T7, T9
 |----|-------|---------|-------|---------------------|
 | T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with CLI and `/healthz`. | `packages/mcp-pruner/package.json` | `pnpm typecheck` includes the new package and `GET /healthz` returns `ok:true` with server info. |
 | T2 | Implement `/mcp` + MCP methods | Add JSON-RPC parsing/dispatch and MCP methods `initialize` + `tools/list`. | `packages/mcp-pruner/src/server.ts` | `POST /mcp` supports `initialize` and `tools/list` and returns JSON-RPC errors for invalid requests. |
-| T3 | Add validation + shared utils | Implement argument validation, `field_errors`, root path confinement, and byte truncation helpers. | `packages/mcp-pruner/src/validate.ts` | Invalid params return `-32602` with `field_errors`; paths/cwd cannot escape `--root`. |
+| T3 | Add validation + shared utils | Implement argument validation, `field_errors`, root path confinement, and byte truncation helpers. | `packages/mcp-pruner/src/validate.ts` | Invalid params return `-32602` with `field_errors`; paths/cwd cannot escape `--cwd`. |
 | T4 | Add `read` tool | Implement `tools/call` for `read` including structured outputs and tool errors. | `packages/mcp-pruner/src/tools/read.ts` | Reads succeed within root; invalid/not-found paths yield tool errors; `max_output_bytes` truncation works. |
 | T5 | Add `bash` tool | Implement `bash` execution with timeouts, cwd confinement, env sanitization, and structured output. | `packages/mcp-pruner/src/tools/bash.ts` | Captures stdout/stderr/exit; timeouts return tool error; cwd outside root is rejected. |
 | T6 | Add `grep` tool | Implement `grep` using `rg` (or fallback) with match parsing and limits. | `packages/mcp-pruner/src/tools/grep.ts` | Returns structured matches with `max_matches`; invalid paths rejected; timeout handled. |
 | T7 | Add pruning pipeline | Add swe-pruner HTTP client and integrate optional pruning for all tools with `PruningMetadata` + fallback. | `packages/mcp-pruner/src/pruner.ts` | When `context_focus_question` set and pruner configured, attempted pruning is reflected in metadata; failures fall back to raw output with `fallback=true`. |
 | T8 | Runner lifecycle integration | Spawn/stop the MCP server per phase; poll `/healthz`; degrade on failure without failing the run. | `packages/runner/src/mcpPruner.ts` | With enable=false, no server spawn; with enable=true, server is started and stopped; failures continue the run in degraded/disabled mode. |
-| T9 | Provider wiring (Claude + Codex) | Pass the MCP endpoint into both providers so agents can call `mcp:*` tools. | `packages/runner/src/providers/codexSdk.ts` | Codex and Claude providers can be configured to use the local MCP server endpoint when enabled. |
+| T9 | Provider wiring (Claude + Codex) | Inject the MCP endpoint into both providers using their concrete MCP config surfaces. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude uses `Options.mcpServers["jeeves-pruner"]={ type:"http", url }`; Codex uses `--config mcp_servers.jeeves-pruner.transport="streamable_http"` + `--config mcp_servers.jeeves-pruner.url=...`. |
 | T10 | Docs + full validation | Document env vars, CLI usage, and run integration; ensure `pnpm lint/typecheck/test` passes. | `README.md` | Docs describe how to enable and verify pruning; all quality commands pass. |
 
 ### Task Details
 
 **T1: Scaffold MCP pruner package**
-- Summary: Create the new `packages/mcp-pruner` package with a CLI `jeeves-mcp-pruner` that starts an HTTP server and responds to `GET /healthz`.
+- Summary: Create the new `packages/mcp-pruner` package with a CLI `mcp-pruner` that starts an HTTP server and responds to `GET /healthz`.
 - Files:
   - `tsconfig.json` - add project reference to `./packages/mcp-pruner`.
   - `packages/mcp-pruner/package.json` - new workspace package + bin entry.
   - `packages/mcp-pruner/tsconfig.json` - new composite TS project.
-  - `packages/mcp-pruner/src/bin.ts` - CLI arg parsing (`--host`, `--port`, `--root`, `--log-format`) and server startup.
+  - `packages/mcp-pruner/src/bin.ts` - CLI arg parsing (`--host`, `--port`, `--cwd`, `--log-format`) and server startup.
   - `packages/mcp-pruner/src/server.ts` - minimal HTTP server with `/healthz`.
   - `packages/mcp-pruner/src/server.test.ts` - health check test (bind to ephemeral port, assert response shape).
 - Acceptance Criteria:
@@ -453,14 +518,16 @@ T10 → depends on T7, T9
   - `packages/mcp-pruner/src/tools/grep.test.ts` - tests using a temp directory with fixture files.
 - Acceptance Criteria:
   1. `grep` returns `matches[]` and `match_count`, respects `max_matches`, and does not return paths outside root.
-  2. Tool errors include `rg_error`/`timeout`/`invalid_path` with `exit_code` when applicable.
+  2. `rg` exit code `1` (no matches) is treated as success (`match_count=0`), not a tool error; exit code `2` yields `code="rg_error"` with `exit_code=2`.
+  3. When `rg` is unavailable (spawn `ENOENT`), the tool falls back to `grep` deterministically and preserves the same exit-code semantics (`0/1` success, `2` error).
+  4. `max_output_bytes` and `max_matches` stop parsing early, set `truncated=true`, and terminate the child process.
 - Dependencies: T3
 - Verification: `pnpm test packages/mcp-pruner/src/tools/grep.test.ts`
 
 **T7: Add pruning pipeline**
 - Summary: Add the optional pruning path for tool outputs when `context_focus_question` is provided and pruner config is valid; implement safe fallback behavior for all failures.
 - Files:
-  - `packages/mcp-pruner/src/pruner.ts` - HTTP client for `JEEVES_PRUNER_ENDPOINT` + timeout and response validation.
+  - `packages/mcp-pruner/src/pruner.ts` - HTTP client for `PRUNER_URL` + timeout (`PRUNER_TIMEOUT_MS`) and response validation.
   - `packages/mcp-pruner/src/mcp.ts` - integrate pruning decision and enrich responses with `PruningMetadata`.
   - `packages/mcp-pruner/src/pruner.test.ts` - tests with a local mock HTTP server for success + timeout + non-2xx + invalid JSON.
 - Acceptance Criteria:
@@ -478,7 +545,7 @@ T10 → depends on T7, T9
   - `packages/runner/src/runner.ts` - wrap `provider.run(...)` with start/stop hooks.
   - `packages/runner/src/mcpPruner.test.ts` - unit tests using a fake child process / stubbed fetch for readiness.
 - Acceptance Criteria:
-  1. When `JEEVES_MCP_PRUNER_ENABLED` is falsy, the runner does not spawn the server and runs behave as before.
+  1. When `JEEVES_PRUNER_ENABLED` is falsy, the runner does not spawn the server and runs behave as before.
   2. When enabled and the server starts, the runner waits for `/healthz` success before advertising the MCP endpoint to providers.
   3. If startup fails or the server exits mid-run, the runner logs a degraded/disabled event and the run continues (no hard failure).
 - Dependencies: T1
@@ -488,12 +555,17 @@ T10 → depends on T7, T9
 - Summary: Pass the MCP server endpoint to both providers so tool invocations flow through the MCP server when enabled.
 - Files:
   - `packages/runner/src/provider.ts` - (if needed) extend `ProviderRunOptions` to include MCP server connection info.
-  - `packages/runner/src/providers/claudeAgentSdk.ts` - configure Claude Agent SDK to use the MCP server (per SDK-supported config).
-  - `packages/runner/src/providers/codexSdk.ts` - pass MCP server config to the Codex CLI invocation (flags/env/config as supported by Codex).
+  - `packages/runner/src/providers/claudeAgentSdk.ts` - configure Claude Agent SDK via `Options.mcpServers`.
+  - `packages/runner/src/providers/codexSdk.ts` - pass Codex MCP server config via `codex exec --config ...`.
   - `packages/runner/src/providers/*.test.ts` - unit tests asserting the provider is configured with the MCP endpoint when present.
 - Acceptance Criteria:
-  1. When MCP is enabled, providers are given the MCP base URL and can emit `tool_use` events named `mcp:*/*` when the agent calls MCP tools.
-  2. When MCP is disabled/degraded, providers run without MCP configuration and continue successfully.
+  1. Runner advertises a single MCP server name `jeeves-pruner` with `mcpUrl=http://<host>:<port>/mcp` to providers.
+  2. Claude Agent SDK provider passes `mcpServers: { "jeeves-pruner": { type: "http", url: mcpUrl } }` into `query({ prompt, options })` when MCP is enabled; omits `mcpServers` when disabled/degraded.
+  3. Codex provider passes both of these to `codex exec` when MCP is enabled:
+     - `--config mcp_servers.jeeves-pruner.transport="streamable_http"`
+     - `--config mcp_servers.jeeves-pruner.url="<mcpUrl>"`
+     (and does not pass them when disabled/degraded)
+  4. When MCP is disabled/degraded, both providers run without MCP configuration and continue successfully.
 - Dependencies: T8
 - Verification: `pnpm test packages/runner/src/providers/codexSdk.test.ts`
 
@@ -524,5 +596,5 @@ T10 → depends on T7, T9
 ### Manual Verification (if applicable)
 - [ ] Start the viewer-server and run a workflow with MCP enabled:
   - `pnpm dev` (in another terminal)
-  - Set env `JEEVES_MCP_PRUNER_ENABLED=true` for the viewer-server process
+  - Set env `JEEVES_PRUNER_ENABLED=true` for the viewer-server process
   - Start a run; confirm viewer logs include `mcp_pruner.ready` and subsequent `mcp:*/*` tool calls when the agent uses `read`/`bash`/`grep` with `context_focus_question`.

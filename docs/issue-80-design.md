@@ -180,14 +180,11 @@ type RepoMetricsFileV1 = {
   >;
 
   task_retry_counts: Record<
-    string, // issue_ref
-    Record<
-      string, // workflow
-      {
-        total_retries: number; // int >= 0
-        retries_per_task: number; // mean retries per task (finite >= 0)
-      }
-    >
+    string, // workflow
+    {
+      total_retries: number; // int >= 0 (sum across processed runs for this workflow)
+      retries_per_task: number | null; // total_retries / total_tasks_at_decomposition (null when denominator is 0)
+    }
   >;
 
   // "Pass rate" = percent of design_review attempts that approve without requiring design_edit.
@@ -196,7 +193,17 @@ type RepoMetricsFileV1 = {
     {
       attempts: number; // int >= 0
       passes: number; // int >= 0
-      pass_rate: number; // passes / attempts (finite in [0,1] when attempts>0)
+      pass_rate: number | null; // passes / attempts (null when attempts===0; otherwise finite in [0,1])
+    }
+  >;
+
+  // Inputs needed to compute historicalAverage.iterationsPerTask deterministically.
+  implementation_iteration_counts: Record<
+    string, // workflow
+    {
+      implement_task_iterations: number; // int >= 0 (sum across processed runs for this workflow)
+      tasks_at_decomposition: number; // int >= 0 (sum of tasks_at_decomposition across processed runs)
+      iterations_per_task: number | null; // implement_task_iterations / tasks_at_decomposition (null when denominator is 0)
     }
   >;
 };
@@ -225,33 +232,57 @@ Both metrics and the estimate are derived from run archives.
 - MUST have at least 1 `STATE/.runs/<run_id>/iterations/*/iteration.json`
 
 **Workflow matching (explicit fields)**
-- Resolve the run’s workflow name from `STATE/.runs/<run_id>/iterations/001/iteration.json.workflow`.
-- If missing, fall back to `STATE/.runs/<run_id>/final-issue.json.workflow` (or `iterations/*/issue.json.workflow`).
-- A historical run is eligible for metrics/estimation only when this resolved workflow name equals the active issue workflow name.
+- Resolve the run’s workflow name **deterministically** in this order:
+  1. `STATE/.runs/<run_id>/iterations/001/iteration.json.workflow` (must be a non-empty string)
+  2. `STATE/.runs/<run_id>/final-issue.json.workflow` (must be a non-empty string)
+  3. If neither is present, the run is **ineligible** (skip it for both metrics + estimation).
+- The “active workflow name” used for estimation is `STATE/issue.json.workflow` (must be a non-empty string). If missing, estimation returns `estimate:null`.
+- A historical run is eligible for estimation only when its resolved workflow name equals the active workflow name.
 
 **Metrics extraction (Issue #80 required metrics)**
 - Iterations per phase per issue:
   - Count `iteration.json.phase` occurrences per run and store under `iterations_per_phase_per_issue[issue_ref][workflow][phase]`.
 - Task retry counts:
   - Use `iterations/*/tasks.json` snapshots and count each time a task transitions from `failed -> pending`.
-  - Store `total_retries` and `retries_per_task = total_retries / tasks` (where `tasks` is the task count at decomposition time, if available; otherwise the final task count).
+  - Store `task_retry_counts[workflow].total_retries` and `task_retry_counts[workflow].retries_per_task = total_retries / total_tasks_at_decomposition` (where `total_tasks_at_decomposition` is derived per-run; see “Per-run task count” below). If `total_tasks_at_decomposition === 0`, store `retries_per_task: null`.
 - Design review pass rates:
   - Count each `design_review` iteration as an `attempt`.
   - Count a `pass` when the `design_review` result transitions to `pre_implementation_check` (i.e. `status.designApproved === true` and `status.designNeedsChanges !== true` in the archived issue state).
+
+- Implementation iteration totals (for `iterationsPerTask`):
+  - For each run: `implement_task_iterations_run = count(iterations where iteration.json.phase === "implement_task")`.
+  - Accumulate `implementation_iteration_counts[workflow].implement_task_iterations += implement_task_iterations_run`.
+  - Accumulate `implementation_iteration_counts[workflow].tasks_at_decomposition += tasks_at_decomposition_run`.
+  - Maintain `implementation_iteration_counts[workflow].iterations_per_task` as `implement_task_iterations / tasks_at_decomposition` (or `null` if denominator is 0).
+
+**Per-run task count (used for per-task ratios)**
+- Define `tasks_at_decomposition_run` deterministically as:
+  1. If `STATE/.runs/<run_id>/final-issue.json.estimate.tasks` is a non-negative integer, use it.
+  2. Else, use the task count in the earliest archived `STATE/.runs/<run_id>/iterations/<n>/tasks.json` where `STATE/.runs/<run_id>/iterations/<n>/iteration.json.phase` is one of the post-decomposition phases (`implement_task`, `spec_check`, `completeness_verification`, `prepare_pr`, `code_review`, `code_fix`).
+  3. Else, fall back to the task count in the last archived `iterations/<n>/tasks.json`.
+- If no task snapshot is found, the run contributes to phase/design metrics, but is excluded from per-task aggregates (i.e., it adds `0` to `tasks_at_decomposition`).
 
 **Estimate computation (Issue #80 method)**
 1. Read `tasks` from `STATE/tasks.json` (task count at decomposition time). If missing, `estimate:null`.
 2. Read repo metrics from `METRICS/<owner>-<repo>.json` for the active workflow. If missing or insufficient history, `estimate:null`.
 3. Compute `historicalAverage`:
-   - `iterationsPerTask`: mean `implement_task_iterations / tasks` across eligible runs for this workflow (finite ≥ 0).
-   - `designPassRate`: `passes / attempts` from `design_review_pass_rates[workflow]` (finite in [0,1]).
+   - `iterationsPerTask`: `implementation_iteration_counts[workflow].iterations_per_task` (must be finite ≥ 0). If `null`, `estimate:null`.
+   - `designPassRate`: `design_review_pass_rates[workflow].pass_rate` (must be finite in [0,1]). If `null` (i.e., `attempts===0`), `estimate:null`.
 4. Compute `breakdown`:
-   - `design`: expected number of `design_review` attempts remaining, computed as `ceil(1 / max(designPassRate, 0.01))` (clamp to a reasonable max to avoid unbounded estimates).
+   - `design`: expected number of `design_review` attempts remaining:
+     - `MIN_DESIGN_PASS_RATE = 0.01` (avoid division-by-zero)
+     - `MAX_EXPECTED_DESIGN_REVIEW_ATTEMPTS = 6` (hard cap for determinism; avoids estimates exploding due to small/zero-ish pass rates)
+     - `design = clamp(ceil(1 / max(designPassRate, MIN_DESIGN_PASS_RATE)), 1, MAX_EXPECTED_DESIGN_REVIEW_ATTEMPTS)`
    - `implementation`: `ceil(tasks * iterationsPerTask)`.
-   - `specCheck`: buffer for retries computed as `ceil(tasks * retries_per_task)`.
+   - `specCheck`: buffer for retries computed as `ceil(tasks * retries_per_task)` where `retries_per_task = task_retry_counts[workflow].retries_per_task`. If `retries_per_task === null`, `estimate:null`.
    - `completenessVerification`: mean iterations for `completeness_verification` (from `iterations_per_phase_per_issue` aggregates).
    - `prAndReview`: mean iterations for `prepare_pr`, `code_review`, and `code_fix` (from `iterations_per_phase_per_issue` aggregates).
 5. Set `estimatedIterations = sum(breakdown.*)` and persist to `STATE/issue.json.estimate`.
+
+**Division edge cases (deterministic behavior)**
+- If `STATE/tasks.json` is missing OR `tasks === 0`, estimation returns `estimate:null` (per-task ratios are undefined / uninformative).
+- If `design_review_pass_rates[workflow].attempts === 0`, store `pass_rate:null` and estimation returns `estimate:null` (insufficient history).
+- If a per-task denominator is `0` (e.g., `tasks_at_decomposition === 0` across all processed runs), store `iterations_per_task:null` / `retries_per_task:null` and estimation returns `estimate:null`.
 
 **Timing**
 - Metrics update: when a run is finalized (post-archive), update `METRICS/<owner>-<repo>.json` once per run.

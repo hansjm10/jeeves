@@ -1587,6 +1587,7 @@ describe('parallelRunner', () => {
           const sandbox = {
             taskId: 'T1',
             stateDir: workerStateDir,
+            retainedStateDir: workerStateDir,
             runId: 'run-123',
             issueNumber: 78,
             owner: 'test',
@@ -1616,6 +1617,7 @@ describe('parallelRunner', () => {
           const sandbox = {
             taskId: 'T2',
             stateDir: workerStateDir,
+            retainedStateDir: workerStateDir,
             runId: 'run-123',
             issueNumber: 78,
             owner: 'test',

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createIssueState, listIssueStates, loadIssueStateFromPath } from './issueState.js';
+import { getIssueStateDir, getWorktreePath } from './paths.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jeeves-core-test-'));
@@ -16,19 +17,22 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 }
 
 describe('issue state read/write', () => {
-  it('creates and loads issue state under the XDG layout', async () => {
+  it('creates and loads issue state under the worktree .jeeves layout', async () => {
     await withTempDir(async (dataDir) => {
+      // createIssueState writes to `${worktreeDir}/.jeeves`; ensure the worktree dir exists.
+      await fs.mkdir(getWorktreePath('o', 'r', 38, dataDir), { recursive: true });
+
       const created = await createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir });
       expect(created.owner).toBe('o');
       expect(created.repo).toBe('r');
       expect(created.issue.number).toBe(38);
 
-      const loaded = await loadIssueStateFromPath(path.join(dataDir, 'issues', 'o', 'r', '38'));
+      const loaded = await loadIssueStateFromPath(getIssueStateDir('o', 'r', 38, dataDir));
       expect(loaded.issue.number).toBe(38);
       expect(loaded.branch).toBe('issue/38');
 
-      await expect(fs.stat(path.join(dataDir, 'issues', 'o', 'r', '38', '.runs'))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(dataDir, 'issues', 'o', 'r', '38', 'progress.txt'))).resolves.toBeDefined();
+      await expect(fs.stat(path.join(getIssueStateDir('o', 'r', 38, dataDir), '.runs'))).resolves.toBeDefined();
+      await expect(fs.stat(path.join(getIssueStateDir('o', 'r', 38, dataDir), 'progress.txt'))).resolves.toBeDefined();
     });
   });
 
@@ -90,8 +94,10 @@ describe('issue state read/write', () => {
     });
   });
 
-  it('lists issue states from the issues directory', async () => {
+  it('lists issue states from worktree .jeeves directories', async () => {
     await withTempDir(async (dataDir) => {
+      await fs.mkdir(getWorktreePath('o', 'r', 1, dataDir), { recursive: true });
+      await fs.mkdir(getWorktreePath('o', 'r', 2, dataDir), { recursive: true });
       await createIssueState({ owner: 'o', repo: 'r', issueNumber: 1, dataDir });
       await createIssueState({ owner: 'o', repo: 'r', issueNumber: 2, dataDir });
       const list = await listIssueStates(dataDir);
@@ -101,12 +107,13 @@ describe('issue state read/write', () => {
 
   it('throws if issue state exists, unless forced (and overwrites issue.json)', async () => {
     await withTempDir(async (dataDir) => {
+      await fs.mkdir(getWorktreePath('o', 'r', 38, dataDir), { recursive: true });
       await createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir, notes: 'first' });
 
       await expect(createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir })).rejects.toThrow(/already exists/);
 
       await createIssueState({ owner: 'o', repo: 'r', issueNumber: 38, dataDir, force: true, notes: 'second' });
-      const loaded = await loadIssueStateFromPath(path.join(dataDir, 'issues', 'o', 'r', '38'));
+      const loaded = await loadIssueStateFromPath(getIssueStateDir('o', 'r', 38, dataDir));
       expect(loaded.notes).toBe('second');
     });
   });

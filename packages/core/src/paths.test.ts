@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getIssueStateDir, getWorktreePath, parseIssueRef, parseRepoSpec, resolveDataDir } from './paths.js';
+import { getIssueStateDir, getLegacyIssueStateDir, getWorktreePath, parseIssueRef, parseRepoSpec, resolveDataDir } from './paths.js';
 
 describe('resolveDataDir', () => {
   it('uses JEEVES_DATA_DIR when set (with ~ expansion)', () => {
@@ -52,9 +52,10 @@ describe('resolveDataDir', () => {
 });
 
 describe('layout paths', () => {
-  it('matches issues/<owner>/<repo>/<issue>/issue.json and worktrees/<owner>/<repo>/issue-<N>', () => {
+  it('matches worktrees/<owner>/<repo>/issue-<N>/.jeeves and legacy issues/<owner>/<repo>/<issue>', () => {
     const dataDir = '/data';
-    expect(getIssueStateDir('o', 'r', 38, dataDir)).toBe('/data/issues/o/r/38');
+    expect(getIssueStateDir('o', 'r', 38, dataDir)).toBe('/data/worktrees/o/r/issue-38/.jeeves');
+    expect(getLegacyIssueStateDir('o', 'r', 38, dataDir)).toBe('/data/issues/o/r/38');
     expect(getWorktreePath('o', 'r', 38, dataDir)).toBe('/data/worktrees/o/r/issue-38');
   });
 });

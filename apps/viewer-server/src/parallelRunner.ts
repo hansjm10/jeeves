@@ -29,6 +29,7 @@ import {
   getWorkerSandboxPaths,
   hasCompletionMarker,
   cleanupWorkerSandboxOnSuccess,
+  snapshotWorkerStateToRetained,
   validateTaskId,
   validatePathSafeId,
   type WorkerSandbox,
@@ -1028,7 +1029,9 @@ export class ParallelRunner {
         dataDir: this.options.dataDir,
         canonicalBranch: this.options.canonicalBranch,
       });
-      const done = await hasCompletionMarker(getImplementDoneMarkerPath(sandbox));
+      const done =
+        (await hasCompletionMarker(path.join(sandbox.retainedStateDir, 'implement_task.done'))) ||
+        (await hasCompletionMarker(getImplementDoneMarkerPath(sandbox)));
       if (!done) {
         tasksToRun.push(taskId);
       } else {
@@ -1117,7 +1120,9 @@ export class ParallelRunner {
         dataDir: this.options.dataDir,
         canonicalBranch: this.options.canonicalBranch,
       });
-      const done = await hasCompletionMarker(getSpecCheckDoneMarkerPath(sandbox));
+      const done =
+        (await hasCompletionMarker(path.join(sandbox.retainedStateDir, 'task_spec_check.done'))) ||
+        (await hasCompletionMarker(getSpecCheckDoneMarkerPath(sandbox)));
       if (!done) {
         tasksToRun.push(taskId);
       } else {
@@ -1164,7 +1169,7 @@ export class ParallelRunner {
       });
       sandboxes.push(sandbox);
 
-      const workerIssue = await readIssueJson(sandbox.stateDir);
+      const workerIssue = (await readIssueJson(sandbox.retainedStateDir)) ?? (await readIssueJson(sandbox.stateDir));
       const workerStatus = workerIssue?.status as Record<string, unknown> | undefined;
       const taskPassed = workerStatus?.taskPassed === true;
       const taskFailed = workerStatus?.taskFailed === true;
@@ -1589,6 +1594,16 @@ export class ParallelRunner {
           ? getImplementDoneMarkerPath(sandbox)
           : getSpecCheckDoneMarkerPath(sandbox);
       await createCompletionMarker(markerPath);
+    }
+
+    // Snapshot worker `.jeeves/` to retained state so resume/debug paths under
+    // `<canonicalStateDir>/.runs/<runId>/workers/<taskId>/` stay accurate even if the worker
+    // worktree is later removed on success.
+    for (const sandbox of sandboxes) {
+      await snapshotWorkerStateToRetained(sandbox).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        void this.options.appendLog(`[WORKER ${sandbox.taskId}] Snapshot warning: ${msg}`);
+      });
     }
 
     const allPassed = outcomes.every((o) => o.status === 'passed' || (phase === 'implement_task' && o.exitCode === 0));

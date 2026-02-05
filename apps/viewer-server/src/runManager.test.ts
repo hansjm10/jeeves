@@ -2244,9 +2244,8 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     await runGit(repoDir, ['worktree', 'add', '-B', `issue/${issueNumber}-T1`, path.join(worktreeBaseDir, 'T1'), `issue/${issueNumber}`]);
     await runGit(repoDir, ['worktree', 'add', '-B', `issue/${issueNumber}-T2`, path.join(worktreeBaseDir, 'T2'), `issue/${issueNumber}`]);
 
-    // Create .jeeves symlinks in worker worktrees
-    await fs.symlink(workerStateT1, path.join(worktreeBaseDir, 'T1', '.jeeves'));
-    await fs.symlink(workerStateT2, path.join(worktreeBaseDir, 'T2', '.jeeves'));
+    // Note: worker `.jeeves/` is no longer a symlink to the retained worker state directory.
+    // The orchestrator will rehydrate `<worktree>/.jeeves` from the retained state dir as needed.
 
     // Write worker issue.json files (needed for spec_check to read results)
     await fs.writeFile(
@@ -2675,9 +2674,6 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     const issueNumber = 9100;
     const issueRef = `${owner}/${repo}#${issueNumber}`;
 
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-
     // Create a minimal git repo (needed for worktree operations)
     const origin = await makeTempDir('jeeves-mc-origin-');
     await runGit(origin, ['init', '--bare']);
@@ -2705,6 +2701,9 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
     await fs.mkdir(path.dirname(workDir), { recursive: true });
     await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
 
     // Set up issue.json in task_spec_check phase with parallel state (simulating mid-wave)
     const runId = 'run-merge-conflict-test';
@@ -2770,11 +2769,14 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await fs.mkdir(worktreeBaseDir, { recursive: true });
 
     await runGit(repoDir, ['worktree', 'add', '-B', `issue/${issueNumber}-T1`, path.join(worktreeBaseDir, 'T1'), branchName]);
-    await fs.symlink(workerStateT1, path.join(worktreeBaseDir, 'T1', '.jeeves'));
+
+    // Create worker `.jeeves/` inside the worktree (no symlink) and write state artifacts there.
+    const workerJeevesDir = path.join(worktreeBaseDir, 'T1', '.jeeves');
+    await fs.mkdir(workerJeevesDir, { recursive: true });
 
     // Write worker issue.json/tasks.json to simulate spec-check about to complete
     await fs.writeFile(
-      path.join(workerStateT1, 'issue.json'),
+      path.join(workerJeevesDir, 'issue.json'),
       JSON.stringify(
         {
           phase: 'task_spec_check',
@@ -2786,7 +2788,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
       'utf-8',
     );
     await fs.writeFile(
-      path.join(workerStateT1, 'tasks.json'),
+      path.join(workerJeevesDir, 'tasks.json'),
       JSON.stringify(
         {
           schemaVersion: 1,
@@ -2799,11 +2801,11 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     );
 
     // Write implement_task.done marker to indicate implement phase completed
-    await fs.writeFile(path.join(workerStateT1, 'implement_task.done'), '', 'utf-8');
+    await fs.writeFile(path.join(workerJeevesDir, 'implement_task.done'), '', 'utf-8');
 
     // Write task_spec_check.done marker to indicate spec-check completed
     // This makes runSpecCheckWave skip spawning a worker and go directly to collectSpecCheckResults
-    await fs.writeFile(path.join(workerStateT1, 'task_spec_check.done'), '', 'utf-8');
+    await fs.writeFile(path.join(workerJeevesDir, 'task_spec_check.done'), '', 'utf-8');
 
     // Create a FakeChild that exits with 0 (spec-check passes)
     const fakeChildThatExitsZero = () => {
@@ -2973,12 +2975,12 @@ describe('T17: Stop run on parallel wave setup failures', () => {
     await runGit(repoDir, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'add gitignore']);
     await runGit(repoDir, ['checkout', 'main']);
 
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-
     const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
     await fs.mkdir(path.dirname(workDir), { recursive: true });
     await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
 
     // Set up issue.json with parallel mode enabled and in implement_task phase
     await fs.writeFile(
@@ -3266,12 +3268,12 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     await runGit(repoDir, ['-c', 'user.name=test', '-c', 'user.email=test@test.com', 'commit', '-m', 'add gitignore']);
     await runGit(repoDir, ['checkout', 'main']);
 
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-
     const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
     await fs.mkdir(path.dirname(workDir), { recursive: true });
     await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
 
     // Set up issue.json with parallel mode enabled and in implement_task phase
     // Pre-set taskPassed=true (simulating a successful task iteration)
@@ -3346,16 +3348,18 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     const worktreeBaseDir = path.join(dataDir, 'worktrees', owner, repo, `issue-${issueNumber}-workers`, runId);
     await fs.mkdir(worktreeBaseDir, { recursive: true });
     await runGit(repoDir, ['worktree', 'add', '-B', `issue/${issueNumber}-T1`, path.join(worktreeBaseDir, 'T1'), branchName]);
-    await fs.symlink(workerStateT1, path.join(worktreeBaseDir, 'T1', '.jeeves'));
+
+    const workerJeevesDir = path.join(worktreeBaseDir, 'T1', '.jeeves');
+    await fs.mkdir(workerJeevesDir, { recursive: true });
 
     // Write minimal worker issue.json
     await fs.writeFile(
-      path.join(workerStateT1, 'issue.json'),
+      path.join(workerJeevesDir, 'issue.json'),
       JSON.stringify({ phase: 'implement_task', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
       'utf-8',
     );
     await fs.writeFile(
-      path.join(workerStateT1, 'tasks.json'),
+      path.join(workerJeevesDir, 'tasks.json'),
       JSON.stringify({ schemaVersion: 1, tasks: [{ id: 'T1', status: 'in_progress' }] }, null, 2) + '\n',
       'utf-8',
     );

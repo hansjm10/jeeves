@@ -11,6 +11,15 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function tomlStringLiteral(value: string): string {
+  // Basic TOML string escape for CLI `--config key="value"` overrides.
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function tomlArrayOfStrings(values: string[]): string {
+  return `[${values.map(tomlStringLiteral).join(', ')}]`;
+}
+
 function truncate(input: string, max = 2000): string {
   if (input.length <= max) return input;
   return input.slice(0, max);
@@ -359,11 +368,18 @@ export class CodexSdkProvider implements AgentProvider {
     // global user config (`codex mcp add ...`). If the script isn't present in the current cwd,
     // skip configuration.
     try {
-      const prunedServerScriptRel = 'scripts/jeeves-pruned-mcp-server.mjs';
-      const prunedServerScriptAbs = path.join(options.cwd, prunedServerScriptRel);
+      // The runner process runs with cwd=repoRoot (viewer-server spawns it that way), but the
+      // Codex run itself should happen inside the issue worktree (options.cwd). The MCP server
+      // must start from repoRoot so it can resolve workspace dependencies via repoRoot/node_modules.
+      const repoRoot = process.cwd();
+      const prunedServerScriptAbs = path.join(repoRoot, 'scripts', 'jeeves-pruned-mcp-server.mjs');
       await fs.stat(prunedServerScriptAbs);
+
       args.push('--config', 'mcp_servers.jeeves_pruned.command="node"');
-      args.push('--config', `mcp_servers.jeeves_pruned.args=["${prunedServerScriptRel}"]`);
+      args.push(
+        '--config',
+        `mcp_servers.jeeves_pruned.args=${tomlArrayOfStrings([prunedServerScriptAbs, '--root', options.cwd])}`,
+      );
     } catch {
       // ignore
     }

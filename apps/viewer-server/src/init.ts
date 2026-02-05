@@ -59,14 +59,6 @@ async function ensureWorktree(params: {
   await runGit(['-C', params.repoDir, 'worktree', 'add', '-B', params.branch, params.worktreeDir, params.baseRef]);
 }
 
-async function ensureStateLink(worktreeDir: string, stateDir: string): Promise<void> {
-  const linkPath = path.join(worktreeDir, '.jeeves');
-  await fs.rm(linkPath, { recursive: true, force: true }).catch(() => void 0);
-
-  const type: 'dir' | 'junction' = process.platform === 'win32' ? 'junction' : 'dir';
-  await fs.symlink(stateDir, linkPath, type);
-}
-
 export type InitIssueRequest = Readonly<{
   repo: string;
   issue: number;
@@ -100,6 +92,12 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
   const repoDir = await ensureRepoClone({ dataDir: params.dataDir, repo });
   const baseRef = await resolveBaseRef(repoDir);
 
+  const worktreeDir = getWorktreePath(repo.owner, repo.repo, issueNumber, params.dataDir);
+  await ensureWorktree({ repoDir, worktreeDir, branch, baseRef, force });
+  await ensureJeevesExcludedFromGitStatus(worktreeDir).catch(() => void 0);
+
+  // State lives inside the worktree at `<worktreeDir>/.jeeves` so agent sandboxes and MCP tools can
+  // read/write it without following symlinks outside the worktree cwd.
   const stateDir = getIssueStateDir(repo.owner, repo.repo, issueNumber, params.dataDir);
   await createIssueState({
     owner: repo.owner,
@@ -112,11 +110,6 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
     designDocPath: params.body.design_doc?.trim() || undefined,
     force,
   });
-
-  const worktreeDir = getWorktreePath(repo.owner, repo.repo, issueNumber, params.dataDir);
-  await ensureWorktree({ repoDir, worktreeDir, branch, baseRef, force });
-  await ensureStateLink(worktreeDir, stateDir);
-  await ensureJeevesExcludedFromGitStatus(worktreeDir).catch(() => void 0);
 
   await writeJsonAtomic(path.join(params.dataDir, 'active-issue.json'), {
     issue_ref: `${repo.owner}/${repo.repo}#${issueNumber}`,

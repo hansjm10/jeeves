@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { getIssueStateDir, getIssuesDir, parseRepoSpec, type RepoSpec } from './paths.js';
+import { getIssueStateDir, getIssuesDir, getLegacyIssueStateDir, getWorktreesDir, parseRepoSpec, type RepoSpec } from './paths.js';
 
 export type IssueState = Readonly<{
   schemaVersion: 1;
@@ -182,31 +182,32 @@ export async function createIssueState(params: {
 }
 
 export async function listIssueStates(dataDir?: string): Promise<IssueStateSummary[]> {
-  const issuesDir = getIssuesDir(dataDir);
   const results: IssueStateSummary[] = [];
+  const seenKeys = new Set<string>();
 
-  const owners = await fs
-    .readdir(issuesDir, { withFileTypes: true })
-    .catch(() => [] as { name: string; isDirectory(): boolean }[]);
+  // Prefer the modern layout: worktrees/<owner>/<repo>/issue-<N>/.jeeves/issue.json
+  const worktreesDir = getWorktreesDir(dataDir);
+  const owners = await fs.readdir(worktreesDir, { withFileTypes: true }).catch(() => []);
 
   for (const ownerEnt of owners) {
     if (!ownerEnt.isDirectory()) continue;
     const owner = ownerEnt.name;
 
-    const repos = await fs
-      .readdir(path.join(issuesDir, owner), { withFileTypes: true })
-      .catch(() => []);
+    const repos = await fs.readdir(path.join(worktreesDir, owner), { withFileTypes: true }).catch(() => []);
     for (const repoEnt of repos) {
       if (!repoEnt.isDirectory()) continue;
       const repo = repoEnt.name;
 
-      const issues = await fs
-        .readdir(path.join(issuesDir, owner, repo), { withFileTypes: true })
-        .catch(() => []);
-      for (const issueEnt of issues) {
-        if (!issueEnt.isDirectory()) continue;
-        const issueDir = path.join(issuesDir, owner, repo, issueEnt.name);
-        const issueFile = path.join(issueDir, 'issue.json');
+      const worktrees = await fs.readdir(path.join(worktreesDir, owner, repo), { withFileTypes: true }).catch(() => []);
+      for (const wtEnt of worktrees) {
+        if (!wtEnt.isDirectory()) continue;
+        const m = wtEnt.name.match(/^issue-(\d+)$/);
+        if (!m) continue;
+        const issueNumber = Number(m[1]);
+        if (!Number.isInteger(issueNumber) || issueNumber <= 0) continue;
+
+        const stateDir = path.join(worktreesDir, owner, repo, wtEnt.name, '.jeeves');
+        const issueFile = path.join(stateDir, 'issue.json');
         const exists = await fs
           .stat(issueFile)
           .then(() => true)
@@ -215,17 +216,68 @@ export async function listIssueStates(dataDir?: string): Promise<IssueStateSumma
 
         try {
           const state = await loadIssueStateFromPath(issueFile);
+          const key = `${state.owner}/${state.repo}#${state.issue.number}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
           results.push({
-            owner,
-            repo,
+            owner: state.owner,
+            repo: state.repo,
+            issueNumber,
+            issueTitle: state.issue.title ?? '',
+            branch: state.branch,
+            phase: state.phase,
+            stateDir,
+          });
+        } catch {
+          // Skip invalid issue.json
+        }
+      }
+    }
+  }
+
+  // Also include legacy layout: issues/<owner>/<repo>/<issue>/issue.json
+  // (best-effort; helps visibility before migration runs).
+  const issuesDir = getIssuesDir(dataDir);
+  const legacyOwners = await fs.readdir(issuesDir, { withFileTypes: true }).catch(() => []);
+  for (const ownerEnt of legacyOwners) {
+    if (!ownerEnt.isDirectory()) continue;
+    const owner = ownerEnt.name;
+
+    const repos = await fs.readdir(path.join(issuesDir, owner), { withFileTypes: true }).catch(() => []);
+    for (const repoEnt of repos) {
+      if (!repoEnt.isDirectory()) continue;
+      const repo = repoEnt.name;
+
+      const issues = await fs.readdir(path.join(issuesDir, owner, repo), { withFileTypes: true }).catch(() => []);
+      for (const issueEnt of issues) {
+        if (!issueEnt.isDirectory()) continue;
+        const n = Number(issueEnt.name);
+        if (!Number.isInteger(n) || n <= 0) continue;
+
+        const legacyStateDir = getLegacyIssueStateDir(owner, repo, n, dataDir);
+        const issueFile = path.join(legacyStateDir, 'issue.json');
+        const exists = await fs
+          .stat(issueFile)
+          .then(() => true)
+          .catch(() => false);
+        if (!exists) continue;
+
+        try {
+          const state = await loadIssueStateFromPath(issueFile);
+          const key = `${state.owner}/${state.repo}#${state.issue.number}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          results.push({
+            owner: state.owner,
+            repo: state.repo,
             issueNumber: state.issue.number,
             issueTitle: state.issue.title ?? '',
             branch: state.branch,
             phase: state.phase,
-            stateDir: issueDir,
+            stateDir: legacyStateDir,
           });
         } catch {
-          // Skip invalid issue.json
+          // ignore
         }
       }
     }

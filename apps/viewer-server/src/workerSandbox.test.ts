@@ -66,7 +66,10 @@ describe('workerSandbox', () => {
         canonicalBranch: 'issue/42',
       });
 
-      expect(paths.stateDir).toBe(path.join(canonicalStateDir, '.runs', 'run-123', 'workers', 'T1'));
+      expect(paths.stateDir).toBe(
+        path.join(dataDir, 'worktrees', 'owner', 'repo', 'issue-42-workers', 'run-123', 'T1', '.jeeves'),
+      );
+      expect(paths.retainedStateDir).toBe(path.join(canonicalStateDir, '.runs', 'run-123', 'workers', 'T1'));
     });
 
     it('computes correct worker worktree directory path', () => {
@@ -318,7 +321,7 @@ describe('workerSandbox', () => {
       expect(workerTasks).toEqual(canonicalTasksJson);
     });
 
-    it('creates .jeeves symlink in worktree pointing to worker state dir', async () => {
+    it('creates .jeeves directory in worktree for worker state', async () => {
       const { runGit } = await import('./git.js');
       const mockRunGit = vi.mocked(runGit);
 
@@ -347,9 +350,11 @@ describe('workerSandbox', () => {
         canonicalTasksJson,
       });
 
-      const linkPath = path.join(result.sandbox.worktreeDir, '.jeeves');
-      const linkTarget = await fs.readlink(linkPath);
-      expect(linkTarget).toBe(result.sandbox.stateDir);
+      const jeevesPath = path.join(result.sandbox.worktreeDir, '.jeeves');
+      const stat = await fs.lstat(jeevesPath);
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(result.sandbox.stateDir).toBe(jeevesPath);
     });
 
     it('calls git worktree add with correct arguments', async () => {
@@ -590,21 +595,21 @@ describe('workerSandbox', () => {
         canonicalBranch: 'issue/42',
       });
 
-      // Create state directory with a file
+      // Create worktree state directory with a file
       await fs.mkdir(sandbox.stateDir, { recursive: true });
       await fs.writeFile(path.join(sandbox.stateDir, 'test.txt'), 'test', 'utf-8');
 
       await cleanupWorkerSandboxOnSuccess(sandbox);
 
-      // State dir should still exist
-      const stateDirExists = await fs
-        .stat(sandbox.stateDir)
+      // Retained state dir should still exist (worktree may be deleted)
+      const retainedExists = await fs
+        .stat(sandbox.retainedStateDir)
         .then(() => true)
         .catch(() => false);
-      expect(stateDirExists).toBe(true);
+      expect(retainedExists).toBe(true);
 
-      // File in state dir should still exist
-      const testFile = await fs.readFile(path.join(sandbox.stateDir, 'test.txt'), 'utf-8');
+      // File should be preserved in the retained snapshot
+      const testFile = await fs.readFile(path.join(sandbox.retainedStateDir, 'test.txt'), 'utf-8');
       expect(testFile).toBe('test');
     });
   });
@@ -681,7 +686,7 @@ describe('workerSandbox', () => {
       // Mock git to fail rev-parse (branch doesn't exist)
       mockRunGit.mockRejectedValueOnce(new Error('fatal: Needed a single revision'));
 
-      // Create state directory
+      // Create retained state directory (required for reuse)
       const sandbox = getWorkerSandboxPaths({
         taskId: 'T1',
         runId: 'run-123',
@@ -693,7 +698,7 @@ describe('workerSandbox', () => {
         dataDir,
         canonicalBranch: 'issue/42',
       });
-      await fs.mkdir(sandbox.stateDir, { recursive: true });
+      await fs.mkdir(sandbox.retainedStateDir, { recursive: true });
 
       await expect(
         reuseWorkerSandbox({
@@ -715,7 +720,7 @@ describe('workerSandbox', () => {
       const mockRunGit = vi.mocked(runGit);
       mockRunGit.mockClear();
 
-      // Create state directory
+      // Create retained state directory (used to rehydrate `.jeeves/` after re-attach)
       const sandbox = getWorkerSandboxPaths({
         taskId: 'T1',
         runId: 'run-123',
@@ -727,7 +732,8 @@ describe('workerSandbox', () => {
         dataDir,
         canonicalBranch: 'issue/42',
       });
-      await fs.mkdir(sandbox.stateDir, { recursive: true });
+      await fs.mkdir(sandbox.retainedStateDir, { recursive: true });
+      await fs.writeFile(path.join(sandbox.retainedStateDir, 'issue.json'), JSON.stringify({ ok: true }), 'utf-8');
 
       // Mock git rev-parse to succeed (branch exists)
       mockRunGit.mockResolvedValueOnce({ stdout: 'abc123', stderr: '' });
@@ -769,6 +775,11 @@ describe('workerSandbox', () => {
 
       expect(result.taskId).toBe('T1');
       expect(result.branch).toBe('issue/42-T1-run-123');
+      const jeevesExists = await fs
+        .stat(result.stateDir)
+        .then((s) => s.isDirectory())
+        .catch(() => false);
+      expect(jeevesExists).toBe(true);
     });
 
     it('reuses existing worktree when both worktree and branch exist', async () => {
@@ -776,7 +787,7 @@ describe('workerSandbox', () => {
       const mockRunGit = vi.mocked(runGit);
       mockRunGit.mockClear();
 
-      // Create state directory
+      // Create retained state directory (required for reuse)
       const sandbox = getWorkerSandboxPaths({
         taskId: 'T1',
         runId: 'run-123',
@@ -788,7 +799,8 @@ describe('workerSandbox', () => {
         dataDir,
         canonicalBranch: 'issue/42',
       });
-      await fs.mkdir(sandbox.stateDir, { recursive: true });
+      await fs.mkdir(sandbox.retainedStateDir, { recursive: true });
+      await fs.writeFile(path.join(sandbox.retainedStateDir, 'issue.json'), JSON.stringify({ ok: true }), 'utf-8');
 
       // Create worktree directory (simulating existing worktree)
       await fs.mkdir(sandbox.worktreeDir, { recursive: true });
@@ -816,14 +828,19 @@ describe('workerSandbox', () => {
 
       expect(result.taskId).toBe('T1');
       expect(result.branch).toBe('issue/42-T1-run-123');
+      const jeevesExists = await fs
+        .stat(result.stateDir)
+        .then((s) => s.isDirectory())
+        .catch(() => false);
+      expect(jeevesExists).toBe(true);
     });
 
-    it('creates .jeeves symlink pointing to state directory', async () => {
+    it('rehydrates .jeeves directory from retained state when missing', async () => {
       const { runGit } = await import('./git.js');
       const mockRunGit = vi.mocked(runGit);
       mockRunGit.mockClear();
 
-      // Create state directory
+      // Create retained state directory but leave the worktree `.jeeves/` missing
       const sandbox = getWorkerSandboxPaths({
         taskId: 'T1',
         runId: 'run-123',
@@ -835,7 +852,8 @@ describe('workerSandbox', () => {
         dataDir,
         canonicalBranch: 'issue/42',
       });
-      await fs.mkdir(sandbox.stateDir, { recursive: true });
+      await fs.mkdir(sandbox.retainedStateDir, { recursive: true });
+      await fs.writeFile(path.join(sandbox.retainedStateDir, 'issue.json'), JSON.stringify({ ok: true }), 'utf-8');
 
       // Create worktree directory
       await fs.mkdir(sandbox.worktreeDir, { recursive: true });
@@ -843,7 +861,7 @@ describe('workerSandbox', () => {
       // Mock git rev-parse to succeed (branch exists)
       mockRunGit.mockResolvedValueOnce({ stdout: 'abc123', stderr: '' });
 
-      await reuseWorkerSandbox({
+      const result = await reuseWorkerSandbox({
         taskId: 'T1',
         runId: 'run-123',
         issueNumber: 42,
@@ -855,10 +873,9 @@ describe('workerSandbox', () => {
         canonicalBranch: 'issue/42',
       });
 
-      // Verify .jeeves symlink exists and points to state dir
-      const linkPath = path.join(sandbox.worktreeDir, '.jeeves');
-      const linkTarget = await fs.readlink(linkPath);
-      expect(linkTarget).toBe(sandbox.stateDir);
+      const stat = await fs.lstat(result.stateDir);
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.isSymbolicLink()).toBe(false);
     });
   });
 });

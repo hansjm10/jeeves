@@ -132,16 +132,30 @@ export async function reconcileSonarTokenToWorktree(options: ReconcileOptions): 
     const stat = await fs.stat(worktreeDir);
     if (!stat.isDirectory()) {
       return {
-        sync_status: 'deferred_worktree_absent',
+        sync_status: hasToken ? 'deferred_worktree_absent' : 'in_sync',
         warnings: ['Worktree path exists but is not a directory.'],
         last_error: 'Worktree path exists but is not a directory.',
       };
     }
   } catch {
     return {
-      sync_status: 'deferred_worktree_absent',
+      sync_status: hasToken ? 'deferred_worktree_absent' : 'in_sync',
       warnings: ['Worktree directory does not exist.'],
       last_error: 'Worktree directory does not exist.',
+    };
+  }
+
+  // Treat non-git directories as "worktree absent" for sync semantics.
+  // Some code paths create the directory skeleton (e.g. `.jeeves/`) without a real git worktree.
+  const gitMarkerExists = await fs
+    .stat(path.join(worktreeDir, '.git'))
+    .then((s) => s.isFile() || s.isDirectory())
+    .catch(() => false);
+  if (!gitMarkerExists) {
+    return {
+      sync_status: hasToken ? 'deferred_worktree_absent' : 'in_sync',
+      warnings: ['Worktree directory is not a git worktree.'],
+      last_error: hasToken ? 'Worktree directory is not a git worktree.' : null,
     };
   }
 

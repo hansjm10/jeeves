@@ -10,6 +10,28 @@ import { SdkOutputWriterV1 } from './outputWriter.js';
 import { EventHookPipeline } from './hooks.js';
 import { PrunerHook } from './hooks/prunerHook.js';
 
+async function ensurePhysicalDirectory(dirPath: string): Promise<void> {
+  const st = await fs.lstat(dirPath).catch(() => null);
+  if (!st) return;
+  if (!st.isSymbolicLink()) return;
+
+  // `.jeeves/` used to be a symlink from the worktree into a shared state directory.
+  // Some agent sandboxes/MCP hosts deny reads that traverse symlinks outside the cwd, so we
+  // migrate the symlink into a real directory in-place (best-effort).
+  const linkTarget = await fs.readlink(dirPath).catch(() => null);
+  const targetAbs = linkTarget ? path.resolve(path.dirname(dirPath), linkTarget) : null;
+
+  const tmp = `${dirPath}.migrate-tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  await fs.mkdir(tmp, { recursive: true });
+
+  if (targetAbs) {
+    await fs.cp(targetAbs, tmp, { recursive: true, force: true }).catch(() => void 0);
+  }
+
+  await fs.unlink(dirPath).catch(() => void 0);
+  await fs.rename(tmp, dirPath);
+}
+
 function envFlag(name: string): boolean {
   const raw = process.env[name];
   if (!raw) return false;
@@ -50,6 +72,7 @@ export type RunPhaseParams = Readonly<{
 
 export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: boolean }> {
   await ensureJeevesExcludedFromGitStatus(params.cwd).catch(() => void 0);
+  await ensurePhysicalDirectory(path.dirname(params.outputPath));
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
   await ensureProgressFile(params.progressPath);
@@ -202,6 +225,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
   const progressPath = path.join(params.stateDir, 'progress.txt');
 
   if (engine.isTerminal(phase)) {
+    await ensurePhysicalDirectory(path.dirname(outputPath));
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.mkdir(path.dirname(logPath), { recursive: true });
     await ensureProgressFile(progressPath);

@@ -53,13 +53,28 @@ export function getWorktreesDir(dataDir: string = getDataDir()): string {
   return path.join(dataDir, 'worktrees');
 }
 
-export function getIssueStateDir(
+/**
+ * Legacy issue state directory (pre-2026-02): `${dataDir}/issues/<owner>/<repo>/<issueNumber>`.
+ *
+ * Jeeves now stores per-issue state inside the issue worktree at `${worktreeDir}/.jeeves`
+ * so agent sandboxes and MCP tools can access it without traversing symlinks outside cwd.
+ */
+export function getLegacyIssueStateDir(
   owner: string,
   repo: string,
   issueNumber: number,
   dataDir: string = getDataDir(),
 ): string {
   return path.join(getIssuesDir(dataDir), owner, repo, String(issueNumber));
+}
+
+export function getIssueStateDir(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  dataDir: string = getDataDir(),
+): string {
+  return path.join(getWorktreePath(owner, repo, issueNumber, dataDir), '.jeeves');
 }
 
 export function getWorktreePath(

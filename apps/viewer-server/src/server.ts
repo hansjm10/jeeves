@@ -1494,7 +1494,11 @@ export async function buildServer(config: ViewerServerConfig) {
     const hasToken = secret.exists;
 
     const worktreePresent = Boolean(
-      workDir && (await fs.stat(workDir).catch(() => null))?.isDirectory(),
+      workDir &&
+        (await fs
+          .stat(path.join(workDir, '.git'))
+          .then((s) => s.isFile() || s.isDirectory())
+          .catch(() => false)),
     );
 
     // Read status from issue.json

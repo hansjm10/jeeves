@@ -4272,8 +4272,8 @@ describe('sonar-token endpoints', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json() as Record<string, unknown>;
       expect(body.has_token).toBe(true);
-      // sync_status should indicate failure (failed_exclude since git is missing)
-      expect(body.sync_status).toBe('failed_exclude');
+      // When `.git` is missing, treat as worktree-absent for sync semantics.
+      expect(body.sync_status).toBe('deferred_worktree_absent');
       // last_error should be set
       expect(body.last_error).not.toBeNull();
       expect(typeof body.last_error).toBe('string');

@@ -46,14 +46,16 @@ describe('waveResultMerge', () => {
   });
 
   function createSandbox(taskId: string): WorkerSandbox {
+    const worktreeDir = path.join(tmpDir, 'worktrees', taskId);
     return {
       taskId,
       runId: 'run-123',
       issueNumber: 42,
       owner: 'owner',
       repo: 'repo',
-      stateDir: path.join(stateDir, '.runs', 'run-123', 'workers', taskId),
-      worktreeDir: path.join(tmpDir, 'worktrees', taskId),
+      worktreeDir,
+      stateDir: path.join(worktreeDir, '.jeeves'),
+      retainedStateDir: path.join(stateDir, '.runs', 'run-123', 'workers', taskId),
       branch: `issue/42-${taskId}-run-123`,
       repoDir: path.join(tmpDir, 'repo'),
       canonicalBranch: 'issue/42',

@@ -8,9 +8,10 @@
     "build": "tsc -b --pretty false",
     "test": "vitest run",
     "run:fixture": "pnpm exec jeeves-runner run-fixture",
-    "dev:viewer-server": "pnpm build && node --env-file-if-exists=.env apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081",
+    "dev:viewer-server:dist": "node scripts/with-env.mjs -- node apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081",
+    "dev:viewer-server": "pnpm build && pnpm dev:viewer-server:dist",
     "dev:viewer": "pnpm --filter @jeeves/viewer dev",
-    "dev": "pnpm build && concurrently -k -n viewer,viewer-server -c cyan,magenta \"pnpm dev:viewer\" \"node --env-file-if-exists=.env apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081\"",
+    "dev": "pnpm build && concurrently -k -n viewer,viewer-server -c cyan,magenta \"pnpm dev:viewer\" \"pnpm dev:viewer-server:dist\"",
     "prepare": "lefthook install"
   },
   "devDependencies": {
@@ -24,7 +25,8 @@
     "lefthook": "^2.0.16",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "zod": "^4.3.6"
   },
   "engines": {
     "node": ">=20",

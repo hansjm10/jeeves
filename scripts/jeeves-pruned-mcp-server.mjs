@@ -28,10 +28,19 @@ function resolveRoot() {
   return path.resolve(root ?? process.cwd());
 }
 
-function ensureUnderRoot(rootAbs, requestedPath) {
-  const resolved = path.resolve(rootAbs, requestedPath);
-  if (resolved === rootAbs) return resolved;
-  if (resolved.startsWith(`${rootAbs}${path.sep}`)) return resolved;
+function isUnderRoot(rootAbs, fileAbs) {
+  const rel = path.relative(rootAbs, fileAbs);
+  if (rel === "") return true;
+  if (rel === "..") return false;
+  if (path.isAbsolute(rel)) return false;
+  return !rel.startsWith(`..${path.sep}`);
+}
+
+async function ensureUnderRoot(rootAbs, requestedPath) {
+  const rootReal = await fs.realpath(rootAbs);
+  const resolved = path.resolve(rootReal, requestedPath);
+  const resolvedReal = await fs.realpath(resolved);
+  if (isUnderRoot(rootReal, resolvedReal)) return resolvedReal;
   throw new Error(`path outside root: ${requestedPath}`);
 }
 
@@ -84,7 +93,7 @@ async function main() {
     },
     async ({ path: requestedPath, context_focus_question, threshold }) => {
       try {
-        const fileAbs = ensureUnderRoot(rootAbs, requestedPath);
+        const fileAbs = await ensureUnderRoot(rootAbs, requestedPath);
         const content = await fs.readFile(fileAbs, "utf-8");
 
         const query = (context_focus_question ?? "").trim();
@@ -113,4 +122,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.stack ?? err.message : String(err));
   process.exit(1);
 });
-

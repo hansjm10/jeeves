@@ -45,6 +45,14 @@ function envInt(name: string): number | null {
   return n;
 }
 
+function isWithinDir(rootAbs: string, candidateAbs: string): boolean {
+  const rel = path.relative(rootAbs, candidateAbs);
+  if (rel === '') return true;
+  if (rel === '..') return false;
+  if (path.isAbsolute(rel)) return false;
+  return !rel.startsWith(`..${path.sep}`);
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') return false;
   const proto = Object.getPrototypeOf(value);
@@ -168,6 +176,9 @@ export class ClaudeAgentProvider implements AgentProvider {
     const prunerDefaultQuery = process.env.JEEVES_PRUNER_QUERY ?? prompt;
     const prunerTimeoutMs = envInt('JEEVES_PRUNER_TIMEOUT_MS') ?? 30_000;
 
+    const cwdAbs = path.resolve(options.cwd);
+    const cwdRealPromise = fs.realpath(cwdAbs).catch(() => cwdAbs);
+
     const prunedReadServer = prunerEnabled
       ? createSdkMcpServer({
         name: 'jeeves_pruned',
@@ -188,10 +199,10 @@ export class ClaudeAgentProvider implements AgentProvider {
               context_focus_question: z.string().nullable().optional(),
             },
             async (args) => {
-              const cwdAbs = path.resolve(options.cwd);
+              const cwdReal = await cwdRealPromise;
               const requested = String(args.path);
               const resolved = path.resolve(cwdAbs, requested);
-              if (resolved !== cwdAbs && !resolved.startsWith(`${cwdAbs}${path.sep}`)) {
+              if (!isWithinDir(cwdAbs, resolved)) {
                 return {
                   isError: true,
                   content: [{ type: 'text', text: `Read denied: path outside cwd (${requested})` }],
@@ -200,7 +211,14 @@ export class ClaudeAgentProvider implements AgentProvider {
 
               let content: string;
               try {
-                content = await fs.readFile(resolved, 'utf-8');
+                const resolvedReal = await fs.realpath(resolved);
+                if (!isWithinDir(cwdReal, resolvedReal)) {
+                  return {
+                    isError: true,
+                    content: [{ type: 'text', text: `Read denied: path outside cwd (${requested})` }],
+                  };
+                }
+                content = await fs.readFile(resolvedReal, 'utf-8');
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 return {

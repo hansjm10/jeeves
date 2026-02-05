@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PrunerHook } from './prunerHook.js';
 
 const enabled = process.env.JEEVES_PRUNER_INTEGRATION === '1';
-const prunerUrl = process.env.JEEVES_PRUNER_URL ?? 'http://192.168.1.15:8000/prune';
+const prunerUrl = process.env.JEEVES_PRUNER_URL ?? 'http://localhost:8000/prune';
 
 const integrationIt = enabled ? it : it.skip;
 

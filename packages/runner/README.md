@@ -48,6 +48,16 @@ For each run, the runner writes to the state directory:
 - `last-run.log`
 - `progress.txt`
 
+## Optional: tool result pruning
+
+The runner can optionally pass `tool_result` payloads through a pruning hook before writing them to `sdk-output.json`.
+
+Environment variables:
+- `JEEVES_PRUNER_ENABLED`: enable the pruner hook (`true`/`1`/`yes`)
+- `JEEVES_PRUNER_URL`: pruner service URL (default: `http://localhost:8000/prune`)
+- `JEEVES_PRUNER_TARGET_TOOLS`: comma-separated tool names to prune (default: `Read,Bash,Grep,command_execution`)
+- `JEEVES_PRUNER_QUERY`: override the pruning query (default: current phase prompt, truncated)
+
 ## Provider defaults
 
 The `claude` provider uses the Claude Agent TypeScript SDK with:

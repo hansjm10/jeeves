@@ -7,6 +7,20 @@ import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import type { AgentProvider } from './provider.js';
 import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted } from './progress.js';
 import { SdkOutputWriterV1 } from './outputWriter.js';
+import { EventHookPipeline } from './hooks.js';
+import { PrunerHook } from './hooks/prunerHook.js';
+
+function envFlag(name: string): boolean {
+  const raw = process.env[name];
+  if (!raw) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function truncate(input: string, maxChars: number): string {
+  if (input.length <= maxChars) return input;
+  return input.slice(0, maxChars);
+}
 
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
@@ -42,7 +56,31 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     await logLine(`[RUNNER] phase=${params.phaseName}`);
     await logLine(`[RUNNER] prompt=${params.promptPath}`);
 
-    for await (const evt of params.provider.run(prompt, { cwd: params.cwd })) {
+    const rawEvents = params.provider.run(prompt, { cwd: params.cwd });
+    const pipeline = new EventHookPipeline();
+
+    const prunerEnabled = envFlag('JEEVES_PRUNER_ENABLED');
+    if (prunerEnabled) {
+      const prunerUrl = process.env.JEEVES_PRUNER_URL ?? 'http://localhost:8000/prune';
+      const query = truncate(process.env.JEEVES_PRUNER_QUERY ?? prompt, 8000);
+      const targetTools = (process.env.JEEVES_PRUNER_TARGET_TOOLS ?? 'Read,Bash,Grep,command_execution')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      pipeline.addHook(
+        new PrunerHook({
+          prunerUrl,
+          enabled: true,
+          targetTools,
+          query,
+        }),
+      );
+    }
+
+    const events = prunerEnabled ? pipeline.process(rawEvents) : rawEvents;
+
+    for await (const evt of events) {
       writer.addProviderEvent(evt);
 
       if (evt.type === 'assistant' || evt.type === 'user' || evt.type === 'result') {

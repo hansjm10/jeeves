@@ -33,6 +33,33 @@ import {
   hasCompletionMarker,
 } from './workerSandbox.js';
 import { decideQuickFixRouting } from './quickFixRouter.js';
+import { ingestRunArchiveIntoMetrics, readMetricsFile } from './metricsStore.js';
+import { computeIssueEstimateFromMetrics, isValidIssueEstimate, type IssueEstimate } from './issueEstimate.js';
+
+/**
+ * Phases that are considered "decomposition" phases.
+ * Transitioning FROM any of these phases to a post-decomposition phase
+ * should trigger estimate computation.
+ */
+const DECOMPOSITION_PHASES = new Set([
+  'design_plan',
+  'task_decomposition',
+]);
+
+/**
+ * Phases that occur before task decomposition.
+ * Resetting to any of these phases should clear the estimate.
+ */
+const PRE_DECOMPOSITION_PHASES = new Set([
+  'design_classify',
+  'design_workflow',
+  'design_api',
+  'design_data',
+  'design_plan',
+  'design_review',
+  'design_edit',
+  'task_decomposition',
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -96,6 +123,37 @@ function exitCodeFromExitEvent(code: number | null, signal: NodeJS.Signals | nul
     return 1;
   }
   return 0;
+}
+
+/**
+ * Parse owner and repo from an issue ref string.
+ * @param issueRef - Format: "owner/repo#number"
+ * @returns { owner, repo } or null if invalid
+ */
+function parseOwnerRepo(issueRef: string | null): { owner: string; repo: string } | null {
+  if (!issueRef) return null;
+  const match = issueRef.match(/^([^/]+)\/([^#]+)#\d+$/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2] };
+}
+
+/**
+ * Read task count from tasks.json.
+ * @param stateDir - Issue state directory
+ * @returns Task count or null if unavailable
+ */
+async function readTaskCount(stateDir: string): Promise<number | null> {
+  const tasksPath = path.join(stateDir, 'tasks.json');
+  try {
+    const raw = await fs.readFile(tasksPath, 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
+      return (parsed as { tasks: unknown[] }).tasks.length;
+    }
+  } catch {
+    // Ignore read errors
+  }
+  return null;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -516,6 +574,38 @@ export class RunManager {
     };
   }
 
+  /**
+   * Compute issue estimate from metrics and task count.
+   * Returns a fully valid IssueEstimate or null (never partial).
+   *
+   * AC2: Called when transitioning off decomposition (end of design_plan / task_decomposition).
+   */
+  private async computeAndPersistEstimate(
+    _issueJson: Record<string, unknown>,
+    workflowName: string,
+  ): Promise<IssueEstimate | null> {
+    if (!this.stateDir) return null;
+
+    // Read task count from tasks.json
+    const taskCount = await readTaskCount(this.stateDir);
+    if (taskCount === null || taskCount < 0) return null;
+
+    // Read metrics for the repo
+    const parsed = parseOwnerRepo(this.issueRef);
+    if (!parsed) return null;
+
+    const metrics = await readMetricsFile(this.dataDir, parsed.owner, parsed.repo);
+    // computeIssueEstimateFromMetrics handles null metrics and returns null if insufficient history
+    const estimate = computeIssueEstimateFromMetrics(taskCount, workflowName, metrics);
+
+    // Validate estimate is fully valid or null
+    if (estimate !== null && !isValidIssueEstimate(estimate)) {
+      return null;
+    }
+
+    return estimate;
+  }
+
   private async checkCompletionPromise(): Promise<boolean> {
     if (!this.stateDir) return false;
     const sdkPath = path.join(this.stateDir, 'sdk-output.json');
@@ -902,6 +992,8 @@ export class RunManager {
               const nextPhase = requestedPhase && nextWorkflow.phases[requestedPhase] ? requestedPhase : nextWorkflow.start;
               updatedIssue.workflow = nextWorkflowName;
               updatedIssue.phase = nextPhase;
+              // AC3: Clear estimate on workflow switch
+              updatedIssue.estimate = null;
               await writeIssueJson(this.stateDir!, updatedIssue);
               this.broadcast('state', await this.getStateSnapshot());
               await this.appendViewerLog(viewerLogPath, `[WORKFLOW] Switched: ${workflowName} -> ${nextWorkflowName} (phase=${nextPhase})`);
@@ -918,6 +1010,19 @@ export class RunManager {
             if (isPlainRecord(control) && control.restartPhase === true) {
               delete control.restartPhase;
               if (Object.keys(control).length === 0) delete updatedIssue.control;
+            }
+
+            // AC2 & AC3: Handle estimate computation and clearing on phase transitions
+            // AC3: Clear estimate when resetting to a pre-decomposition phase
+            if (PRE_DECOMPOSITION_PHASES.has(nextPhase)) {
+              updatedIssue.estimate = null;
+            }
+            // AC2: Compute estimate when transitioning FROM decomposition phase TO post-decomposition
+            else if (DECOMPOSITION_PHASES.has(currentPhase) && !PRE_DECOMPOSITION_PHASES.has(nextPhase)) {
+              // Compute estimate from metrics and task count
+              const estimate = await this.computeAndPersistEstimate(updatedIssue, workflowName);
+              // estimate is either a valid IssueEstimate or null (never partial)
+              updatedIssue.estimate = estimate;
             }
 
             await writeIssueJson(this.stateDir!, updatedIssue);
@@ -1195,6 +1300,20 @@ export class RunManager {
       current_iteration: this.status.current_iteration,
       command: this.status.command,
     });
+
+    // AC1: Ingest metrics for successfully completed runs
+    // Only ingest if run completed successfully (exit_code === 0 AND completed via state or promise)
+    const isSuccessfulRun =
+      this.status.returncode === 0 &&
+      (this.status.completed_via_state || this.status.completed_via_promise);
+
+    if (isSuccessfulRun) {
+      const parsed = parseOwnerRepo(this.issueRef);
+      if (parsed) {
+        // ingestRunArchiveIntoMetrics handles dedup by run_id and uses atomic writes
+        await ingestRunArchiveIntoMetrics(this.dataDir, this.runDir, parsed.owner, parsed.repo).catch(() => void 0);
+      }
+    }
   }
 
   private async captureGitDebug(iterDir: string): Promise<void> {

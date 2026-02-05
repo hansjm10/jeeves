@@ -67,9 +67,9 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `run:shutdown` | Runner ends the provider phase and releases resources. | The provider phase ends (success, failure, or cancel). |
 | `req:received` | MCP server accepts an incoming tool request and assigns `request_id`. | A client connects and submits an MCP request. |
 | `req:validating` | MCP server validates tool name and arguments, applies defaults, and normalizes inputs. | `req:received` begins processing. |
-| `req:invalid_request` | MCP server rejects the request with a client error; no tool execution occurs. **Terminal (per-request).** | Validation fails (schema/type/range/path rules). |
+| `req:invalid_request` | MCP server rejects the request with a client error; no tool execution occurs. **Terminal (per-request).** | Validation fails (schema/type rules). |
 | `req:executing_tool` | MCP server executes the underlying operation (`read` file, run `bash`, or run `grep`). | `req:validating` succeeds. |
-| `req:tool_error` | Underlying tool operation fails; MCP server returns a tool error. **Terminal (per-request).** | Tool execution fails (e.g., ENOENT, non-zero exit, timeout). |
+| `req:tool_error` | Underlying tool operation fails; MCP server returns an **error text** in a normal tool response. **Terminal (per-request).** | Tool execution fails (e.g., file read error, spawn error, `grep` exit code 2, non-zero `bash` exit code). |
 | `req:raw_output_ready` | Raw (unpruned) tool output is available in memory. | `req:executing_tool` completes successfully. |
 | `req:prune_check` | MCP server decides whether pruning will be attempted. | `req:raw_output_ready` completes. |
 | `req:calling_pruner` | MCP server calls the configured HTTP pruner endpoint with raw output + `context_focus_question`. | `req:prune_check` determines pruning is eligible. |
@@ -114,7 +114,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Write a diagnostic log message; continue run without MCP pruner. |
 | `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Write a diagnostic log message; continue run without MCP pruner. |
 | `req:received` | Request body parse error | `req:invalid_request` | Return MCP client error; write a diagnostic log message. |
-| `req:validating` | Schema/type/range validation errors | `req:invalid_request` | Return MCP client error with field errors; write a diagnostic log message. |
+| `req:validating` | Schema/type validation errors | `req:invalid_request` | Return MCP client error with field errors; write a diagnostic log message. |
 | `req:executing_tool` | File read error (ENOENT, EACCES) | `req:tool_error` | Return tool error; write a diagnostic log message. |
 | `req:calling_pruner` | Pruner timeout | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
 | `req:calling_pruner` | Pruner non-2xx / network error | `req:pruner_error_fallback` | Write a diagnostic log message and fall back to raw output. |
@@ -138,8 +138,8 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 | Subprocess | Receives | Can Write | Failure Handling |
 |------------|----------|-----------|------------------|
 | `@jeeves/mcp-pruner` (server) | Run config via env (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`). | Writes logs to stderr only; stdout is reserved for MCP protocol. | Provider spawn/connect failure -> `run:mcp_pruner_disabled`; unexpected exit during run -> `run:mcp_pruner_degraded`. |
-| `bash` tool command | `command` (runs in server root dir). | May write to filesystem as a normal shell command would (trusted local automation). | Non-zero exit -> `req:tool_error`; stdout/stderr captured into raw output text. |
-| `grep` tool command (`rg` or equivalent) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Non-zero tool exit -> `req:tool_error` (include stderr if available). |
+| `bash` tool command | `command` (runs with `cwd=MCP_PRUNER_CWD`). | May write to filesystem as a normal shell command would (trusted local automation). | Exit code is surfaced in the **tool output text** (see Section 3). Non-zero exit transitions to `req:tool_error` but still returns a normal tool response (`result.content[0].text`), not a JSON-RPC error. |
+| `grep` tool command (`grep`) | `pattern`, optional `path` (defaults to `"."`). | None (read-only scan), aside from process stdout/stderr. | Exit code `0` (matches) -> stdout; `1` (no matches) -> success with `"(no matches found)"`; exit code `2` -> `req:tool_error` and returns `Error: <stderr>` as tool output text. |
 
 ## 3. Interfaces
 
@@ -154,29 +154,14 @@ All MCP requests are JSON-RPC 2.0 objects (over stdio):
 - Response (success): `{ jsonrpc: "2.0", id: string | number, result: object }`
 - Response (error): `{ jsonrpc: "2.0", id: string | number | null, error: { code: number, message: string, data?: object } }`
  
-Tool input validation uses issue-aligned `zod` schemas, but the server does not treat SDK-generated error strings as a public contract. Validation failures are returned as deterministic JSON-RPC invalid-params errors as defined below.
+Tool input validation uses issue-aligned `zod` schemas. Validation failures return JSON-RPC `-32602` with `error.message="Invalid params"` (exact string). Any additional `error.data` is SDK-defined and not treated as a stable public contract.
 
 Supported methods:
 | MCP Method | Invocation Pattern | Params | Result | Errors |
 |-----------|--------------------|--------|--------|--------|
-| `initialize` | JSON-RPC request | `{ protocolVersion: string, clientInfo?: { name: string, version?: string }, capabilities?: object }` | `{ protocolVersion: string, serverInfo: { name: "@jeeves/mcp-pruner", version: string }, capabilities: { tools: { listChanged?: false } }, jeeves: { schemaVersion: 1 } }` | JSON-RPC `-32602` if required fields missing/invalid |
+| `initialize` | JSON-RPC request | `{ protocolVersion: string, clientInfo?: { name: string, version?: string }, capabilities?: object }` | `{ protocolVersion: string, serverInfo: { name: "mcp-pruner", version: "1.0.0" }, capabilities: { tools: { listChanged?: false } } }` | JSON-RPC `-32602` if required fields missing/invalid |
 | `tools/list` | JSON-RPC request | `{}` or omitted | `{ tools: Array<{ name: "read" | "bash" | "grep", description: string, inputSchema: JSONSchema }> }` | JSON-RPC `-32601` for unknown method; `-32602` for invalid params |
-| `tools/call` | JSON-RPC request | `{ name: "read" | "bash" | "grep", arguments: object }` | `{ content: Array<{ type: "text", text: string }>, isError?: boolean }` | JSON-RPC `-32602` invalid params; tool-level errors return `result.isError=true` (not JSON-RPC errors) |
-
-#### Invalid params (`-32602`) contract (deterministic)
-The server does **not** treat SDK-generated error strings as a public contract. All request/param validation failures for supported methods are mapped to the following JSON-RPC error shape:
-
-- `error.code`: `-32602`
-- `error.message`: `"Invalid params"` (exact string)
-- `error.data`:
-  - `jeeves`: `{ schemaVersion: 1 }`
-  - `method`: MCP method name (e.g., `"tools/call"`)
-  - `tool` (optional): tool name when `method === "tools/call"` and `params.name` is present
-  - `issues`: `Array<{ path: string; code: string; message: string }>`
-    - `path`: dot-joined path (e.g., `"arguments.file_path"`), `""` for root
-    - `code`: the `zod` issue `code`
-    - `message`: equals `code` (stable, implementation-defined; avoids version-dependent wording)
-    - Ordering: `issues` are sorted lexicographically by `(path, code)` before being returned
+| `tools/call` | JSON-RPC request | `{ name: "read" | "bash" | "grep", arguments: object }` | `{ content: Array<{ type: "text", text: string }> }` | JSON-RPC `-32602` invalid params; tool execution failures return a normal tool result with an error string in `content[0].text` |
 
 ### MCP Tools (issue-aligned)
 Tool schemas are a **strict match** to the GitHub issue examples:
@@ -185,24 +170,31 @@ Tool schemas are a **strict match** to the GitHub issue examples:
 - No additional tool arguments (timeouts, output limits, path lists, flags, etc.)
 - No structured/metadata outputs are part of the public contract
 
-All tools return `result.content` with a single `{ type: "text", text: string }` item. On tool execution failure, the tool returns `result.isError=true` and includes a human-readable error string in `content[0].text`. Parameter validation failures remain JSON-RPC `-32602` per the deterministic contract above.
+All tools return `result.content` with a single `{ type: "text", text: string }` item. `result.isError` is **not set** (omitted), including on failures; errors are represented as specific strings in `content[0].text` as described below. Parameter validation failures are JSON-RPC `-32602` (invalid params).
 
 **Common field**
-- `context_focus_question` (optional, `string`): Non-empty question used to focus/prune the raw tool output.
+- `context_focus_question` (optional, `string`): If provided and truthy, triggers a best-effort prune request using the raw tool output as `code` and the question value as `query` (passed verbatim).
 
 Tool: `read`
 - Arguments:
   - `file_path` (required, `string`): Absolute or relative path to the file to read (see **Tool argument validation**).
   - `context_focus_question` (optional, `string`).
-- Output text: raw file contents (UTF-8), or pruned contents when pruning succeeds.
+- Output text:
+  - Success: raw file contents (UTF-8), or pruned contents when pruning succeeds.
+  - Failure (file read error): `Error reading file: <fs error message>` (exact prefix).
+  - Pruning eligibility: only when `context_focus_question` is provided and truthy; pruning is not attempted for the file-read error string (issue example returns early).
 
 Tool: `bash`
 - Arguments:
   - `command` (required, `string`): Shell command to run.
   - `context_focus_question` (optional, `string`).
-- Output text:
-  - Captured `stdout`, plus `\\n` + captured `stderr` if `stderr` is non-empty.
-  - Non-zero exit returns `isError=true` and includes the same captured text.
+- Output text (issue-aligned; exact markers):
+  - Start with captured `stdout` (may be empty).
+  - If `stderr` is non-empty, append `\\n[stderr]\\n` + captured `stderr`.
+  - If `exit_code !== 0` (including `null`), append `\\n[exit code: <exit_code>]`.
+  - If the final assembled output is empty, return `(no output)` (exact string).
+  - Spawn error: `Error executing command: <error.message>` (exact prefix).
+  - Pruning eligibility: only when `context_focus_question` is provided and truthy **and** the assembled output is non-empty (prunes before returning).
 
 Tool: `grep`
 - Arguments:
@@ -211,19 +203,17 @@ Tool: `grep`
   - `context_focus_question` (optional, `string`).
 - Output text: line-oriented search results (e.g., `path:line:match`), as produced by the underlying engine.
 
-**Execution strategy (preferred `rg`, deterministic fallback)**
-- Engine selection:
-  1. Attempt `rg` from `PATH`.
-  2. If `rg` is not executable / spawn fails with `ENOENT`, fall back to system `grep`.
-- Preferred (`rg`) command:
-  - `rg -n -- <pattern> <resolved_path>`
-  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success** (empty output for `1`); `2` is a tool error.
-- Fallback (`grep`) command:
-  - `grep -R -n -H -E -- <pattern> <resolved_path>`
-  - Exit-code handling: `0` (matches) and `1` (no matches) are both **success**; `2` is a tool error.
+**Execution strategy (issue-aligned)**
+- Command: `grep -rn --color=never <pattern> <path>` where `<path> = arguments.path ?? "."`
+- Exit-code handling:
+  - `0` (matches): return `stdout` verbatim
+  - `1` (no matches): return `(no matches found)` (exact string)
+  - `2` (error): if `stderr` is non-empty return `Error: <stderr>` (exact prefix); otherwise fall back to `stdout || "(no matches found)"`
+- Spawn error: `Error executing grep: <error.message>` (exact prefix)
+- Pruning eligibility: only when `context_focus_question` is provided and truthy **and** `stdout` is non-empty (the placeholder `(no matches found)` is never pruned).
 
 ### Outbound HTTP (swe-pruner)
-The MCP server makes a best-effort HTTP call when `context_focus_question` is provided and pruning is enabled (`PRUNER_URL` is set and non-empty).
+The MCP server makes a best-effort HTTP call when a tool’s pruning eligibility conditions are met and pruning is enabled (`PRUNER_URL` is set and non-empty).
 
 - **URL**: `PRUNER_URL` (full URL, including path)
 - **Method**: `POST`
@@ -231,7 +221,7 @@ The MCP server makes a best-effort HTTP call when `context_focus_question` is pr
 - **Timeout**: `PRUNER_TIMEOUT_MS` (defaults to a safe value; see **Validation Rules**)
 - **Request body (issue-aligned)**: `{ code: string, query: string }`
   - `code` is the raw tool output text prior to pruning (the same text that would be returned without pruning).
-  - `query = context_focus_question.trim()`
+  - `query = context_focus_question` (passed verbatim; no trimming)
 - **Success response (200)**:
   - Response MUST be JSON, and the pruned text is read from the first string field present in this order: `pruned_code`, then `content`, then `text`.
   - If none of these fields is present as a string, treat as `invalid_response`.
@@ -268,7 +258,7 @@ The viewer already captures run logs for both Claude and Codex runs, including s
 |-------|------|-------------|----------|
 | `PRUNER_URL` | string | optional; default `http://localhost:8000/prune`; empty string disables pruning | Used for outbound HTTP to `swe-pruner`. If empty, pruning is skipped and tools return raw output. When spawned by the Jeeves runner (and enabled), this env var is always set explicitly (default or empty). |
 | `PRUNER_TIMEOUT_MS` | number (env string) | optional; default `30000`; integer `100..300000` | Timeout for the outbound pruner call. |
-| `MCP_PRUNER_CWD` | string | optional; default process `cwd`; must exist and be a directory | Root directory for resolving relative paths, default working dir for subprocesses, and the allowlist root for absolute-path inputs. |
+| `MCP_PRUNER_CWD` | string | optional; default process `cwd` | Working directory for `bash`/`grep` and the base path for resolving relative `read.file_path`. **No sandbox/containment is enforced**; absolute paths are accepted as-is (issue examples). |
 
 **Precedence**
 - Runner env vars determine whether MCP is injected and what env is passed to the provider-spawned server.
@@ -281,25 +271,26 @@ To reliably support both monorepo workspace runs and installed-package usage, `@
 3. If neither exists/readable, treat the pruner config as invalid for the run and do not inject `mcpServers`.
 
 **Tool argument validation (MCP request params)**
-Path handling is issue-aligned and consistent across tools:
-- Path inputs may be **absolute or relative**.
-- All paths are resolved to an absolute path using `MCP_PRUNER_CWD` as the root for relative inputs.
-- After resolution (and after resolving symlinks), the final path **must remain within** `MCP_PRUNER_CWD`. If it escapes, validation fails with JSON-RPC `-32602`.
+Tool argument validation is intentionally minimal and issue-aligned: schemas validate **types only** (required vs optional strings). The server does not enforce additional constraints (no sandboxing/containment, no trimming, no max lengths).
+
+Path semantics:
+- `read.file_path`: if absolute, use as-is; if relative, resolve against `MCP_PRUNER_CWD` via `path.resolve(cwd, file_path)`.
+- `grep.path`: passed to `grep` as provided (default `"."`); relative paths are interpreted by `grep` relative to `cwd=MCP_PRUNER_CWD`.
 
 | Field | Type | Constraints | Error |
 |-------|------|-------------|-------|
-| `read.file_path` | string | required; non-empty; no `\\0`; absolute or relative; resolves within server root dir (`MCP_PRUNER_CWD`); must refer to a regular file | JSON-RPC `-32602` |
-| `read.context_focus_question` | string | optional; if provided must be non-empty after trim; max 1000 chars | JSON-RPC `-32602` |
-| `bash.command` | string | required; non-empty; max 50000 chars | JSON-RPC `-32602` |
-| `bash.context_focus_question` | string | optional; same constraints as `read.context_focus_question` | JSON-RPC `-32602` |
-| `grep.pattern` | string | required; non-empty; max 10000 chars | JSON-RPC `-32602` |
-| `grep.path` | string | optional; absolute or relative; if provided resolves within server root dir (`MCP_PRUNER_CWD`) | JSON-RPC `-32602` |
-| `grep.context_focus_question` | string | optional; same constraints as `read.context_focus_question` | JSON-RPC `-32602` |
+| `read.file_path` | string | required | JSON-RPC `-32602` (invalid type / missing) |
+| `read.context_focus_question` | string | optional | JSON-RPC `-32602` (invalid type) |
+| `bash.command` | string | required | JSON-RPC `-32602` (invalid type / missing) |
+| `bash.context_focus_question` | string | optional | JSON-RPC `-32602` (invalid type) |
+| `grep.pattern` | string | required | JSON-RPC `-32602` (invalid type / missing) |
+| `grep.path` | string | optional | JSON-RPC `-32602` (invalid type) |
+| `grep.context_focus_question` | string | optional | JSON-RPC `-32602` (invalid type) |
 
 **Validation failure behavior**
-- MCP request validation is **synchronous** (schema/type/range checks) and fails fast with JSON-RPC `error.code=-32602` (invalid params) using the deterministic contract defined above.
-- Tool execution and filesystem checks are **asynchronous** and surface as tool-level errors (`result.isError=true`), not JSON-RPC errors.
-- Pruner call validation is **asynchronous**; any failure returns raw output (best-effort fallback).
+- MCP request validation is **synchronous** (schema/type checks) and fails fast with JSON-RPC `error.code=-32602` and `error.message="Invalid params"`.
+- Tool execution and filesystem errors are surfaced as **error text** in a normal tool response (no `result.isError`).
+- Pruner call failures return raw output (best-effort fallback).
 
 ### Provider Wiring (Claude + Codex)
 This section reconciles the provider wiring to match the issue’s expected shape: providers spawn stdio MCP servers from `ProviderRunOptions.mcpServers` entries shaped like `{ command, args, env }`.
@@ -327,7 +318,7 @@ This section reconciles the provider wiring to match the issue’s expected shap
 ### Contract Gates (Explicit)
 - **Breaking change**: No. This is a new optional MCP server and new optional tool argument; existing runs continue unchanged when disabled.
 - **Migration path**: N/A (opt-in). Agents must explicitly set `context_focus_question` per tool call to request pruning.
-- **Versioning**: MCP server reports `jeeves.schemaVersion=1` in `initialize`. Consumers MUST ignore unknown fields and SHOULD gate behavior on `jeeves.schemaVersion`.
+- **Versioning**: MCP server identifies as `name="mcp-pruner"`, `version="1.0.0"` (issue example). Consumers MUST ignore unknown fields in `initialize`.
 
 ## 4. Data
 N/A - This feature does not add or modify data schemas.
@@ -392,8 +383,8 @@ T10 → depends on T1–T9
 |----|-------|---------|-------|---------------------|
 | T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/src/index.ts` | `pnpm typecheck` includes the new package and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
 | T2 | Implement pruner client | Implement `getPrunerConfig()` + `pruneContent()` with best-effort fallback to original content. | `packages/mcp-pruner/src/pruner.ts` | On timeout/non-2xx/invalid response, pruning falls back safely to the original content. |
-| T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool input schemas match the issue examples; tool outputs remain compatible with Section 3 contracts. |
-| T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server runs over stdio (no HTTP endpoints); logs go to stderr (stdout reserved for protocol). |
+| T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`). |
+| T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server identifies as `name="mcp-pruner"`, `version="1.0.0"`, returns `-32602` with `message="Invalid params"`, and runs over stdio with stderr-only diagnostics. |
 | T5 | Extend runner options | Add `McpServerConfig` and `mcpServers` to `ProviderRunOptions` so providers can spawn MCP servers. | `packages/runner/src/provider.ts` | Providers can receive `mcpServers?: Record<string, { command, args?, env? }>` without type errors. |
 | T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts` | When enabled, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
@@ -435,7 +426,11 @@ T10 → depends on T1–T9
   - `packages/mcp-pruner/src/tools/grep.ts`
 - Acceptance Criteria:
   1. Tool input schemas align with the issue examples: `read.file_path`, `bash.command`, `grep.pattern`, and optional `grep.path` (with `context_focus_question` optional for all).
-  2. When `context_focus_question` is provided, tools attempt pruning via `pruneContent(...)`; on any pruning failure, they fall back to unpruned output.
+  2. `read` path semantics: absolute `file_path` is used as-is; relative `file_path` resolves against `MCP_PRUNER_CWD` (no containment/sandbox rule). Read failures return `Error reading file: <message>`.
+  3. `bash` output semantics match the issue example exactly: append `\\n[stderr]\\n<stderr>` when stderr non-empty; append `\\n[exit code: <code>]` when `code !== 0`; empty output becomes `(no output)`; spawn error is `Error executing command: <message>`.
+  4. `grep` uses `grep -rn --color=never <pattern> <path>` with `<path> = arguments.path ?? "."`; exit code `1` returns `(no matches found)`; exit code `2` with non-empty stderr returns `Error: <stderr>`; spawn error is `Error executing grep: <message>`.
+  5. Tool results never set `result.isError`; all failures are surfaced as strings in `content[0].text`.
+  6. When `context_focus_question` is provided and truthy, tools attempt pruning via `pruneContent(raw, context_focus_question, config)`; on any pruner failure, they fall back to unpruned output (query passed verbatim).
 - Dependencies: T2
 - Verification: `pnpm typecheck` (and tool unit tests if added)
 
@@ -445,7 +440,9 @@ T10 → depends on T1–T9
   - `packages/mcp-pruner/src/index.ts` - MCP server entrypoint: tool registration + transport connect.
 - Acceptance Criteria:
   1. `packages/mcp-pruner/src/index.ts` uses `@modelcontextprotocol/sdk/server/mcp` + `@modelcontextprotocol/sdk/server/stdio` and connects over stdio.
-  2. The server writes diagnostics to stderr only (stdout reserved for MCP protocol).
+  2. Server identity matches the issue example: `new McpServer({ name: "mcp-pruner", version: "1.0.0" })`, and `initialize` returns `serverInfo.name="mcp-pruner"`, `serverInfo.version="1.0.0"`.
+  3. Invalid params are reported as JSON-RPC `error.code=-32602` with `error.message="Invalid params"` (exact string).
+  4. The server writes diagnostics to stderr only (stdout reserved for MCP protocol).
 - Dependencies: T1, T3
 - Verification: `pnpm build` and a manual run of `node packages/mcp-pruner/dist/index.js`
 

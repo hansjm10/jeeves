@@ -1,4 +1,7 @@
 import type { CreateGitHubIssueParams, CreateGitHubIssueResult } from './githubIssueCreate.js';
+import type { IssueEstimate } from './issueEstimate.js';
+
+export type { IssueEstimate } from './issueEstimate.js';
 
 export type IssueRefString = `${string}/${string}#${number}`;
 
@@ -55,4 +58,6 @@ export type IssueStateSnapshot = Readonly<{
   paths: ViewerPaths;
   issue_json: Record<string, unknown> | null;
   run: RunStatus;
+  /** Issue estimate (null when unavailable or invalid) */
+  estimate?: IssueEstimate | null;
 }>;

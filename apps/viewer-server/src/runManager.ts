@@ -10,7 +10,7 @@ function isValidModel(model: unknown): model is ModelId {
   return typeof model === 'string' && validModels.includes(model as ModelId);
 }
 
-import type { RunStatus } from './types.js';
+import type { RunStatus, IssueEstimate } from './types.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
@@ -509,10 +509,31 @@ export class RunManager {
 
   private async getStateSnapshot() {
     const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
+
+    // Extract and validate estimate from issue.json
+    let estimate: IssueEstimate | null = null;
+    if (issueJson) {
+      const rawEstimate = issueJson.estimate;
+      if (rawEstimate !== undefined && rawEstimate !== null) {
+        // Simple validation: check that it has required fields
+        if (
+          typeof rawEstimate === 'object' &&
+          typeof (rawEstimate as Record<string, unknown>).estimatedIterations === 'number' &&
+          typeof (rawEstimate as Record<string, unknown>).breakdown === 'object' &&
+          typeof (rawEstimate as Record<string, unknown>).tasks === 'number' &&
+          typeof (rawEstimate as Record<string, unknown>).historicalAverage === 'object'
+        ) {
+          estimate = rawEstimate as IssueEstimate;
+        }
+        // Invalid estimate is treated as null (unavailable)
+      }
+    }
+
     return {
       issue_ref: this.issueRef,
       issue_json: issueJson,
       run: this.status,
+      estimate,
     };
   }
 

@@ -19,6 +19,7 @@ import { loadActiveIssue, saveActiveIssue } from './activeIssue.js';
 import { EventHub } from './eventHub.js';
 import { CreateGitHubIssueError, createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
 import { initIssue } from './init.js';
+import { isValidIssueEstimate, type IssueEstimate } from './issueEstimate.js';
 import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
@@ -479,6 +480,67 @@ export async function buildServer(config: ViewerServerConfig) {
 
   let currentStateDir: string | null = null;
 
+  // Track last emitted estimate for change detection (issue-estimate events)
+  let lastEmittedEstimate: { issue_ref: string | null; estimate: IssueEstimate | null } | null = null;
+
+  /**
+   * Normalize estimate for comparison.
+   * Per design: treat missing breakdown keys as 0, ignore unknown keys,
+   * treat undefined vs null as equivalent at top-level estimate field.
+   */
+  function normalizeEstimate(estimate: IssueEstimate | null | undefined): IssueEstimate | null {
+    if (estimate === undefined || estimate === null) return null;
+    return estimate;
+  }
+
+  /**
+   * Deep-equal comparison for estimates.
+   */
+  function estimatesEqual(a: IssueEstimate | null, b: IssueEstimate | null): boolean {
+    if (a === null && b === null) return true;
+    if (a === null || b === null) return false;
+    if (a.estimatedIterations !== b.estimatedIterations) return false;
+    if (a.tasks !== b.tasks) return false;
+    // Compare breakdown
+    const aBreakdown = a.breakdown;
+    const bBreakdown = b.breakdown;
+    if (aBreakdown.design !== bBreakdown.design) return false;
+    if (aBreakdown.implementation !== bBreakdown.implementation) return false;
+    if (aBreakdown.specCheck !== bBreakdown.specCheck) return false;
+    if (aBreakdown.completenessVerification !== bBreakdown.completenessVerification) return false;
+    if (aBreakdown.prAndReview !== bBreakdown.prAndReview) return false;
+    // Compare historicalAverage
+    if (a.historicalAverage.iterationsPerTask !== b.historicalAverage.iterationsPerTask) return false;
+    if (a.historicalAverage.designPassRate !== b.historicalAverage.designPassRate) return false;
+    return true;
+  }
+
+  /**
+   * Emit issue-estimate event if estimate changed.
+   * Returns true if event was emitted.
+   */
+  function emitIssueEstimateIfChanged(issueRef: string | null, estimate: IssueEstimate | null): boolean {
+    const normalized = normalizeEstimate(estimate);
+    const lastNormalized = lastEmittedEstimate ? normalizeEstimate(lastEmittedEstimate.estimate) : null;
+    const lastIssueRef = lastEmittedEstimate?.issue_ref ?? null;
+
+    // Emit if issue_ref changed or estimate changed
+    if (lastIssueRef !== issueRef || !estimatesEqual(lastNormalized, normalized)) {
+      lastEmittedEstimate = { issue_ref: issueRef, estimate: normalized };
+      hub.broadcast('issue-estimate', { issue_ref: issueRef, estimate: normalized });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Send issue-estimate event to a specific client (for initial connection).
+   */
+  function sendIssueEstimateTo(clientId: number, issueRef: string | null, estimate: IssueEstimate | null): void {
+    const normalized = normalizeEstimate(estimate);
+    hub.sendTo(clientId, 'issue-estimate', { issue_ref: issueRef, estimate: normalized });
+  }
+
   async function refreshFileTargets(): Promise<void> {
     const stateDir = runManager.getIssue().stateDir;
     if (stateDir !== currentStateDir) {
@@ -499,6 +561,19 @@ export async function buildServer(config: ViewerServerConfig) {
   async function getStateSnapshot(): Promise<Record<string, unknown>> {
     const issue = runManager.getIssue();
     const issueJson = issue.stateDir ? await readIssueJson(issue.stateDir) : null;
+
+    // Extract and validate estimate from issue.json
+    let estimate: IssueEstimate | null = null;
+    if (issueJson) {
+      const rawEstimate = issueJson.estimate;
+      if (rawEstimate !== undefined && rawEstimate !== null) {
+        if (isValidIssueEstimate(rawEstimate)) {
+          estimate = rawEstimate;
+        }
+        // Invalid estimate is treated as null (unavailable)
+      }
+    }
+
     return {
       issue_ref: issue.issueRef,
       paths: {
@@ -510,6 +585,7 @@ export async function buildServer(config: ViewerServerConfig) {
       },
       issue_json: issueJson,
       run: runManager.getStatus(),
+      estimate,
     };
   }
 
@@ -605,6 +681,21 @@ export async function buildServer(config: ViewerServerConfig) {
       const viewerLogs = await viewerLogTailer.getNewLines();
       if (viewerLogs.changed && viewerLogs.lines.length) hub.broadcast('viewer-logs', { lines: viewerLogs.lines });
 
+
+      // Check for estimate changes and emit issue-estimate if changed
+      const pollIssue = runManager.getIssue();
+      const pollIssueRef = pollIssue.issueRef;
+      if (pollIssue.stateDir) {
+        const pollIssueJson = await readIssueJson(pollIssue.stateDir);
+        if (pollIssueJson) {
+          const rawEstimate = pollIssueJson.estimate;
+          let pollEstimate: IssueEstimate | null = null;
+          if (rawEstimate !== undefined && rawEstimate !== null && isValidIssueEstimate(rawEstimate)) {
+            pollEstimate = rawEstimate;
+          }
+          emitIssueEstimateIfChanged(pollIssueRef, pollEstimate);
+        }
+      }
       const sdk = await sdkTailer.readSnapshot();
       if (sdk) {
         const diff = sdkTailer.consumeAndDiff(sdk);
@@ -1354,6 +1445,35 @@ export async function buildServer(config: ViewerServerConfig) {
     }
 	  });
 
+
+  // GET /api/issue/estimate - Returns the estimate for the currently selected issue
+  app.get('/api/issue/estimate', async (_req, reply) => {
+    const issue = runManager.getIssue();
+    if (!issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.' });
+    }
+
+    const issueJson = await readIssueJson(issue.stateDir);
+    if (!issueJson) {
+      return reply.code(404).send({ ok: false, error: 'issue.json not found.' });
+    }
+
+    // Extract and validate estimate
+    let estimate: IssueEstimate | null = null;
+    const rawEstimate = issueJson.estimate;
+    if (rawEstimate !== undefined && rawEstimate !== null) {
+      if (isValidIssueEstimate(rawEstimate)) {
+        estimate = rawEstimate;
+      }
+      // Invalid estimate is treated as null (unavailable)
+    }
+
+    return reply.send({
+      ok: true,
+      issue_ref: issue.issueRef,
+      estimate,
+    });
+  });
 	  app.get('/api/issue/task-execution', async (_req, reply) => {
 	    const issue = runManager.getIssue();
 	    if (!issue.stateDir) return reply.code(400).send({ ok: false, error: 'No issue selected.' });
@@ -2052,6 +2172,11 @@ export async function buildServer(config: ViewerServerConfig) {
     const snapshot = await getStateSnapshot();
     hub.sendTo(id, 'state', snapshot);
 
+    // Emit issue-estimate after initial state (per design §3)
+    const issueRef = typeof snapshot.issue_ref === 'string' ? snapshot.issue_ref : null;
+    const estimate = snapshot.estimate as IssueEstimate | null | undefined;
+    sendIssueEstimateTo(id, issueRef, estimate ?? null);
+
     await refreshFileTargets();
     const logLines = await logTailer.getAllLines(logSnapshotLines);
     hub.sendTo(id, 'logs', { lines: logLines, reset: true });
@@ -2074,7 +2199,14 @@ export async function buildServer(config: ViewerServerConfig) {
     }
     const id = hub.addWsClient(socket);
     socket.on('close', () => hub.removeClient(id));
-    hub.sendTo(id, 'state', await getStateSnapshot());
+    const wsSnapshot = await getStateSnapshot();
+    hub.sendTo(id, 'state', wsSnapshot);
+
+    // Emit issue-estimate after initial state (per design §3)
+    const wsIssueRef = typeof wsSnapshot.issue_ref === 'string' ? wsSnapshot.issue_ref : null;
+    const wsEstimate = wsSnapshot.estimate as IssueEstimate | null | undefined;
+    sendIssueEstimateTo(id, wsIssueRef, wsEstimate ?? null);
+
     await refreshFileTargets();
     const logLines = await logTailer.getAllLines(logSnapshotLines);
     hub.sendTo(id, 'logs', { lines: logLines, reset: true });

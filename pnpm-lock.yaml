@@ -121,8 +121,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@openai/codex':
-        specifier: ^0.92.0
-        version: 0.92.0
+        specifier: ^0.98.0
+        version: 0.98.0
 
   packages/shared: {}
 
@@ -698,8 +698,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@openai/codex@0.92.0':
-    resolution: {integrity: sha512-DR9A2QlJDtEpMwqUGMIztTCzzCYTVrM7rqG3XuMVURnQ4b7XrScmY5RnSUuUZ/ga7wDTqw0BTmVzPurm4NX3Tw==}
+  '@openai/codex@0.98.0':
+    resolution: {integrity: sha512-CKjrhAmzTvWn7Vbsi27iZRKBAJw9a7ZTTkWQDbLgQZP1weGbDIBk1r6wiLEp1ZmDO7w0fHPLYgnVspiOrYgcxg==}
     engines: {node: '>=16'}
     hasBin: true
 
@@ -2915,7 +2915,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@openai/codex@0.92.0': {}
+  '@openai/codex@0.98.0': {}
 
   '@pinojs/redact@0.4.0': {}
 

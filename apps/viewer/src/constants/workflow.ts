@@ -96,9 +96,15 @@ export const PROVIDER_CONFIG: Record<Provider, ProviderInfo> = {
     label: 'Codex',
     hint: 'OpenAI Codex CLI',
     models: {
+      'gpt-5.3-codex': {
+        label: 'GPT-5.3 Codex',
+        hint: 'Most capable agentic coding model',
+        tier: 'powerful',
+        reasoningEfforts: CODEX_REASONING_EFFORTS,
+      },
       'gpt-5.2-codex': {
         label: 'GPT-5.2 Codex',
-        hint: 'Latest, optimized for agentic coding',
+        hint: 'Optimized for agentic coding',
         tier: 'powerful',
         reasoningEfforts: CODEX_REASONING_EFFORTS,
       },

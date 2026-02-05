@@ -6,7 +6,7 @@ export const claudeModels = ['sonnet', 'opus', 'haiku'] as const;
 export type ClaudeModelId = (typeof claudeModels)[number];
 
 /** Codex/OpenAI model IDs */
-export const codexModels = ['gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5-codex'] as const;
+export const codexModels = ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5-codex'] as const;
 export type CodexModelId = (typeof codexModels)[number];
 
 /** Codex reasoning effort IDs */
@@ -18,7 +18,7 @@ export const claudeThinkingBudgets = ['none', 'low', 'medium', 'high', 'max'] as
 export type ClaudeThinkingBudgetId = (typeof claudeThinkingBudgets)[number];
 
 /** Codex models that support reasoning effort configuration */
-export const codexModelsWithReasoningEffort = ['gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max'] as const;
+export const codexModelsWithReasoningEffort = ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max'] as const;
 export type CodexModelWithReasoningEffortId = (typeof codexModelsWithReasoningEffort)[number];
 
 /** All valid models across providers */

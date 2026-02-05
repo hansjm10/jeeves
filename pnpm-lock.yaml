@@ -133,6 +133,9 @@ importers:
       '@jeeves/core':
         specifier: workspace:*
         version: link:../core
+      '@jeeves/mcp-pruner':
+        specifier: workspace:*
+        version: link:../mcp-pruner
       '@openai/codex':
         specifier: ^0.92.0
         version: 0.92.0

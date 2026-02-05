@@ -131,8 +131,9 @@ function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (mode: ViewM
   );
 }
 
-export function SdkPage() {
+export function SdkPage({ sdkEvents: sdkEventsProp }: { sdkEvents?: SdkEvent[] } = {}) {
   const stream = useViewerStream();
+  const sdkEvents = sdkEventsProp ?? stream.sdkEvents;
   const containerRef = useRef<HTMLDivElement>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('timeline');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -144,12 +145,12 @@ export function SdkPage() {
 
   // Assign IDs and timestamps to events
   const eventsWithMeta = useMemo<EventWithMeta[]>(() => {
-    return stream.sdkEvents.map((e, i) => ({
+    return sdkEvents.map((e, i) => ({
       ...e,
       id: i,
-      timestamp: Date.now() - (stream.sdkEvents.length - i) * 100, // Approximate timestamps
+      timestamp: Date.now() - (sdkEvents.length - i) * 100, // Approximate timestamps
     }));
-  }, [stream.sdkEvents]);
+  }, [sdkEvents]);
 
   // Filter events
   const filteredEvents = useMemo(() => {
@@ -163,9 +164,9 @@ export function SdkPage() {
 
   // Auto-expand new events
   useEffect(() => {
-    if (stream.sdkEvents.length > prevEventsLength.current) {
+    if (sdkEvents.length > prevEventsLength.current) {
       const newIds = Array.from(
-        { length: stream.sdkEvents.length - prevEventsLength.current },
+        { length: sdkEvents.length - prevEventsLength.current },
         (_, i) => prevEventsLength.current + i
       );
       setExpandedIds(prev => {
@@ -174,8 +175,8 @@ export function SdkPage() {
         return next;
       });
     }
-    prevEventsLength.current = stream.sdkEvents.length;
-  }, [stream.sdkEvents.length]);
+    prevEventsLength.current = sdkEvents.length;
+  }, [sdkEvents.length]);
 
   // Auto-scroll behavior (for events view)
   useEffect(() => {
@@ -250,9 +251,9 @@ export function SdkPage() {
   }, []);
 
   const uniqueEventTypes = useMemo(() => {
-    const types = new Set(stream.sdkEvents.map(e => e.event));
+    const types = new Set(sdkEvents.map(e => e.event));
     return Array.from(types);
-  }, [stream.sdkEvents]);
+  }, [sdkEvents]);
 
   return (
     <div className="sdk-container">
@@ -261,11 +262,11 @@ export function SdkPage() {
         <div className="sdk-header-left">
           <h2 className="sdk-title">
             SDK Events
-            <span className="sdk-count">{stream.sdkEvents.length}</span>
+            <span className="sdk-count">{sdkEvents.length}</span>
           </h2>
           {filter && (
             <span className="sdk-filter-indicator">
-              {filteredEvents.length} of {stream.sdkEvents.length} shown
+              {filteredEvents.length} of {sdkEvents.length} shown
             </span>
           )}
         </div>
@@ -327,7 +328,7 @@ export function SdkPage() {
             >
               {type}
               <span className="sdk-type-chip-count">
-                {stream.sdkEvents.filter(e => e.event === type).length}
+                {sdkEvents.filter(e => e.event === type).length}
               </span>
             </button>
           ))}
@@ -337,7 +338,7 @@ export function SdkPage() {
       {/* Main content area */}
       {viewMode === 'timeline' ? (
         <SdkTimeline
-          sdkEvents={stream.sdkEvents}
+          sdkEvents={sdkEvents}
           filter={filter}
           onCopy={copyData}
         />
@@ -349,7 +350,7 @@ export function SdkPage() {
         >
           {filteredEvents.length === 0 ? (
             <div className="sdk-empty">
-              {stream.sdkEvents.length === 0 ? (
+              {sdkEvents.length === 0 ? (
                 <>
                   <div className="sdk-empty-icon">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">

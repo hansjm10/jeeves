@@ -1,7 +1,7 @@
-import { useCallback, useEffect, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import type { WorkerStatusInfo } from '../api/types.js';
+import type { SdkEvent, WorkerStatusInfo } from '../api/types.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
 import { SdkPage } from './SdkPage.js';
@@ -180,6 +180,28 @@ const styles = {
     fontSize: 'var(--font-size-ui-xs)',
     fontWeight: 500,
     textTransform: 'uppercase',
+  } satisfies CSSProperties,
+  workerCardSelected: {
+    background: 'rgba(88, 166, 255, 0.15)',
+    border: '1px solid var(--color-accent-blue)',
+  } satisfies CSSProperties,
+  workerCardBtn: {
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  } satisfies CSSProperties,
+  workerAllBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-2)',
+    padding: 'var(--space-2) var(--space-4)',
+    background: 'var(--color-surface-1)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--font-size-ui-sm)',
+    fontWeight: 600,
+    color: 'var(--color-text)',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
   } satisfies CSSProperties,
 };
 
@@ -510,9 +532,15 @@ function RunContextStrip() {
 /**
  * Workers strip component showing active parallel workers.
  * Only renders when workers array is present and non-empty.
- * Updates live based on websocket `run` events.
+ * Clickable cards allow filtering SDK/Log panels by worker.
  */
-function WorkersStrip() {
+function WorkersStrip({
+  selectedWorker,
+  onSelect,
+}: {
+  selectedWorker: string | null;
+  onSelect: (taskId: string | null) => void;
+}) {
   const stream = useViewerStream();
   const workers = stream.state?.run?.workers;
 
@@ -524,25 +552,46 @@ function WorkersStrip() {
   return (
     <div style={styles.workersStrip} className="watch-workers-strip" data-testid="workers-strip">
       <span style={styles.workersLabel}>Workers</span>
-      {workers.map((worker) => (
-        <div
-          key={worker.taskId}
-          style={styles.workerCard}
-          className="watch-worker-card"
-          data-testid={`worker-${worker.taskId}`}
-        >
-          <span style={styles.workerTaskId}>{worker.taskId}</span>
-          <span style={styles.workerPhase}>{formatWorkerPhase(worker.phase)}</span>
-          <span
+      <button
+        type="button"
+        style={{
+          ...styles.workerAllBtn,
+          ...(selectedWorker === null ? styles.workerCardSelected : {}),
+        }}
+        className="watch-worker-card"
+        data-testid="worker-all"
+        onClick={() => onSelect(null)}
+      >
+        All
+      </button>
+      {workers.map((worker) => {
+        const isSelected = selectedWorker === worker.taskId;
+        return (
+          <button
+            key={worker.taskId}
+            type="button"
             style={{
-              ...styles.workerStatus,
-              ...getWorkerStatusColor(worker.status),
+              ...styles.workerCard,
+              ...styles.workerCardBtn,
+              ...(isSelected ? styles.workerCardSelected : {}),
             }}
+            className="watch-worker-card"
+            data-testid={`worker-${worker.taskId}`}
+            onClick={() => onSelect(worker.taskId)}
           >
-            {worker.status}
-          </span>
-        </div>
-      ))}
+            <span style={styles.workerTaskId}>{worker.taskId}</span>
+            <span style={styles.workerPhase}>{formatWorkerPhase(worker.phase)}</span>
+            <span
+              style={{
+                ...styles.workerStatus,
+                ...getWorkerStatusColor(worker.status),
+              }}
+            >
+              {worker.status}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -596,6 +645,7 @@ function ViewModeToggle({
 export function WatchPage() {
   const stream = useViewerStream();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
 
   // Get current view from URL, normalize invalid values
   const rawView = searchParams.get('view');
@@ -609,6 +659,25 @@ export function WatchPage() {
       setSearchParams(newParams, { replace: true });
     }
   }, [rawView, searchParams, setSearchParams]);
+
+  // Auto-clear selection when selected worker disappears
+  const workers = stream.state?.run?.workers;
+  useEffect(() => {
+    if (selectedWorker && (!workers || !workers.some((w) => w.taskId === selectedWorker))) {
+      setSelectedWorker(null);
+    }
+  }, [workers, selectedWorker]);
+
+  // Compute effective logs/SDK events based on selected worker
+  const effectiveLogs = useMemo<string[]>(() => {
+    if (!selectedWorker) return stream.logs;
+    return stream.workerLogs[selectedWorker] ?? [];
+  }, [selectedWorker, stream.logs, stream.workerLogs]);
+
+  const effectiveSdkEvents = useMemo<SdkEvent[]>(() => {
+    if (!selectedWorker) return stream.sdkEvents;
+    return stream.workerSdkEvents[selectedWorker] ?? [];
+  }, [selectedWorker, stream.sdkEvents, stream.workerSdkEvents]);
 
   // Handle view change - update URL
   const handleViewChange = useCallback(
@@ -639,7 +708,7 @@ export function WatchPage() {
       </div>
 
       {/* Workers strip - shown only when parallel workers are active */}
-      <WorkersStrip />
+      <WorkersStrip selectedWorker={selectedWorker} onSelect={setSelectedWorker} />
 
       {/*
         Content grid: SDK | Logs | ViewerLogs
@@ -659,7 +728,7 @@ export function WatchPage() {
           style={sdkVisible ? styles.panel : styles.panelHidden}
           aria-hidden={!sdkVisible}
         >
-          <SdkPage />
+          <SdkPage sdkEvents={effectiveSdkEvents} />
         </div>
 
         {/* Logs Panel - single instance */}
@@ -667,7 +736,7 @@ export function WatchPage() {
           style={logsVisible ? styles.panel : styles.panelHidden}
           aria-hidden={!logsVisible}
         >
-          <LogPanel title="Live logs" lines={stream.logs} />
+          <LogPanel title="Live logs" lines={effectiveLogs} />
         </div>
 
         {/* Viewer Logs Panel - single instance */}

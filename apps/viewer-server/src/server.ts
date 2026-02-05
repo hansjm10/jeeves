@@ -34,6 +34,7 @@ import {
   type SonarSyncStatus,
 } from './sonarTokenTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
+import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
@@ -476,6 +477,7 @@ export async function buildServer(config: ViewerServerConfig) {
   const logTailer = new LogTailer();
   const viewerLogTailer = new LogTailer();
   const sdkTailer = new SdkOutputTailer();
+  const workerTailerManager = new WorkerTailerManager();
 
   let currentStateDir: string | null = null;
 
@@ -618,6 +620,20 @@ export async function buildServer(config: ViewerServerConfig) {
           hub.broadcast('sdk-complete', { status: diff.success === false ? 'error' : 'success', summary: diff.stats ?? {} });
         }
       }
+
+      // Reconcile worker tailers with active workers and poll for events
+      const runStatus = runManager.getStatus();
+      workerTailerManager.reconcile(runStatus.workers ?? [], (taskId) => {
+        if (!currentStateDir || !runStatus.run_id) return null;
+        return path.join(currentStateDir, '.runs', runStatus.run_id, 'workers', taskId);
+      });
+      const workerResults = await workerTailerManager.poll();
+      for (const wl of workerResults.workerLogs) {
+        hub.broadcast('worker-logs', { workerId: wl.taskId, lines: wl.lines });
+      }
+      for (const ws of workerResults.workerSdkEvents) {
+        hub.broadcast(ws.event, { ...ws.data as Record<string, unknown>, workerId: ws.taskId });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -637,6 +653,7 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.addHook('onClose', async () => {
     clearInterval(poller);
+    workerTailerManager.clear();
     await runManager.stop({ force: false }).catch(() => void 0);
   });
 
@@ -2059,6 +2076,13 @@ export async function buildServer(config: ViewerServerConfig) {
     hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
     const sdk = await readSdkOutput(currentStateDir);
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    const workerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
+    for (const ws of workerSnapshots) {
+      hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });
+      if (ws.sdkSnapshot) {
+        emitSdkSnapshot((event, data) => hub.sendTo(id, event, { ...data as Record<string, unknown>, workerId: ws.taskId }), ws.sdkSnapshot);
+      }
+    }
   });
 
   app.get('/api/ws', { websocket: true }, async (socket, req) => {
@@ -2082,6 +2106,13 @@ export async function buildServer(config: ViewerServerConfig) {
     hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
     const sdk = await readSdkOutput(currentStateDir);
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    const wsWorkerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
+    for (const ws of wsWorkerSnapshots) {
+      hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });
+      if (ws.sdkSnapshot) {
+        emitSdkSnapshot((event, data) => hub.sendTo(id, event, { ...data as Record<string, unknown>, workerId: ws.taskId }), ws.sdkSnapshot);
+      }
+    }
   });
 
   // Test helpers for direct mutex control (used only in tests)

@@ -85,6 +85,7 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
 |------|-----------------|-----|--------------|
 | `run:init` | `JEEVES_PRUNER_ENABLED=false` | `run:mcp_pruner_disabled` | Write a diagnostic log message (pruner disabled by config). |
 | `run:init` | `JEEVES_PRUNER_ENABLED=true` and MCP config resolves | `run:mcp_pruner_starting` | Build `mcpServers` config and pass it to the provider (provider owns spawn/connect). |
+| `run:init` | `JEEVES_PRUNER_ENABLED=true` and MCP config/path resolution fails | `run:mcp_pruner_disabled` | Write a diagnostic log message (enabled but config invalid / path resolution failed); continue run without MCP. |
 | `run:mcp_pruner_starting` | Provider successfully initializes MCP servers | `run:mcp_pruner_running` | Write a diagnostic log message (pruner available). |
 | `run:mcp_pruner_starting` | Provider fails to spawn/connect MCP server | `run:mcp_pruner_disabled` | Write a diagnostic log message (spawn/connect failed); continue run without MCP. |
 | `run:mcp_pruner_running` | Provider reports MCP server failure during run | `run:mcp_pruner_degraded` | Write a diagnostic log message (server failure); continue run without MCP. |
@@ -133,9 +134,12 @@ This feature adds a new MCP server (`@jeeves/mcp-pruner`) and an opt-in “prune
   - Per-request: client retries by issuing a new MCP request (new `request_id`); there is no in-request replay after a process crash.
 - **Cleanup**:
   - Runner: stop injecting MCP config for subsequent runs if disabled; provider owns MCP server child lifecycle for the current run.
-  - Server: kill timed-out `bash`/`grep` subprocesses; drop in-memory raw output buffers for aborted requests.
+  - Server: drop in-memory raw output buffers for aborted requests. (No execution timeout is enforced for `bash`/`grep`; subprocesses run until completion or until the `mcp-pruner` process is terminated.)
 
 ### Subprocesses (if applicable)
+Execution timeouts:
+- `bash`/`grep`: none (no server-enforced timeout; subprocesses run until completion or until the `mcp-pruner` process is terminated by the provider at phase end).
+
 | Subprocess | Receives | Can Write | Failure Handling |
 |------------|----------|-----------|------------------|
 | `@jeeves/mcp-pruner` (server) | Run config via env (`PRUNER_URL`, `PRUNER_TIMEOUT_MS`, `MCP_PRUNER_CWD`). | Writes logs to stderr only; stdout is reserved for MCP protocol. | Provider spawn/connect failure -> `run:mcp_pruner_disabled`; unexpected exit during run -> `run:mcp_pruner_degraded`. |
@@ -259,7 +263,7 @@ The viewer already captures run logs for both Claude and Codex runs, including s
 | Field | Type | Constraints | Behavior |
 |-------|------|-------------|----------|
 | `PRUNER_URL` | string | optional; default `http://localhost:8000/prune`; empty string disables pruning | Used for outbound HTTP to `swe-pruner`. If empty, pruning is skipped and tools return raw output. When spawned by the Jeeves runner (and enabled), this env var is always set explicitly (default or empty). |
-| `PRUNER_TIMEOUT_MS` | number (env string) | optional; default `30000`; integer `100..300000` | Timeout for the outbound pruner call. |
+| `PRUNER_TIMEOUT_MS` | number (env string) | optional; default `30000`; integer `100..300000` | Timeout for the outbound pruner call (ms). Parse as an integer. If missing or invalid (NaN), use `30000` and log a warning to stderr. If out of range, clamp to `100..300000` and log a warning. |
 | `MCP_PRUNER_CWD` | string | optional; default process `cwd` | Working directory for `bash`/`grep` and the base path for resolving relative `read.file_path`. **No sandbox/containment is enforced**; absolute paths are accepted as-is (issue examples). |
 
 **Precedence**
@@ -373,7 +377,7 @@ T2 → depends on T1
 T3 → depends on T2
 T4 → depends on T1, T3
 T5 (no deps)
-T6 → depends on T5
+T6 → depends on T1, T5
 T7 → depends on T5, T6
 T8 → depends on T5, T6
 T9 → depends on T1, T6, T7, T8
@@ -383,15 +387,15 @@ T10 → depends on T1–T9
 ### Task Breakdown
 | ID | Title | Summary | Files | Acceptance Criteria |
 |----|-------|---------|-------|---------------------|
-| T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/src/index.ts` | `packages/mcp-pruner/package.json` + `tsconfig.json` match issue Steps 1.2/1.3 (incl. `@modelcontextprotocol/sdk@^1.12.0`, `zod@^3.24.0`), `pnpm typecheck` includes the new package, and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
+| T1 | Scaffold MCP pruner package | Add `@jeeves/mcp-pruner` workspace package with issue-prescribed dependencies (`@modelcontextprotocol/sdk`, `zod`) and stdio entrypoint. | `packages/mcp-pruner/package.json`, `packages/mcp-pruner/tsconfig.json`, `packages/mcp-pruner/src/index.ts`, `tsconfig.json` | `packages/mcp-pruner/package.json` + `tsconfig.json` match issue Steps 1.2/1.3 (incl. `@modelcontextprotocol/sdk@^1.12.0`, `zod@^3.24.0`), `pnpm typecheck` includes the new package, and `pnpm build` emits `packages/mcp-pruner/dist/index.js` with a `mcp-pruner` bin. |
 | T2 | Implement pruner client | Implement `getPrunerConfig()` + `pruneContent()` with best-effort fallback to original content. | `packages/mcp-pruner/src/pruner.ts` | On timeout/non-2xx/invalid response, pruning falls back safely to the original content. |
 | T3 | Implement tools (issue-aligned inputs) | Implement `read`, `bash`, `grep` with issue-aligned input names (`file_path`, `command`, `pattern`/`path`) and optional pruning hook. | `packages/mcp-pruner/src/tools/*.ts` | Tool output/error/path behavior matches Section 3 exactly (markers, exit-code handling, no containment, no `result.isError`). |
 | T4 | Wire MCP SDK + stdio transport | Register tools on an `McpServer` and connect via `StdioServerTransport` (stdio). | `packages/mcp-pruner/src/index.ts` | Server identifies as `name="mcp-pruner"`, `version="1.0.0"`, returns `-32602` with `message="Invalid params"`, and runs over stdio with stderr-only diagnostics. |
 | T5 | Extend runner options | Add `McpServerConfig` and `mcpServers` to `ProviderRunOptions` so providers can spawn MCP servers. | `packages/runner/src/provider.ts` | Providers can receive `mcpServers?: Record<string, { command, args?, env? }>` without type errors. |
-| T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts` | When enabled, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
+| T6 | Add runner MCP config builder | Build the `mcpServers` record from env vars (`JEEVES_PRUNER_ENABLED`, `JEEVES_PRUNER_URL`, `JEEVES_MCP_PRUNER_PATH`) and wire into `runner.ts`. | `packages/runner/src/mcpConfig.ts`, `packages/runner/src/runner.ts` | When enabled, runner passes `mcpServers.pruner={ command, args, env }` to providers with deterministic defaults for `PRUNER_URL` and the `mcp-pruner` entrypoint path. |
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
 | T8 | Codex provider wiring | Convert `options.mcpServers` into Codex CLI `--config mcp_servers.*` overrides for stdio servers. | `packages/runner/src/providers/codexSdk.ts` | Codex provider sets `mcp_servers.<name>.command/args/env` (no `url` / `streamable_http`). |
-| T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
+| T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `README.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
 | T10 | Full validation | Run repo quality commands. | (none) | `pnpm lint && pnpm typecheck && pnpm test` pass. |
 
 ### Task Details
@@ -402,7 +406,6 @@ T10 → depends on T1–T9
   - `packages/mcp-pruner/package.json` - new workspace package + bin entry (`mcp-pruner` → `./dist/index.js`) and dependencies.
   - `packages/mcp-pruner/tsconfig.json` - TS build config emitting `dist/*`.
   - `packages/mcp-pruner/src/index.ts` - MCP server entrypoint (stdio transport).
-  - `packages/mcp-pruner/CLAUDE.md` - package documentation.
   - `tsconfig.json` - add project reference to `./packages/mcp-pruner` (if required by repo conventions).
 - Required scaffold specifics (issue Steps 1.2/1.3):
   - `packages/mcp-pruner/package.json` MUST include at minimum:

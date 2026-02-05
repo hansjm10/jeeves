@@ -7,6 +7,7 @@ export interface PrunerHookOptions {
   targetTools: string[];
   query: string;
   timeoutMs?: number;
+  threshold?: number;
 }
 
 function normalizeList(list: string[]): Set<string> {
@@ -27,7 +28,7 @@ async function readPrunedContent(res: Response): Promise<string> {
     const json = (await res.json().catch(() => null)) as unknown;
     if (json && typeof json === 'object') {
       const obj = json as Record<string, unknown>;
-      const v = firstStringField(obj, ['content', 'code', 'pruned', 'pruned_code', 'result', 'text']);
+      const v = firstStringField(obj, ['pruned_code', 'pruned', 'content', 'result', 'text', 'code']);
       if (v !== null) return v;
     }
   }
@@ -62,6 +63,7 @@ export class PrunerHook implements EventHook {
         body: JSON.stringify({
           code: event.content,
           query: this.opts.query,
+          ...(this.opts.threshold !== undefined ? { threshold: this.opts.threshold } : {}),
           tool: ctx.toolName,
           tool_input: ctx.input,
           tool_use_id: ctx.toolUseId,

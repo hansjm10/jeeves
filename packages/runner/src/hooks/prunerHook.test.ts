@@ -29,7 +29,7 @@ describe('PrunerHook', () => {
 
   it('calls the pruner and replaces tool_result content', async () => {
     const fetchMock = vi.fn(async () => {
-      return new Response(JSON.stringify({ content: 'pruned' }), {
+      return new Response(JSON.stringify({ pruned_code: 'pruned', code: 'orig' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -73,4 +73,3 @@ describe('PrunerHook', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
-

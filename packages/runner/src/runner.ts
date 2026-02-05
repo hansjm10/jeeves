@@ -30,6 +30,14 @@ function envInt(name: string): number | null {
   return n;
 }
 
+function envFloat(name: string): number | null {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
   promptPath: string;
@@ -76,6 +84,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
         .map((t) => t.trim())
         .filter(Boolean);
       const timeoutMs = envInt('JEEVES_PRUNER_TIMEOUT_MS') ?? 30_000;
+      const threshold = envFloat('JEEVES_PRUNER_THRESHOLD') ?? undefined;
 
       pipeline.addHook(
         new PrunerHook({
@@ -84,6 +93,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
           targetTools,
           query,
           timeoutMs,
+          threshold,
         }),
       );
     }

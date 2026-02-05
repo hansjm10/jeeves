@@ -4,7 +4,7 @@ import path from 'node:path';
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
 
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
-import type { AgentProvider } from './provider.js';
+import type { AgentProvider, McpServerConfig } from './provider.js';
 import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted } from './progress.js';
 import { SdkOutputWriterV1 } from './outputWriter.js';
 
@@ -16,6 +16,7 @@ export type RunPhaseParams = Readonly<{
   progressPath: string;
   cwd: string;
   phaseName: string;
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }>;
 
 export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: boolean }> {
@@ -42,7 +43,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     await logLine(`[RUNNER] phase=${params.phaseName}`);
     await logLine(`[RUNNER] prompt=${params.promptPath}`);
 
-    for await (const evt of params.provider.run(prompt, { cwd: params.cwd })) {
+    for await (const evt of params.provider.run(prompt, { cwd: params.cwd, ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}) })) {
       writer.addProviderEvent(evt);
 
       if (evt.type === 'assistant' || evt.type === 'user' || evt.type === 'result') {
@@ -84,6 +85,7 @@ export type RunWorkflowParams = Readonly<{
   promptsDir: string;
   stateDir: string;
   cwd: string;
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }>;
 
 export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ finalPhase: string; success: boolean }> {
@@ -105,6 +107,7 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
       progressPath,
       cwd: params.cwd,
       phaseName: current,
+      mcpServers: params.mcpServers,
     });
 
     if (!phaseResult.success) {
@@ -129,6 +132,7 @@ export type RunSinglePhaseParams = Readonly<{
   promptsDir: string;
   stateDir: string;
   cwd: string;
+  mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }>;
 
 export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<{ phase: string; success: boolean }> {
@@ -166,6 +170,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     progressPath,
     cwd: params.cwd,
     phaseName: phase,
+    mcpServers: params.mcpServers,
   });
   return { phase, success: result.success };
 }

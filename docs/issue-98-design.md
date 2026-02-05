@@ -167,9 +167,11 @@ Tool input validation uses issue-aligned `zod` schemas. Validation failures retu
 Supported methods:
 | MCP Method | Invocation Pattern | Params | Result | Errors |
 |-----------|--------------------|--------|--------|--------|
-| `initialize` | JSON-RPC request | `{ protocolVersion: string, clientInfo?: { name: string, version?: string }, capabilities?: object }` | `{ protocolVersion: string, serverInfo: { name: "mcp-pruner", version: "1.0.0" }, capabilities: { tools: { listChanged?: false } } }` | JSON-RPC `-32602` if required fields missing/invalid |
+| `initialize` | JSON-RPC request | `{ capabilities?: object, protocolVersion?: string, clientInfo?: { name: string, version?: string } }` | `{ protocolVersion?: string, serverInfo: { name: "mcp-pruner", version: "1.0.0" }, capabilities: { tools: { listChanged?: false } } }` | JSON-RPC `-32602` for invalid `params` shape/type |
 | `tools/list` | JSON-RPC request | `{}` or omitted | `{ tools: Array<{ name: "read" | "bash" | "grep", description: string, inputSchema: JSONSchema }> }` | JSON-RPC `-32601` for unknown method; `-32602` for invalid params |
 | `tools/call` | JSON-RPC request | `{ name: "read" | "bash" | "grep", arguments: object }` | `{ content: Array<{ type: "text", text: string }> }` | JSON-RPC `-32602` invalid params; tool execution failures return a normal tool result with an error string in `content[0].text` |
+
+Initialize compatibility rule (required for validation): the server MUST accept `{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"capabilities":{}}}` (no `protocolVersion`) and return a JSON-RPC success response containing `result.serverInfo.name="mcp-pruner"` and `result.serverInfo.version="1.0.0"`.
 
 ### MCP Tools (issue-aligned)
 Tool schemas are a **strict match** to the GitHub issue examples:
@@ -401,7 +403,7 @@ T10 → depends on T1–T9
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
 | T8 | Codex provider wiring | Convert `options.mcpServers` into Codex CLI `--config mcp_servers.*` overrides for stdio servers. | `packages/runner/src/providers/codexSdk.ts` | Codex provider sets `mcp_servers.<name>.command/args/env` (no `url` / `streamable_http`). |
 | T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `packages/runner/CLAUDE.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
-| T10 | Full validation | Run repo quality commands and record validation evidence. | `.jeeves/progress.txt`, `packages/mcp-pruner/src/index.ts`, `packages/runner/src/mcpConfig.ts`, `packages/runner/src/providers/claudeAgentSdk.ts`, `packages/runner/src/providers/codexSdk.ts` | `pnpm lint && pnpm typecheck && pnpm test` pass and the command outcomes are recorded in `.jeeves/progress.txt`. |
+| T10 | Full validation | Run repo quality commands and record validation evidence. | `.jeeves/progress.txt`, `packages/mcp-pruner/src/index.ts`, `packages/runner/src/mcpConfig.ts`, `packages/runner/src/providers/claudeAgentSdk.ts`, `packages/runner/src/providers/codexSdk.ts` | `pnpm install`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` pass; artifact checks pass for `packages/mcp-pruner/dist/index.js` and `packages/runner/dist/mcpConfig.js`; standalone initialize smoke test passes with expected success response; and outcomes are recorded in `.jeeves/progress.txt`. |
 
 ### Task Details
 
@@ -534,10 +536,11 @@ T10 → depends on T1–T9
   - `packages/runner/src/providers/claudeAgentSdk.ts` - validate Claude provider MCP wiring via lint/typecheck/test.
   - `packages/runner/src/providers/codexSdk.ts` - validate Codex provider MCP wiring via lint/typecheck/test.
 - Acceptance Criteria:
-  1. `pnpm lint` passes.
-  2. `pnpm typecheck` passes.
-  3. `pnpm test` passes.
-  4. Validation command outcomes are recorded in `.jeeves/progress.txt`.
+  1. `pnpm install` passes.
+  2. `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass.
+  3. Artifact checks pass: `ls packages/mcp-pruner/dist/index.js` and `ls packages/runner/dist/mcpConfig.js`.
+  4. Standalone initialize smoke test command succeeds and its output includes a JSON-RPC success for `id=1` with `result.serverInfo.name="mcp-pruner"` and `result.serverInfo.version="1.0.0"`.
+  5. Validation command outcomes are recorded in `.jeeves/progress.txt`.
 - Dependencies: T1–T9
 - Verification: `pnpm lint && pnpm typecheck && pnpm test`
 
@@ -557,6 +560,9 @@ T10 → depends on T1–T9
 - [ ] All tests pass: `pnpm test`
 - [ ] Standalone MCP initialize smoke test passes:
   - `echo '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"capabilities":{}}}' | node packages/mcp-pruner/dist/index.js 2>&1 | head -5`
+  - Pass criteria:
+    - Output includes a JSON-RPC success response for `id=1` (contains `"result"` and no `"error"` for that response).
+    - Response includes `serverInfo.name="mcp-pruner"` and `serverInfo.version="1.0.0"`.
 - [ ] New test files added:
   - `packages/mcp-pruner/src/tools/read.test.ts`
   - `packages/mcp-pruner/src/tools/bash.test.ts`

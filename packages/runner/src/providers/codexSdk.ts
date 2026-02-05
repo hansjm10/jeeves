@@ -2,7 +2,9 @@ import type { AgentProvider, ProviderEvent, ProviderRunOptions } from '../provid
 
 // NOTE: Keep all Codex CLI integration in this file so the rest of the runner is provider-agnostic.
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import * as readline from 'node:readline';
 
 function nowIso(): string {
@@ -352,6 +354,19 @@ export class CodexSdkProvider implements AgentProvider {
     args.push('--cd', options.cwd);
     args.push('--skip-git-repo-check');
     args.push('--config', 'approval_policy="never"');
+
+    // Ensure the Jeeves pruned Read MCP server is available during Codex runs, without requiring
+    // global user config (`codex mcp add ...`). If the script isn't present in the current cwd,
+    // skip configuration.
+    try {
+      const prunedServerScriptRel = 'scripts/jeeves-pruned-mcp-server.mjs';
+      const prunedServerScriptAbs = path.join(options.cwd, prunedServerScriptRel);
+      await fs.stat(prunedServerScriptAbs);
+      args.push('--config', 'mcp_servers.jeeves_pruned.command="node"');
+      args.push('--config', `mcp_servers.jeeves_pruned.args=["${prunedServerScriptRel}"]`);
+    } catch {
+      // ignore
+    }
 
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {

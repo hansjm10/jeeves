@@ -2423,7 +2423,10 @@ export async function buildServer(config: ViewerServerConfig) {
   // ── Azure DevOps credential endpoints ──
 
   // GET /api/issue/azure-devops
-  app.get('/api/issue/azure-devops', async (_req, reply) => {
+  app.get('/api/issue/azure-devops', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
     const issue = runManager.getIssue();
     if (!issue.issueRef || !issue.stateDir) {
       return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });

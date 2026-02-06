@@ -4313,6 +4313,37 @@ describe('azure-devops credential endpoints', () => {
     await app.close();
   });
 
+  it('GET /api/issue/azure-devops returns 403 from non-local address', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-get-forbidden-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-get-forbidden-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '192.168.1.100',
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, code: 'forbidden' });
+
+    await app.close();
+  });
+
   it('GET /api/issue/azure-devops returns status with has_pat=false when no secret exists', async () => {
     const dataDir = await makeTempDir('jeeves-vs-azure-get-nopat-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-azure-get-nopat-');

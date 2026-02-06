@@ -67,6 +67,7 @@ export function AppShell() {
   const stream = useViewerStream();
   const runRunning = stream.state?.run.running ?? false;
   const connected = stream.connected;
+  const hasReceivedSnapshot = stream.state !== null;
   const { isDirty, confirmDiscard } = useUnsavedChanges();
   const blocker = useBlocker(isDirty);
   const hasPromptedRef = useRef(false);
@@ -78,6 +79,14 @@ export function AppShell() {
   const focusStateRef = useRef<FocusState>(focusState);
   const prevRunningRef = useRef<boolean>(runRunning);
   const prevConnectedRef = useRef<boolean>(connected);
+  /**
+   * Tracks whether the initial state snapshot has been processed for focus-state
+   * hydration. On page refresh, the websocket `open` event fires before the first
+   * `state` snapshot, so `runRunning` starts as `false`. Without this guard, the
+   * first snapshot with `running=true` would trigger a `RUN_START` dispatch
+   * (entering W1 with animation) instead of hydrating directly to W2/W3 (EC2).
+   */
+  const hasHydratedRef = useRef<boolean>(stream.state !== null);
   const hideTimerRef = useRef<number | null>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
 
@@ -108,6 +117,19 @@ export function AppShell() {
     const wasRunning = prevRunningRef.current;
     prevRunningRef.current = runRunning;
 
+    // EC2 hydration gate: When the first state snapshot arrives after page
+    // refresh (connected before snapshot), derive focus state directly from
+    // the snapshot rather than dispatching RUN_START. This prevents replaying
+    // the run-start hide animation on refresh mid-run.
+    if (!hasHydratedRef.current && hasReceivedSnapshot) {
+      hasHydratedRef.current = true;
+      // Derive the correct state from the initial snapshot (hydration path)
+      const override = readRunOverride();
+      const derived = deriveFocusState({ running: runRunning, override });
+      applyTransition(derived, null);
+      return;
+    }
+
     if (!wasRunning && runRunning) {
       // Run started: false -> true
       const override = readRunOverride();
@@ -134,7 +156,7 @@ export function AppShell() {
         hideTimerRef.current = null;
       }
     }
-  }, [runRunning, dispatch]);
+  }, [runRunning, hasReceivedSnapshot, dispatch, applyTransition]);
 
   // --- Reconnect snapshot reconciliation (EC3) ---
   useEffect(() => {

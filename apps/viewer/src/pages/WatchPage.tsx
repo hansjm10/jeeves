@@ -6,6 +6,7 @@ import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
 import { useStopRunMutation } from '../features/mutations.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
+import { useToast } from '../ui/toast/ToastProvider.js';
 import { SdkPage } from './SdkPage.js';
 import './WatchPage.css';
 
@@ -500,6 +501,7 @@ function RunContextStrip() {
   const stream = useViewerStream();
   const baseUrl = useViewerServerBaseUrl();
   const stopRun = useStopRunMutation(baseUrl);
+  const { pushToast } = useToast();
 
   const issueRef = stream.state?.issue_ref ?? null;
   // Derive workflow/phase from stream state for live updates
@@ -580,7 +582,11 @@ function RunContextStrip() {
             ...(stopRun.isPending ? styles.stopBtnDisabled : {}),
           }}
           disabled={stopRun.isPending}
-          onClick={() => void stopRun.mutateAsync({ force: false })}
+          onClick={() =>
+            void stopRun
+              .mutateAsync({ force: false })
+              .catch((e: unknown) => pushToast(e instanceof Error ? e.message : String(e)))
+          }
         >
           {stopRun.isPending ? 'Stopping…' : 'Stop'}
         </button>

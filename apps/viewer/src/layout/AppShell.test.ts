@@ -652,6 +652,147 @@ describe('T4: EC2 refresh mid-run', () => {
 });
 
 // ============================================================================
+// EC2 regression: connected=true with state=null, then state arrives running
+// ============================================================================
+
+describe('T4: EC2 refresh mid-run — delayed snapshot hydration', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Simulates the real websocket event ordering on page refresh:
+   * 1. WebSocket `open` fires → connected=true, state=null → runRunning=false
+   * 2. First `state` snapshot arrives → state.run.running=true → runRunning=true
+   *
+   * Without hydration gating, step 2 would be seen as false→true (RUN_START)
+   * and replay the hide animation. With gating, it should hydrate directly
+   * to W2 (auto) or W3 (open).
+   */
+  class DelayedSnapshotSimulator {
+    focusState: FocusState;
+    prevRunning: boolean;
+    hasHydrated: boolean;
+    hideTimerActive: boolean;
+
+    constructor() {
+      // Step 1: Mount with no snapshot (state=null → runRunning=false)
+      this.focusState = deriveFocusState({ running: false, override: readRunOverride() });
+      this.prevRunning = false;
+      this.hasHydrated = false; // no snapshot yet
+      this.hideTimerActive = false;
+    }
+
+    /** Simulate the first state snapshot arriving (mirrors AppShell useEffect logic). */
+    onFirstSnapshot(running: boolean) {
+      const wasRunning = this.prevRunning;
+      this.prevRunning = running;
+
+      // Hydration gate: first snapshot triggers derivation, not RUN_START
+      if (!this.hasHydrated) {
+        this.hasHydrated = true;
+        const override = readRunOverride();
+        this.focusState = deriveFocusState({ running, override });
+        return;
+      }
+
+      // Normal transition logic (should not be reached on first snapshot)
+      if (!wasRunning && running) {
+        const override = readRunOverride();
+        const result = focusReducer(this.focusState, { type: 'RUN_START', override });
+        this.focusState = result.state;
+        if (result.animate) {
+          this.hideTimerActive = true;
+        }
+      }
+    }
+
+    /** Simulate a subsequent run state change (normal path, post-hydration). */
+    onRunStateChange(running: boolean) {
+      const wasRunning = this.prevRunning;
+      this.prevRunning = running;
+
+      if (!wasRunning && running) {
+        const override = readRunOverride();
+        const result = focusReducer(this.focusState, { type: 'RUN_START', override });
+        this.focusState = result.state;
+        if (result.persistOverride !== null) writeRunOverride(result.persistOverride);
+        if (result.animate) this.hideTimerActive = true;
+      } else if (wasRunning && !running) {
+        const result = focusReducer(this.focusState, { type: 'RUN_END' });
+        this.focusState = result.state;
+        this.hideTimerActive = false;
+      }
+    }
+
+    get sidebarVisible() { return isSidebarVisible(this.focusState); }
+    get animatingHide() { return isAnimating(this.focusState); }
+  }
+
+  it('delayed snapshot with running=true hydrates to W2 (not W1), no animation', () => {
+    const sim = new DelayedSnapshotSimulator();
+    // Step 1: mounted with no snapshot → W0
+    expect(sim.focusState).toBe('W0');
+
+    // Step 2: first state snapshot arrives with running=true
+    sim.onFirstSnapshot(true);
+
+    // Should hydrate directly to W2, NOT enter W1 with animation
+    expect(sim.focusState).toBe('W2');
+    expect(sim.animatingHide).toBe(false);
+    expect(sim.hideTimerActive).toBe(false);
+    expect(sim.sidebarVisible).toBe(false);
+  });
+
+  it('delayed snapshot with running=true and override "open" hydrates to W3', () => {
+    writeRunOverride('open');
+    const sim = new DelayedSnapshotSimulator();
+    expect(sim.focusState).toBe('W0');
+
+    sim.onFirstSnapshot(true);
+
+    expect(sim.focusState).toBe('W3');
+    expect(sim.sidebarVisible).toBe(true);
+    expect(sim.animatingHide).toBe(false);
+  });
+
+  it('delayed snapshot with running=false hydrates to W0', () => {
+    const sim = new DelayedSnapshotSimulator();
+    expect(sim.focusState).toBe('W0');
+
+    sim.onFirstSnapshot(false);
+
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+  });
+
+  it('after hydration, subsequent false→true dispatches RUN_START normally', () => {
+    const sim = new DelayedSnapshotSimulator();
+    // Hydrate with running=false
+    sim.onFirstSnapshot(false);
+    expect(sim.focusState).toBe('W0');
+
+    // Now a real run starts (post-hydration)
+    sim.onRunStateChange(true);
+    // Should go through normal W0→W1 path
+    expect(sim.focusState).toBe('W1');
+    expect(sim.animatingHide).toBe(true);
+    expect(sim.hideTimerActive).toBe(true);
+  });
+
+  it('after hydration to W2, run end proceeds normally to W4', () => {
+    const sim = new DelayedSnapshotSimulator();
+    sim.onFirstSnapshot(true); // W2
+    expect(sim.focusState).toBe('W2');
+
+    sim.onRunStateChange(false); // run ends
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+  });
+});
+
+// ============================================================================
 // T4: Navigation tabs remain accessible
 // ============================================================================
 

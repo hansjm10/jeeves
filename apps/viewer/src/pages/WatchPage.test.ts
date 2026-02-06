@@ -788,8 +788,8 @@ describe('T8-AC1: Stop control visibility and pending state', () => {
     });
 
     it('Stop button calls stop mutation with force: false (contract verification)', () => {
-      // The Stop button in WatchPage.tsx (line 583) calls:
-      //   stopRun.mutateAsync({ force: false })
+      // The Stop button in WatchPage.tsx calls:
+      //   stopRun.mutateAsync({ force: false }).catch((e) => pushToast(...))
       // The mutation is useStopRunMutation which sends { force: boolean } to /api/run/stop.
       // We verify the gate condition is the sole determinant of rendering:
       const rendered = deriveStopButtonState(true, false);
@@ -798,6 +798,55 @@ describe('T8-AC1: Stop control visibility and pending state', () => {
 
       const notRendered = deriveStopButtonState(false, false);
       expect(notRendered).toBeNull();
+    });
+  });
+
+  describe('Stop error handling contract (non-blocking)', () => {
+    /**
+     * Simulates the stop-button error flow as wired in WatchPage.tsx.
+     *
+     * The button uses:
+     *   void stopRun.mutateAsync({ force: false })
+     *     .catch((e) => pushToast(e instanceof Error ? e.message : String(e)))
+     *
+     * This verifies the error formatting produces a user-visible message
+     * that would be surfaced through the toast system.
+     */
+    function formatStopError(error: unknown): string {
+      return error instanceof Error ? error.message : String(error);
+    }
+
+    it('formats Error instance to message string for toast', () => {
+      const err = new Error('Network request failed');
+      expect(formatStopError(err)).toBe('Network request failed');
+    });
+
+    it('formats non-Error to string for toast', () => {
+      expect(formatStopError('connection refused')).toBe('connection refused');
+      expect(formatStopError(404)).toBe('404');
+    });
+
+    it('formats null/undefined to string for toast', () => {
+      expect(formatStopError(null)).toBe('null');
+      expect(formatStopError(undefined)).toBe('undefined');
+    });
+
+    it('stop mutation rejection is caught and surfaced (contract)', () => {
+      // Simulate the promise chain as wired in WatchPage.tsx:
+      //   mutateAsync({force:false}).catch(e => pushToast(formatStopError(e)))
+      const toastMessages: string[] = [];
+      const pushToast = (msg: string) => toastMessages.push(msg);
+
+      // Simulate a rejected mutation
+      const rejected = Promise.reject(new Error('Server error: 500'));
+      void rejected.catch((e: unknown) => pushToast(formatStopError(e)));
+
+      // The catch handler runs synchronously in microtask queue,
+      // verify it can format the error correctly
+      return rejected.catch(() => {
+        // Error was caught — no unhandled promise rejection
+        expect(toastMessages).toContain('Server error: 500');
+      });
     });
   });
 });

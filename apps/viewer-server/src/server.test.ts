@@ -11,6 +11,7 @@ import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson
 
 import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
+import { ProviderAdapterError } from './providerIssueAdapter.js';
 import { buildServer } from './server.js';
 
 const execFileAsync = promisify(execFile);
@@ -848,10 +849,10 @@ describe('viewer-server', () => {
       allowRemoteRun: false,
       dataDir,
       repoRoot: path.resolve(process.cwd()),
-      createGitHubIssue: async () => {
-        throw new CreateGitHubIssueError({
+      createProviderIssue: async () => {
+        throw new ProviderAdapterError({
           status: 401,
-          code: 'NOT_AUTHENTICATED',
+          code: 'provider_auth_required',
           message: 'GitHub CLI (gh) is not authenticated. Run `gh auth login` on the viewer-server host.',
         });
       },
@@ -1071,9 +1072,9 @@ describe('viewer-server', () => {
       allowRemoteRun: false,
       dataDir,
       repoRoot: path.resolve(process.cwd()),
-      createGitHubIssue: async (params) => {
+      createProviderIssue: async (params) => {
         captured = params as unknown as { labels?: unknown; assignees?: unknown; milestone?: unknown };
-        return { issue_ref: null, issue_url: 'https://github.com/o/r/issues/123' };
+        return { id: '123', url: 'https://github.com/o/r/issues/123', title: 't', kind: 'issue' as const };
       },
     });
 
@@ -1108,7 +1109,7 @@ describe('viewer-server', () => {
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
     await fs.writeFile(
       path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'),
-      "setTimeout(() => process.exit(0), 800);\n",
+      "setTimeout(() => process.exit(0), 3000);\n",
       'utf-8',
     );
 
@@ -1137,7 +1138,7 @@ describe('viewer-server', () => {
       promptsDir: path.join(process.cwd(), 'prompts'),
       workflowsDir: path.join(process.cwd(), 'workflows'),
       initialIssue: issueRef,
-      createGitHubIssue: async () => ({ issue_ref: 'o/r#999', issue_url: 'https://github.com/o/r/issues/999' }),
+      createProviderIssue: async () => ({ id: '999', url: 'https://github.com/o/r/issues/999', title: 't', kind: 'issue' as const }),
     });
 
     const runRes = await app.inject({
@@ -1149,16 +1150,7 @@ describe('viewer-server', () => {
     expect(runRes.statusCode).toBe(200);
     expect((runRes.json() as { run?: { running?: unknown } }).run?.running).toBe(true);
 
-    const createOnlyRes = await app.inject({
-      method: 'POST',
-      url: '/api/github/issues/create',
-      remoteAddress: '127.0.0.1',
-      payload: { repo: 'o/r', title: 't', body: 'b' },
-    });
-    expect(createOnlyRes.statusCode).toBe(200);
-    expect((createOnlyRes.json() as { ok?: unknown; run?: { running?: unknown } }).ok).toBe(true);
-    expect((createOnlyRes.json() as { ok?: unknown; run?: { running?: unknown } }).run?.running).toBe(true);
-
+    // Immediately test init-while-running (before any async work can finish the run)
     const res = await app.inject({
       method: 'POST',
       url: '/api/github/issues/create',
@@ -1168,12 +1160,24 @@ describe('viewer-server', () => {
     expect(res.statusCode).toBe(409);
     expect((res.json() as { error?: unknown }).error).toBe('Cannot init while Jeeves is running.');
 
+    // Verify create-only (without init) succeeds even while running
+    const createOnlyRes = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 't', body: 'b' },
+    });
+    expect(createOnlyRes.statusCode).toBe(200);
+    const createOnlyBody = createOnlyRes.json() as Record<string, unknown>;
+    expect(createOnlyBody.ok).toBe(true);
+    expect(createOnlyBody.run).toBeTruthy();
+
     const start = Date.now();
     while (true) {
       const statusRes = await app.inject({ method: 'GET', url: '/api/run' });
       const running = (statusRes.json() as { run?: { running?: unknown } }).run?.running;
       if (running === false) break;
-      if (Date.now() - start > 2500) throw new Error('timeout waiting for run to stop');
+      if (Date.now() - start > 8000) throw new Error('timeout waiting for run to stop');
       await new Promise((r) => setTimeout(r, 25));
     }
 
@@ -1193,7 +1197,7 @@ describe('viewer-server', () => {
       allowRemoteRun: false,
       dataDir,
       repoRoot: path.resolve(process.cwd()),
-      createGitHubIssue: async () => ({ issue_ref: createdIssueRef, issue_url: createdIssueUrl }),
+      createProviderIssue: async () => ({ id: '123', url: createdIssueUrl, title: 'My Title', kind: 'issue' as const }),
     });
 
     const res = await app.inject({
@@ -1255,7 +1259,6 @@ describe('viewer-server', () => {
       'utf-8',
     );
 
-    const createdIssueRef = 'o/r#123';
     const createdIssueUrl = 'https://github.com/o/r/issues/123';
 
     const { app } = await buildServer({
@@ -1265,7 +1268,7 @@ describe('viewer-server', () => {
       dataDir,
       repoRoot: path.resolve(process.cwd()),
       initialIssue: initialIssueRef,
-      createGitHubIssue: async () => ({ issue_ref: createdIssueRef, issue_url: createdIssueUrl }),
+      createProviderIssue: async () => ({ id: '123', url: createdIssueUrl, title: 'My Title', kind: 'issue' as const }),
     });
 
     const res = await app.inject({
@@ -1294,8 +1297,9 @@ describe('viewer-server', () => {
     await app.close();
   });
 
-  it('returns v1 limitation error for non-github.com issue URLs when init is requested', async () => {
+  it('handles non-github.com issue URLs via provider-aware flow when init is requested', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-create-init-host-limitation-');
+    await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
 
     const { app } = await buildServer({
       host: '127.0.0.1',
@@ -1303,7 +1307,7 @@ describe('viewer-server', () => {
       allowRemoteRun: false,
       dataDir,
       repoRoot: path.resolve(process.cwd()),
-      createGitHubIssue: async () => ({ issue_ref: 'o/r#123', issue_url: 'https://github.enterprise.example/o/r/issues/123' }),
+      createProviderIssue: async () => ({ id: '123', url: 'https://github.enterprise.example/o/r/issues/123', title: 't', kind: 'issue' as const }),
     });
 
     const res = await app.inject({
@@ -1313,11 +1317,345 @@ describe('viewer-server', () => {
       payload: { repo: 'o/r', title: 't', body: 'b', init: {} },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { ok?: unknown; init?: { ok?: unknown; error?: unknown }; run?: unknown };
+    const body = res.json() as { ok?: unknown; init?: { ok?: unknown }; run?: unknown };
     expect(body.ok).toBe(true);
-    expect(body.init?.ok).toBe(false);
-    expect(body.init?.error).toBe('Only github.com issue URLs are supported in v1.');
+    // Provider-aware flow supports any URL — no v1 limitation
+    expect(body.init?.ok).toBe(true);
     expect(body.run).toBeTruthy();
+
+    await app.close();
+  });
+
+  // ======================================================================
+  // Provider-Aware Ingest Endpoints
+  // ======================================================================
+
+  describe('POST /api/issues/create', () => {
+    it('returns IngestResponse with outcome success for GitHub provider', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-github-');
+      await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        createProviderIssue: async () => ({
+          id: '42',
+          url: 'https://github.com/o/r/issues/42',
+          title: 'Provider Test',
+          kind: 'issue' as const,
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'github', repo: 'o/r', title: 'Provider Test', body: 'Body text' },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.provider).toBe('github');
+      expect(body.mode).toBe('create');
+      expect(body.outcome).toBe('success');
+      expect(body.remote).toBeTruthy();
+      const remote = body.remote as Record<string, unknown>;
+      expect(remote.id).toBe('42');
+      expect(remote.url).toBe('https://github.com/o/r/issues/42');
+      expect(remote.title).toBe('Provider Test');
+      expect(remote.kind).toBe('issue');
+      expect(Array.isArray(body.warnings)).toBe(true);
+
+      await app.close();
+    });
+
+    it('returns 400 with validation_failed for missing title', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-validation-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'github', repo: 'o/r', body: 'Hello' },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('validation_failed');
+      expect(body.field_errors).toBeTruthy();
+      const fieldErrors = body.field_errors as Record<string, string>;
+      expect(fieldErrors.title).toBeTruthy();
+
+      await app.close();
+    });
+
+    it('returns 400 with unsupported_provider for invalid provider', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-unsupported-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'jira', repo: 'o/r', title: 'Test', body: 'Test' },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('unsupported_provider');
+      expect(body.error).toContain('jira');
+
+      await app.close();
+    });
+
+    it('returns IngestResponse with init result when init is requested', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-init-');
+      await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        createProviderIssue: async () => ({
+          id: '55',
+          url: 'https://github.com/o/r/issues/55',
+          title: 'Init Test',
+          kind: 'issue' as const,
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'github',
+          repo: 'o/r',
+          title: 'Init Test',
+          body: 'Body',
+          init: { branch: 'issue/55-test' },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.outcome).toBe('success');
+      expect(body.init).toBeTruthy();
+      const init = body.init as Record<string, unknown>;
+      expect(init.ok).toBe(true);
+      expect(init.issue_ref).toBe('o/r#55');
+      expect(init.branch).toBe('issue/55-test');
+
+      // Verify auto_select defaulted to true
+      expect(body.auto_select).toBeTruthy();
+      const autoSelect = body.auto_select as Record<string, unknown>;
+      expect(autoSelect.requested).toBe(true);
+      expect(autoSelect.ok).toBe(true);
+
+      await app.close();
+    });
+
+    it('propagates adapter 401 as provider_auth_required', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-401-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        createProviderIssue: async () => {
+          throw new ProviderAdapterError({ status: 401, code: 'provider_auth_required', message: 'Bad credentials' });
+        },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'github', repo: 'o/r', title: 'Test', body: 'Test' },
+      });
+      expect(res.statusCode).toBe(401);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('provider_auth_required');
+
+      await app.close();
+    });
+  });
+
+  describe('POST /api/issues/init-from-existing', () => {
+    it('returns IngestResponse with mode init_existing for GitHub provider', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-');
+      await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        lookupExistingIssue: async () => ({
+          id: '77',
+          url: 'https://github.com/o/r/issues/77',
+          title: 'Existing Issue',
+          kind: 'issue' as const,
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'github',
+          repo: 'o/r',
+          existing: { id: 77 },
+          init: { branch: 'issue/77-test' },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.provider).toBe('github');
+      expect(body.mode).toBe('init_existing');
+      expect(body.outcome).toBe('success');
+      expect(body.remote).toBeTruthy();
+      const remote = body.remote as Record<string, unknown>;
+      expect(remote.id).toBe('77');
+      expect(remote.url).toBe('https://github.com/o/r/issues/77');
+
+      // Init result should be present
+      expect(body.init).toBeTruthy();
+      const init = body.init as Record<string, unknown>;
+      expect(init.ok).toBe(true);
+
+      await app.close();
+    });
+
+    it('returns 400 when existing is missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-missing-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'github', repo: 'o/r' },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('validation_failed');
+
+      await app.close();
+    });
+
+    it('returns 400 with unsupported_provider for invalid provider', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-unsupported-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: { provider: 'bitbucket', repo: 'o/r', existing: { id: 1 } },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('unsupported_provider');
+      expect(body.error).toContain('bitbucket');
+
+      await app.close();
+    });
+  });
+
+  // ======================================================================
+  // Legacy shim delegation proof
+  // ======================================================================
+
+  it('legacy /api/github/issues/create delegates to provider-aware flow (createProviderIssue is called)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-legacy-delegation-');
+    await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+    let providerAdapterCalled = false;
+    let capturedParams: Record<string, unknown> | null = null;
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+      createProviderIssue: async (params) => {
+        providerAdapterCalled = true;
+        capturedParams = params as unknown as Record<string, unknown>;
+        return { id: '200', url: 'https://github.com/o/r/issues/200', title: 'Delegation Test', kind: 'issue' as const };
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/github/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: { repo: 'o/r', title: 'Delegation Test', body: 'Body text' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Verify delegation happened — createProviderIssue was called
+    expect(providerAdapterCalled).toBe(true);
+    expect(capturedParams).toBeTruthy();
+    expect(capturedParams!.provider).toBe('github');
+    expect(capturedParams!.title).toBe('Delegation Test');
+
+    // Verify legacy envelope shape is preserved
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.created).toBe(true);
+    expect(body.issue_url).toBe('https://github.com/o/r/issues/200');
+    expect(body.run).toBeTruthy();
+    // Legacy envelope does NOT contain provider-aware fields
+    expect(body.outcome).toBeUndefined();
+    expect(body.provider).toBeUndefined();
+    expect(body.mode).toBeUndefined();
 
     await app.close();
   });

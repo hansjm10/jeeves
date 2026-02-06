@@ -12,6 +12,8 @@ import {
   resolveDataDir,
   toRawWorkflowJson,
   toWorkflowYaml,
+  getIssueStateDir,
+  getWorktreePath,
 } from '@jeeves/core';
 import Fastify from 'fastify';
 
@@ -58,9 +60,9 @@ import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import { cleanupStaleArtifacts, detectRecovery } from './providerOperationJournal.js';
 import {
-  createProviderIssue,
-  lookupExistingIssue,
-  fetchAzureHierarchy,
+  createProviderIssue as defaultCreateProviderIssue,
+  lookupExistingIssue as defaultLookupExistingIssue,
+  fetchAzureHierarchy as defaultFetchAzureHierarchy,
   ProviderAdapterError,
 } from './providerIssueAdapter.js';
 import {
@@ -69,7 +71,7 @@ import {
   type IssueSource,
   type IssueIngestStatus,
 } from './providerIssueState.js';
-import type { CreateGitHubIssueAdapter } from './types.js';
+import type { CreateGitHubIssueAdapter, CreateProviderIssueAdapter, LookupExistingIssueAdapter, FetchAzureHierarchyAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
   const a = (addr ?? '').trim();
@@ -418,6 +420,12 @@ export type ViewerServerConfig = Readonly<{
   sonarTokenMutexTimeoutMs?: number;
   /** Mutex timeout for Azure DevOps credential operations (ms). Default: 1500. For testing only. */
   azureDevopsMutexTimeoutMs?: number;
+  /** Provider issue create adapter override. For testing only. */
+  createProviderIssue?: CreateProviderIssueAdapter;
+  /** Provider issue lookup adapter override. For testing only. */
+  lookupExistingIssue?: LookupExistingIssueAdapter;
+  /** Azure hierarchy fetch adapter override. For testing only. */
+  fetchAzureHierarchy?: FetchAzureHierarchyAdapter;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -426,6 +434,9 @@ export async function buildServer(config: ViewerServerConfig) {
   const promptsDir = config.promptsDir ?? path.join(repoRoot, 'prompts');
   const workflowsDir = config.workflowsDir ?? path.join(repoRoot, 'workflows');
   const createGitHubIssue = config.createGitHubIssue ?? defaultCreateGitHubIssue;
+  const createProviderIssue = config.createProviderIssue ?? defaultCreateProviderIssue;
+  const lookupExistingIssue = config.lookupExistingIssue ?? defaultLookupExistingIssue;
+  const fetchAzureHierarchy = config.fetchAzureHierarchy ?? defaultFetchAzureHierarchy;
 
   const allowRemoteRun = config.allowRemoteRun || parseEnvBool(process.env.JEEVES_VIEWER_ALLOW_REMOTE_RUN);
   const allowedOrigins = parseAllowedOriginsFromEnv();
@@ -1226,6 +1237,9 @@ export async function buildServer(config: ViewerServerConfig) {
         // For GitHub issues, it should be a positive integer
       }
 
+      // Save previous active issue before initIssue (which always writes active-issue.json)
+      const prevActiveIssue = await loadActiveIssue(dataDir);
+
       try {
         const initRes = await initIssue({
           dataDir,
@@ -1290,6 +1304,13 @@ export async function buildServer(config: ViewerServerConfig) {
             outcome = 'partial';
           }
         } else {
+          // Restore previous active issue (initIssue always writes active-issue.json)
+          const activeIssueFile = path.join(dataDir, 'active-issue.json');
+          if (prevActiveIssue) {
+            await saveActiveIssue(dataDir, prevActiveIssue);
+          } else {
+            await fs.rm(activeIssueFile, { force: true }).catch(() => void 0);
+          }
           autoSelectResult = { requested: false, ok: true };
         }
 
@@ -1580,219 +1601,125 @@ export async function buildServer(config: ViewerServerConfig) {
 		      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
 		    }
 
-		    // Delegate to provider-aware flow:
-		    // 1. Create the issue via injected createGitHubIssue adapter (preserves testability)
-		    // 2. Post-create: init/select/run + provider-aware state persistence + event emission
-
-		    function parseGitHubDotComIssueUrl(issueUrl: string): { issueNumber: number } | null {
-		      let parsed: URL;
-		      try {
-		        parsed = new URL(issueUrl);
-		      } catch {
-		        return null;
-		      }
-		      if (parsed.hostname.trim().toLowerCase() !== 'github.com') return null;
-		      const m = parsed.pathname.match(/^\/[^/]+\/[^/]+\/issues\/(\d+)(?:\/.*)?$/);
-		      if (!m) return null;
-		      const n = Number(m[1]);
-		      if (!Number.isInteger(n) || n <= 0) return null;
-		      return { issueNumber: n };
-		    }
-
+		    // Delegate to provider-aware flow via executeProviderIngest
+		    const initParams = initObj ?? {};
 		    try {
-		      const res = await createGitHubIssue({ repo, title: titleRaw, body: bodyRaw, labels, assignees, milestone });
-		      const baseResponse = {
+		      const result = await executeProviderIngest({
+		        provider: 'github',
+		        mode: 'create',
+		        repo,
+		        title: titleRaw,
+		        body: bodyRaw,
+		        labels: labels ? [...labels] : undefined,
+		        assignees: assignees ? [...assignees] : undefined,
+		        milestone,
+		        init: initRequested
+		          ? {
+		              branch: parseOptionalString(initParams.branch),
+		              workflow: parseOptionalString(initParams.workflow),
+		              phase: parseOptionalString(initParams.phase),
+		              design_doc: parseOptionalString(initParams.design_doc),
+		              force: parseOptionalBool(initParams.force),
+		            }
+		          : undefined,
+		        auto_select: autoSelectEnabled,
+		        auto_run: autoRunRequested
+		          ? {
+		              provider: parseOptionalString((autoRunObj ?? {}).provider) ?? parseOptionalString(body.provider),
+		              workflow: parseOptionalString((autoRunObj ?? {}).workflow),
+		              max_iterations: parseOptionalNumber((autoRunObj ?? {}).max_iterations),
+		              inactivity_timeout_sec: parseOptionalNumber((autoRunObj ?? {}).inactivity_timeout_sec),
+		              iteration_timeout_sec: parseOptionalNumber((autoRunObj ?? {}).iteration_timeout_sec),
+		            }
+		          : undefined,
+		      });
+
+		      // Legacy title/url persistence (kept for backward compat)
+		      if (result.init && result.init.ok) {
+		        const issueRef = result.init.issue_ref;
+		        const refMatch = issueRef.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+		        if (refMatch) {
+		          const [, owner, repoName, numStr] = refMatch;
+		          const issueNum = parseInt(numStr, 10);
+		          const stDir = getIssueStateDir(owner, repoName, issueNum, dataDir);
+		          try {
+		            const issueJson = ((await readIssueJson(stDir)) ?? {}) as Record<string, unknown>;
+		            const issueField =
+		              issueJson.issue && typeof issueJson.issue === 'object' && !Array.isArray(issueJson.issue)
+		                ? (issueJson.issue as Record<string, unknown>)
+		                : {};
+		            await writeIssueJson(stDir, {
+		              ...issueJson,
+		              issue: { ...issueField, title: titleRaw.trim(), url: result.remote.url },
+		            });
+		          } catch { /* non-fatal legacy persistence */ }
+		        }
+		      }
+
+		      // Map IngestResponse to legacy envelope
+		      const legacyResponse: Record<string, unknown> = {
 		        ok: true,
 		        created: true,
-		        issue_url: res.issue_url,
-		        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
+		        issue_url: result.remote.url,
+		        run: runManager.getStatus(),
 		      };
 
-		      // Build provider-aware remote ref from the legacy create result
-		      const issueUrlInfo = parseGitHubDotComIssueUrl(res.issue_url);
-		      const remoteRef: IngestRemoteRef = {
-		        id: issueUrlInfo ? String(issueUrlInfo.issueNumber) : '0',
-		        url: res.issue_url,
-		        title: titleRaw.trim(),
-		        kind: 'issue',
-		      };
-
-		      // Emit provider-aware ingest event (non-blocking)
-		      const ingestWarnings: string[] = [];
-
-		      if (!initRequested) {
-		        // Persist provider source metadata to current issue if available
-		        const curIssue = runManager.getIssue();
-		        if (curIssue.stateDir) {
-		          try {
-		            await writeIssueSource(curIssue.stateDir, {
-		              provider: 'github', kind: 'issue', id: remoteRef.id,
-		              url: remoteRef.url, title: remoteRef.title, mode: 'create',
-		            });
-		          } catch { /* non-fatal */ }
+		      // Reconstruct issue_ref in legacy format (owner/repo#number)
+		      if (result.init?.ok) {
+		        legacyResponse.issue_ref = result.init.issue_ref;
+		      } else {
+		        // Parse issue_ref from remote URL for non-init case
+		        const urlMatch = result.remote.url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+		        if (urlMatch) {
+		          legacyResponse.issue_ref = `${urlMatch[1]}/${urlMatch[2]}#${urlMatch[3]}`;
 		        }
-
-		        // Emit ingest event
-		        hub.broadcast('issue-ingest-status', {
-		          issue_ref: curIssue.issueRef,
-		          provider: 'github', mode: 'create', outcome: 'success',
-		          remote_id: remoteRef.id, remote_url: remoteRef.url,
-		          warnings: [], auto_select: { requested: false, ok: true },
-		          auto_run: { requested: false, ok: true },
-		          occurred_at: new Date().toISOString(),
-		        } satisfies IssueIngestStatusEvent);
-
-		        return reply.send({ ...baseResponse, run: runManager.getStatus() });
 		      }
 
-		      if (!issueUrlInfo) {
-		        return reply.send({
-		          ...baseResponse,
-		          run: runManager.getStatus(),
-		          init: { ok: false, error: 'Only github.com issue URLs are supported in v1.' },
-		        });
-		      }
-
-		      const initParams = initObj ?? {};
-		      const prevActiveIssue = await loadActiveIssue(dataDir);
-
-		      try {
-			        const initRes = await initIssue({
-			          dataDir,
-			          workflowsDir,
-			          body: {
-			            repo,
-			            issue: issueUrlInfo.issueNumber,
-			            branch: parseOptionalString(initParams.branch),
-		            workflow: parseOptionalString(initParams.workflow),
-		            phase: parseOptionalString(initParams.phase),
-		            design_doc: parseOptionalString(initParams.design_doc),
-		            force: parseOptionalBool(initParams.force),
-		          },
-		        });
-
-		        // Persist provider-aware source metadata
-		        try {
-		          await writeIssueSource(initRes.state_dir, {
-		            provider: 'github', kind: 'issue', id: remoteRef.id,
-		            url: remoteRef.url, title: remoteRef.title, mode: 'create',
-		          });
-		        } catch {
-		          ingestWarnings.push('Failed to persist issue source metadata.');
-		        }
-
-		        // Legacy title/url persistence (kept for backward compat)
-		        const issueJson = ((await readIssueJson(initRes.state_dir)) ?? {}) as Record<string, unknown>;
-		        const issueField =
-		          issueJson.issue && typeof issueJson.issue === 'object' && !Array.isArray(issueJson.issue)
-		            ? (issueJson.issue as Record<string, unknown>)
-		            : {};
-		        await writeIssueJson(initRes.state_dir, {
-		          ...issueJson,
-		          issue: { ...issueField, title: titleRaw.trim(), url: res.issue_url },
-		        });
-
-		        const autoSelectOk = true;
-		        if (autoSelectEnabled) {
-		          await runManager.setIssue(initRes.issue_ref);
-		          await saveActiveIssue(dataDir, initRes.issue_ref);
-		          await refreshFileTargets();
-
-		          // Best-effort reconcile hooks
-		          const reconcileIssue = runManager.getIssue();
-		          if (reconcileIssue.issueRef && reconcileIssue.stateDir) {
-		            try { await autoReconcileSonarToken(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
-		            try { await autoReconcileAzureDevops(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+		      // Map init result if present
+		      if (result.init) {
+		        if (result.init.ok) {
+		          const issueRef = result.init.issue_ref;
+		          const refMatch = issueRef.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+		          if (refMatch) {
+		            const [, owner, repoName, numStr] = refMatch;
+		            const issueNum = parseInt(numStr, 10);
+		            legacyResponse.init = {
+		              ok: true,
+		              result: {
+		                issue_ref: issueRef,
+		                state_dir: getIssueStateDir(owner, repoName, issueNum, dataDir),
+		                work_dir: getWorktreePath(owner, repoName, issueNum, dataDir),
+		                repo_dir: path.join(dataDir, 'repos', owner, repoName),
+		                branch: result.init.branch,
+		              },
+		            };
+		          } else {
+		            legacyResponse.init = { ok: false, error: 'Failed to parse issue reference.' };
 		          }
 		        } else {
-		          const activeIssueFile = path.join(dataDir, 'active-issue.json');
-		          if (prevActiveIssue) await saveActiveIssue(dataDir, prevActiveIssue);
-		          else await fs.rm(activeIssueFile, { force: true }).catch(() => void 0);
+		          legacyResponse.init = { ok: false, error: result.init.error };
 		        }
-
-		        // Record ingest status
-		        try {
-		          await writeIssueIngestStatus(initRes.state_dir, {
-		            provider: 'github', mode: 'create',
-		            outcome: ingestWarnings.length > 0 ? 'partial' : 'success',
-		            remote_id: remoteRef.id, remote_url: remoteRef.url,
-		            warnings: ingestWarnings, auto_select_ok: autoSelectOk,
-		            auto_run_ok: null, occurred_at: new Date().toISOString(),
-		          });
-		        } catch { /* non-fatal */ }
-
-		        if (!autoRunRequested) {
-		          // Emit ingest event
-		          hub.broadcast('issue-ingest-status', {
-		            issue_ref: initRes.issue_ref, provider: 'github', mode: 'create',
-		            outcome: ingestWarnings.length > 0 ? 'partial' : 'success',
-		            remote_id: remoteRef.id, remote_url: remoteRef.url,
-		            warnings: ingestWarnings,
-		            auto_select: { requested: autoSelectEnabled, ok: autoSelectOk },
-		            auto_run: { requested: false, ok: true },
-		            occurred_at: new Date().toISOString(),
-		          } satisfies IssueIngestStatusEvent);
-
-		          return reply.send({
-		            ...baseResponse,
-		            init: { ok: true, result: initRes },
-		            run: runManager.getStatus(),
-		          });
-		        }
-
-		        const autoRunParams = autoRunObj ?? {};
-		        let autoRunResult: { ok: true; run_started: true } | { ok: false; run_started: false; error: string };
-		        try {
-		          await runManager.start({
-		            provider: parseOptionalString(autoRunParams.provider) ?? parseOptionalString(body.provider) ?? body.provider,
-		            workflow: parseOptionalString(autoRunParams.workflow),
-		            max_iterations: parseOptionalNumber(autoRunParams.max_iterations),
-		            inactivity_timeout_sec: parseOptionalNumber(autoRunParams.inactivity_timeout_sec),
-		            iteration_timeout_sec: parseOptionalNumber(autoRunParams.iteration_timeout_sec),
-		          });
-		          autoRunResult = { ok: true, run_started: true };
-		        } catch (err) {
-		          const msg = err instanceof Error ? err.message : 'Failed to start run.';
-		          autoRunResult = { ok: false, run_started: false, error: msg };
-		        }
-
-		        // Update ingest status with auto_run result
-		        try {
-		          await writeIssueIngestStatus(initRes.state_dir, {
-		            provider: 'github', mode: 'create',
-		            outcome: (ingestWarnings.length > 0 || !autoRunResult.ok) ? 'partial' : 'success',
-		            remote_id: remoteRef.id, remote_url: remoteRef.url,
-		            warnings: ingestWarnings, auto_select_ok: autoSelectOk,
-		            auto_run_ok: autoRunResult.ok, occurred_at: new Date().toISOString(),
-		          });
-		        } catch { /* non-fatal */ }
-
-		        // Emit ingest event
-		        hub.broadcast('issue-ingest-status', {
-		          issue_ref: initRes.issue_ref, provider: 'github', mode: 'create',
-		          outcome: (ingestWarnings.length > 0 || !autoRunResult.ok) ? 'partial' : 'success',
-		          remote_id: remoteRef.id, remote_url: remoteRef.url,
-		          warnings: ingestWarnings,
-		          auto_select: { requested: autoSelectEnabled, ok: autoSelectOk },
-		          auto_run: { requested: true, ok: autoRunResult.ok },
-		          occurred_at: new Date().toISOString(),
-		        } satisfies IssueIngestStatusEvent);
-
-		        return reply.send({
-		          ...baseResponse,
-		          init: { ok: true, result: initRes },
-		          auto_run: autoRunResult,
-		          run: runManager.getStatus(),
-		        });
-		      } catch (err) {
-		        const safeMessage = err instanceof Error ? err.message : 'Failed to init issue.';
-		        return reply.send({
-		          ...baseResponse,
-		          run: runManager.getStatus(),
-		          init: { ok: false, error: safeMessage },
-		        });
 		      }
+
+		      // Map auto_run result if present
+		      if (result.auto_run) {
+		        if (result.auto_run.ok) {
+		          legacyResponse.auto_run = { ok: true, run_started: true };
+		        } else {
+		          legacyResponse.auto_run = { ok: false, run_started: false, error: result.auto_run.error ?? 'Failed to start run.' };
+		        }
+		        // Refresh run status after auto_run
+		        legacyResponse.run = runManager.getStatus();
+		      }
+
+		      return reply.send(legacyResponse);
 		    } catch (err) {
+		      // Map provider-aware errors back to legacy envelope format
+		      if (err && typeof err === 'object' && 'status' in err && 'body' in err) {
+		        const { status, body: errBody } = err as { status: number; body: Record<string, unknown> };
+		        const errorMsg = typeof errBody.error === 'string' ? errBody.error : 'Failed to create GitHub issue.';
+		        return reply.code(status).send({ ok: false, error: errorMsg, run: runManager.getStatus() });
+		      }
 		      if (err instanceof CreateGitHubIssueError) {
 		        return reply.code(err.status).send({ ok: false, error: err.message, run: runManager.getStatus() });
 		      }

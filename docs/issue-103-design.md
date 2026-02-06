@@ -222,7 +222,340 @@ Per-state error inventory (explicit):
 | `az repos pr list/create` | Azure org/project/repo, source/target branch, title/description. | Queries/creates Azure DevOps PR remotely. | Lookup/create failure in `pr.checking_existing`/`pr.creating_or_reusing` -> `pr.done_error`; timeouts are treated as create/query failures. |
 
 ## 3. Interfaces
-[To be completed in design_api phase]
+
+This section defines all external and internal contracts added or changed by Azure DevOps provider integration.
+
+### Conventions
+
+**Envelope conventions**
+- Success: `{ "ok": true, ... }`
+- Error: `{ "ok": false, "error": string, "code": string, "field_errors"?: Record<string,string>, "run"?: RunStatus }`
+
+**Mutation gating**
+- Mutating routes remain localhost-only unless `--allow-remote-run` is enabled.
+- Origin validation continues to use the existing viewer-server policy.
+
+**Issue scoping**
+- `/api/issue/*` routes operate on the selected issue.
+- `/api/issues/*` routes receive `repo` and then optionally select/init the new issue depending on flags.
+
+**Secret handling**
+- Azure PAT values are never returned in HTTP responses, stream events, or logs.
+
+### Endpoints
+| Method | Path | Input | Success | Errors |
+|--------|------|-------|---------|--------|
+| GET | `/api/issue/azure-devops` | none | `200` status payload (no PAT value) | `400`, `403`, `500` |
+| PUT | `/api/issue/azure-devops` | full upsert body (`organization`, `project`, `pat`, optional `sync_now`) | `200` mutate payload | `400`, `403`, `409`, `500`, `503` |
+| PATCH | `/api/issue/azure-devops` | partial update body (at least one mutable field) | `200` mutate payload | `400`, `403`, `409`, `500`, `503` |
+| DELETE | `/api/issue/azure-devops` | none | `200` mutate payload (`updated` idempotent) | `400`, `403`, `409`, `500`, `503` |
+| POST | `/api/issue/azure-devops/reconcile` | `{ force?: boolean }` | `200` mutate payload (`updated=false`) | `400`, `403`, `409`, `500`, `503` |
+| POST | `/api/issues/create` | provider-aware create payload | `200` ingest payload (`outcome=success|partial`) | `400`, `401`, `403`, `404`, `409`, `422`, `500`, `503`, `504` |
+| POST | `/api/issues/init-from-existing` | provider-aware existing-item payload | `200` ingest payload (`outcome=success|partial`) | `400`, `401`, `403`, `404`, `409`, `422`, `500`, `503`, `504` |
+| POST | `/api/github/issues/create` | existing GitHub payload (legacy) | `200` existing response shape | existing behavior retained; route is compatibility shim |
+
+#### Endpoint Schemas
+
+**Azure status type**
+```ts
+type AzureDevopsStatus = {
+  issue_ref: string;
+  worktree_present: boolean;
+  configured: boolean;
+  organization: string | null;
+  project: string | null;
+  has_pat: boolean;
+  pat_last_updated_at: string | null;
+  pat_env_var_name: 'AZURE_DEVOPS_EXT_PAT';
+  sync_status:
+    | 'in_sync'
+    | 'deferred_worktree_absent'
+    | 'failed_exclude'
+    | 'failed_env_write'
+    | 'failed_env_delete'
+    | 'failed_secret_read'
+    | 'never_attempted';
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+};
+```
+
+**GET `/api/issue/azure-devops`**
+- Success (`200`): `{ ok: true, ...AzureDevopsStatus }`
+- Errors:
+  - `400` `code=no_issue_selected`
+  - `403` `code=forbidden`
+  - `500` `code=io_error`
+
+**PUT `/api/issue/azure-devops`**
+- Request:
+```ts
+type PutAzureDevopsRequest = {
+  organization: string;
+  project: string;
+  pat: string;
+  sync_now?: boolean; // default true
+};
+```
+- Success (`200`):
+```ts
+type AzureMutateResponse = {
+  ok: true;
+  updated: boolean;
+  status: AzureDevopsStatus;
+  warnings: string[];
+};
+```
+- Errors:
+  - `400` `code=validation_failed` with `field_errors`
+  - `403` `code=forbidden`
+  - `409` `code=conflict_running`
+  - `500` `code=io_error`
+  - `503` `code=busy`
+
+**PATCH `/api/issue/azure-devops`**
+- Request:
+```ts
+type PatchAzureDevopsRequest = {
+  organization?: string;
+  project?: string;
+  pat?: string;
+  clear_pat?: boolean;
+  sync_now?: boolean; // default false
+};
+```
+- Rules: at least one of `organization`, `project`, `pat`, `clear_pat=true` must be present; `pat` and `clear_pat=true` cannot be sent together.
+- Success/error shape and status codes match PUT.
+
+**DELETE `/api/issue/azure-devops`**
+- Success (`200`): `AzureMutateResponse` where `updated` is `true` only if stored config or PAT existed.
+- Errors: `400` no issue selected, `403` forbidden, `409` running conflict, `500` io error, `503` busy.
+
+**POST `/api/issue/azure-devops/reconcile`**
+- Request: `{ force?: boolean }`
+- Success (`200`): `AzureMutateResponse` with `updated=false`.
+- Errors: `400` validation/no issue, `403` forbidden, `409` running conflict, `500` io error, `503` busy.
+
+**Common ingest response type**
+```ts
+type IngestResponse = {
+  ok: true;
+  provider: 'github' | 'azure_devops';
+  mode: 'create' | 'init_existing';
+  outcome: 'success' | 'partial';
+  remote: {
+    id: string;
+    url: string;
+    title: string;
+    kind: 'issue' | 'work_item';
+  };
+  hierarchy?: {
+    parent: { id: string; title: string; url: string } | null;
+    children: Array<{ id: string; title: string; url: string }>;
+  };
+  init?: { ok: true; issue_ref: string; branch: string } | { ok: false; error: string };
+  auto_select?: { requested: boolean; ok: boolean; error?: string };
+  auto_run?: { requested: boolean; ok: boolean; error?: string };
+  warnings: string[];
+  run: RunStatus;
+};
+```
+
+**POST `/api/issues/create`**
+- Request:
+```ts
+type CreateProviderIssueRequest = {
+  provider: 'github' | 'azure_devops';
+  repo: string;
+  title: string;
+  body: string;
+  labels?: string[];          // github only
+  assignees?: string[];       // github only
+  milestone?: string;         // github only
+  azure?: {
+    organization?: string;    // override saved issue config
+    project?: string;         // override saved issue config
+    work_item_type?: 'User Story' | 'Bug' | 'Task';
+    parent_id?: number;
+    area_path?: string;
+    iteration_path?: string;
+    tags?: string[];
+  };
+  init?: {
+    branch?: string;
+    workflow?: string;
+    phase?: string;
+    design_doc?: string;
+    force?: boolean;
+  };
+  auto_select?: boolean;
+  auto_run?: {
+    provider?: 'claude' | 'codex' | 'fake';
+    workflow?: string;
+    max_iterations?: number;
+    inactivity_timeout_sec?: number;
+    iteration_timeout_sec?: number;
+  };
+};
+```
+- Success (`200`): `IngestResponse`
+- Errors:
+  - `400` `validation_failed` or `unsupported_provider`
+  - `401` `provider_auth_required`
+  - `403` `forbidden` or `provider_permission_denied`
+  - `404` `remote_not_found`
+  - `409` `conflict_running`
+  - `422` `remote_validation_failed`
+  - `500` `io_error`
+  - `503` `busy`
+  - `504` `provider_timeout`
+
+**POST `/api/issues/init-from-existing`**
+- Request:
+```ts
+type InitFromExistingRequest = {
+  provider: 'github' | 'azure_devops';
+  repo: string;
+  existing: {
+    id?: number | string;
+    url?: string;
+  };
+  azure?: {
+    organization?: string;
+    project?: string;
+    fetch_hierarchy?: boolean; // default true
+  };
+  init?: {
+    branch?: string;
+    workflow?: string;
+    phase?: string;
+    design_doc?: string;
+    force?: boolean;
+  };
+  auto_select?: boolean;
+  auto_run?: {
+    provider?: 'claude' | 'codex' | 'fake';
+    workflow?: string;
+    max_iterations?: number;
+    inactivity_timeout_sec?: number;
+    iteration_timeout_sec?: number;
+  };
+};
+```
+- Rules: exactly one of `existing.id` or `existing.url` is required.
+- Success (`200`): `IngestResponse` with `mode=init_existing`.
+- Errors: same status/code matrix as `/api/issues/create` plus `404 remote_not_found` for missing issue/work item.
+
+**POST `/api/github/issues/create` (compatibility route)**
+- Existing input/output shape is preserved.
+- Internally, this route delegates to `/api/issues/create` with `provider='github'` and maps the new result back to the legacy response fields.
+- Deprecation: route remains supported through the next minor release after Azure provider rollout.
+
+### CLI Commands (internal provider adapters)
+| Command | Arguments | Options | Output |
+|---------|-----------|---------|--------|
+| `gh issue create` | `--repo <owner/repo> --title <title> --body <body>` | `--label <label>... --assignee <user>... --milestone <milestone>` | JSON parsed into `remote.id/url/title` |
+| `gh issue view` | `<number> --repo <owner/repo> --json number,url,title` | none | Canonical existing GitHub issue metadata |
+| `az boards work-item create` | `--organization <org-url> --project <project> --type <User Story|Bug|Task> --title <title> --description <body>` | `--fields` for parent/area/iteration/tags | JSON parsed into `remote.id/url/title` |
+| `az boards work-item show` | `--organization <org-url> --project <project> --id <id>` | `--expand relations` | Existing work item metadata + hierarchy relations |
+| `gh pr list` | `--head <branch> --repo <owner/repo> --json number,url,state` | none | Existing PR match (if any) |
+| `gh pr create` | `--base <base> --head <branch> --title <title> --body <body> --repo <owner/repo>` | none | Created PR number/url |
+| `az repos pr list` | `--organization <org-url> --project <project> --repository <repo> --source-branch <branch>` | `--status active --output json` | Existing Azure PR match (if any) |
+| `az repos pr create` | `--organization <org-url> --project <project> --repository <repo> --source-branch <branch> --target-branch <branch> --title <title> --description <body>` | `--output json` | Created Azure PR id/url |
+
+### Events
+| Event | Trigger | Payload | Consumers |
+|-------|---------|---------|-----------|
+| `azure-devops-status` | After PUT/PATCH/DELETE/reconcile, and after issue select/init startup reconciliation | `AzureDevopsStatusEvent` | Viewer Azure settings UI, stream cache hydrator |
+| `issue-ingest-status` | After provider-aware create/init-existing reaches `ingest.recording_status` | `IssueIngestStatusEvent` | Create Issue page, workflow/debug panels |
+
+```ts
+type AzureDevopsStatusEvent = AzureDevopsStatus & {
+  operation: 'put' | 'patch' | 'delete' | 'reconcile' | 'auto_reconcile' | 'ingest';
+};
+
+type IssueIngestStatusEvent = {
+  issue_ref: string | null;
+  provider: 'github' | 'azure_devops';
+  mode: 'create' | 'init_existing';
+  outcome: 'success' | 'partial' | 'error';
+  remote_id?: string;
+  remote_url?: string;
+  warnings: string[];
+  auto_select: { requested: boolean; ok: boolean };
+  auto_run: { requested: boolean; ok: boolean };
+  error?: { code: string; message: string };
+  occurred_at: string;
+};
+```
+
+### Validation Rules
+| Field | Type | Constraints | Error |
+|-------|------|-------------|-------|
+| `organization` | string | required for PUT; optional for PATCH/create override; trim; length `3..200`; `https://dev.azure.com/<org>` form or org slug chars `[A-Za-z0-9._-]` | `400 validation_failed` `field_errors.organization` |
+| `project` | string | required for PUT; optional for PATCH/create override; trim; length `1..128`; must not include control chars | `400 validation_failed` `field_errors.project` |
+| `pat` | string | required for PUT; optional for PATCH; trim; length `1..1024`; no `\0`, `\n`, `\r` | `400 validation_failed` `field_errors.pat` |
+| `clear_pat` | boolean | optional; cannot be `true` when `pat` present | `400 validation_failed` `field_errors.clear_pat` |
+| `sync_now` | boolean | optional; default PUT=`true`, PATCH=`false` | `400 validation_failed` `field_errors.sync_now` |
+| `force` | boolean | optional for reconcile; default `false` | `400 validation_failed` `field_errors.force` |
+| `provider` | enum | required for provider-aware ingest; one of `github`, `azure_devops` | `400 unsupported_provider` |
+| `repo` | string | required; format `owner/repo`; trim; length `3..200` | `400 validation_failed` `field_errors.repo` |
+| `title` | string | required for create; trim length `1..256` | `400 validation_failed` `field_errors.title` |
+| `body` | string | required for create; trim length `1..20000` | `400 validation_failed` `field_errors.body` |
+| `labels[]` | string[] | optional GitHub-only; each trim length `1..64`; max 20 items | `400 validation_failed` `field_errors.labels` |
+| `assignees[]` | string[] | optional GitHub-only; each trim length `1..64`; max 20 items | `400 validation_failed` `field_errors.assignees` |
+| `milestone` | string | optional GitHub-only; trim length `1..128` | `400 validation_failed` `field_errors.milestone` |
+| `azure.work_item_type` | enum | required when `provider=azure_devops` and `mode=create`; `User Story|Bug|Task` | `400 validation_failed` `field_errors.azure.work_item_type` |
+| `azure.parent_id` | integer | optional; positive integer | `400 validation_failed` `field_errors.azure.parent_id` |
+| `existing.id` / `existing.url` | number/string | init-from-existing requires exactly one | `400 validation_failed` `field_errors.existing` |
+| `auto_select` | boolean | optional; only valid when `init` present; default `true` when `init` present | `400 validation_failed` `field_errors.auto_select` |
+| `auto_run` | object | optional; requires `init` and `auto_select=true` | `400 validation_failed` `field_errors.auto_run` |
+| `auto_run.provider` | enum | optional; `claude|codex|fake` | `400 validation_failed` `field_errors.auto_run.provider` |
+| `auto_run.max_iterations` | integer | optional; `1..100` | `400 validation_failed` `field_errors.auto_run.max_iterations` |
+| `auto_run.inactivity_timeout_sec` | integer | optional; `10..7200` | `400 validation_failed` `field_errors.auto_run.inactivity_timeout_sec` |
+| `auto_run.iteration_timeout_sec` | integer | optional; `30..14400` | `400 validation_failed` `field_errors.auto_run.iteration_timeout_sec` |
+
+**Validation failure behavior**
+- Synchronous validation: JSON type checks, enum checks, dependency checks, length/format checks.
+- Asynchronous validation: mutex acquisition, run-state conflict checks, provider auth/permission checks, remote existence checks.
+- Sync failures return `400` with `code=validation_failed` (or `unsupported_provider`) and `field_errors`.
+- Async failures map to endpoint-specific `401/403/404/409/422/503/504/500` with sanitized `error` text.
+
+### UI Interactions
+| Action | Request | Loading State | Success | Error |
+|--------|---------|---------------|---------|-------|
+| Open Azure DevOps settings panel | `GET /api/issue/azure-devops` | Spinner + inputs disabled | Status fields rendered (`configured`, `sync_status`) | Inline error banner + retry button |
+| Save Azure settings | `PUT` or `PATCH /api/issue/azure-devops` | Form disabled; "Saving..." button text | Toast + refreshed status + latest `azure-devops-status` event applied | Field errors shown inline; toast with message |
+| Remove Azure settings | `DELETE /api/issue/azure-devops` | Destructive action disabled while pending | Toast + status shows `configured=false` | Toast + retain previous visible status |
+| Retry Azure reconcile | `POST /api/issue/azure-devops/reconcile` | "Syncing..." state | Status row updates; warnings banner if present | Banner with sanitized reconcile error |
+| Create provider issue/work item | `POST /api/issues/create` | Submit disabled; progress indicator | Created remote link shown; optional init/select/autorun result cards | Error banner; retain form values |
+| Initialize from existing item | `POST /api/issues/init-from-existing` | Submit disabled; progress indicator | Existing remote metadata and hierarchy summary shown | Error banner; highlight `existing` field |
+
+UI state changes on success:
+- Query cache invalidates issue list and selected issue status.
+- If `auto_select=true`, active issue changes and stream `state` snapshot updates.
+- If `auto_run.ok=true`, run status indicator transitions to running.
+
+### Contract Gates (Explicit Answers)
+1. **Exact paths/command signatures**: listed in `Endpoints` and `CLI Commands` tables.
+2. **Method/invocation pattern**: each endpoint row includes HTTP method; each command row includes exact command.
+3. **All input params**: fully enumerated in endpoint request types and validation table.
+4. **Success responses**: each endpoint defines `200` response shape.
+5. **All error responses**: each endpoint defines complete status/code mapping.
+6. **Exact event names**: `azure-devops-status`, `issue-ingest-status`.
+7. **Event triggers**: listed in `Events` table.
+8. **Event payload shapes**: `AzureDevopsStatusEvent`, `IssueIngestStatusEvent` types above.
+9. **Event consumers**: listed in `Events` table.
+10. **Per-input validation rules**: listed in `Validation Rules` table.
+11. **Validation failure behavior**: `400` envelope with `code` + `field_errors` for sync validation; mapped async codes otherwise.
+12. **Sync vs async validation**: explicitly split in `Validation failure behavior`.
+13. **Breaking change?** No required breaking change; changes are additive.
+14. **Migration path**: viewer migrates from `/api/github/issues/create` to `/api/issues/create`; legacy route remains as compatibility shim for one minor release window.
+15. **Versioning**: no URL version bump; keep v1 envelope and add new enum values/types in shared TS contracts.
+16. **User actions triggering UI interactions**: each action is explicit in `UI Interactions` table.
+17. **User feedback states**: loading/success/error are explicit for every UI action.
+18. **UI state changes**: explicit cache/selection/run state updates listed under UI section.
 
 ## 4. Data
 [To be completed in design_data phase]

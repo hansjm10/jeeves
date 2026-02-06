@@ -122,6 +122,43 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  transition: transform var(--duration-sidebar-hide) ease-out,
+              opacity var(--duration-sidebar-hide) ease-out,
+              visibility var(--duration-sidebar-hide) ease-out;
+  transform: translateX(0);
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Sidebar animating toward hidden (W1 in-flight) — slide hide */
+.sidebar.sidebar-hiding {
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Sidebar fully hidden (W2/W4 settled) */
+.sidebar.sidebar-hidden {
+  display: none;
+}
+
+/* Layout in-flight: keep 2-column grid while sidebar slides out,
+   with synchronized content expansion transition */
+.layout.layout-focusing {
+  grid-template-columns: 0fr 1fr;
+  transition: grid-template-columns var(--duration-sidebar-hide) ease-out;
+}
+
+/* Layout fully focused: single column, no reserved sidebar width */
+.layout.layout-focused {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1000px) {
+  .layout.layout-focusing,
+  .layout.layout-focused {
+    grid-template-columns: 1fr;
+  }
 }
 
 .card {

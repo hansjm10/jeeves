@@ -12,6 +12,12 @@
     gap: var(--space-4);
   }
 
+  /* Ensure stop button and outcome badge don't overlap context items */
+  .watch-stop-btn,
+  .watch-outcome-badge {
+    flex-shrink: 0;
+  }
+
   .watch-content {
     padding: var(--space-4);
     gap: var(--space-4);
@@ -41,6 +47,13 @@
   /* Context items: prevent shrinking */
   .watch-context-item {
     flex-shrink: 0;
+  }
+
+  /* Stop button and outcome badge: prevent shrinking in scrollable strip */
+  .watch-stop-btn,
+  .watch-outcome-badge {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   /* View toggle: full width, touch-friendly */

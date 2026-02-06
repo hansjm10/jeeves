@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import { useSearchParams } from 'react-router-dom';
 
 import type { SdkEvent, WorkerStatusInfo } from '../api/types.js';
+import { useViewerServerBaseUrl } from '../app/ViewerServerProvider.js';
+import { useStopRunMutation } from '../features/mutations.js';
 import { useViewerStream } from '../stream/ViewerStreamProvider.js';
 import { LogPanel } from '../ui/LogPanel.js';
+import { useToast } from '../ui/toast/ToastProvider.js';
 import { SdkPage } from './SdkPage.js';
 import './WatchPage.css';
 
@@ -203,6 +206,44 @@ const styles = {
     cursor: 'pointer',
     fontFamily: 'inherit',
   } satisfies CSSProperties,
+  stopBtn: {
+    padding: 'var(--space-2) var(--space-4)',
+    background: 'rgba(248, 81, 73, 0.15)',
+    border: '1px solid rgba(248, 81, 73, 0.4)',
+    borderRadius: 'var(--radius-md)',
+    color: 'var(--color-accent-red)',
+    fontSize: 'var(--font-size-ui-xs)',
+    fontFamily: 'inherit',
+    fontWeight: 600,
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  } satisfies CSSProperties,
+  stopBtnDisabled: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  } satisfies CSSProperties,
+  outcomeBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 'var(--space-2)',
+    padding: 'var(--space-2) var(--space-4)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--font-size-ui-xs)',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  } satisfies CSSProperties,
+  outcomeBadgeComplete: {
+    background: 'rgba(63, 185, 80, 0.15)',
+    border: '1px solid rgba(63, 185, 80, 0.4)',
+    color: 'var(--color-accent-green)',
+  } satisfies CSSProperties,
+  outcomeBadgeError: {
+    background: 'rgba(248, 81, 73, 0.15)',
+    border: '1px solid rgba(248, 81, 73, 0.4)',
+    color: 'var(--color-accent-red)',
+  } satisfies CSSProperties,
 };
 
 /**
@@ -305,6 +346,39 @@ export function formatTimestamp(isoTimestamp: string | null | undefined): string
   } catch {
     return '–';
   }
+}
+
+/**
+ * Determines the outcome badge label for a completed run.
+ * Returns null when the badge should be hidden (running or no completion_reason).
+ *
+ * Semantics (deterministic):
+ * - `"Error"` when `completion_reason === "error"` OR `last_error` is non-empty
+ * - `"Complete"` otherwise (when `completion_reason` is present)
+ * - `null` when running or no `completion_reason` (badge hidden)
+ */
+export function computeRunOutcome(input: {
+  running?: boolean | null;
+  completion_reason?: string | null;
+  last_error?: string | null;
+}): 'Complete' | 'Error' | null {
+  // Hidden while running
+  if (input.running) return null;
+  // Hidden when no completion_reason
+  if (!input.completion_reason) return null;
+  // Error when completion_reason is "error" or last_error exists
+  if (input.completion_reason === 'error' || (input.last_error != null && input.last_error !== '')) {
+    return 'Error';
+  }
+  return 'Complete';
+}
+
+/**
+ * Determines whether the Stop control should be visible.
+ * Visible only while `run.running === true`.
+ */
+export function isStopVisible(running: boolean | null | undefined): boolean {
+  return running === true;
 }
 
 /**
@@ -425,6 +499,9 @@ export function computeRunContextFields(input: RunContextInput): RunContextField
  */
 function RunContextStrip() {
   const stream = useViewerStream();
+  const baseUrl = useViewerServerBaseUrl();
+  const stopRun = useStopRunMutation(baseUrl);
+  const { pushToast } = useToast();
 
   const issueRef = stream.state?.issue_ref ?? null;
   // Derive workflow/phase from stream state for live updates
@@ -444,6 +521,14 @@ function RunContextStrip() {
   // Show iterations only when running
   const currentIteration = run?.current_iteration ?? 0;
   const maxIterations = run?.max_iterations ?? 0;
+
+  // Run controls
+  const showStop = isStopVisible(run?.running);
+  const outcome = computeRunOutcome({
+    running: run?.running,
+    completion_reason: run?.completion_reason,
+    last_error: run?.last_error,
+  });
 
   return (
     <div style={styles.contextStrip} className="watch-context-strip">
@@ -487,6 +572,25 @@ function RunContextStrip() {
           </span>
         </div>
       )}
+      {/* Stop control: shown only while running */}
+      {showStop && (
+        <button
+          type="button"
+          className="watch-stop-btn"
+          style={{
+            ...styles.stopBtn,
+            ...(stopRun.isPending ? styles.stopBtnDisabled : {}),
+          }}
+          disabled={stopRun.isPending}
+          onClick={() =>
+            void stopRun
+              .mutateAsync({ force: false })
+              .catch((e: unknown) => pushToast(e instanceof Error ? e.message : String(e)))
+          }
+        >
+          {stopRun.isPending ? 'Stopping…' : 'Stop'}
+        </button>
+      )}
       {/* Show timestamps when present */}
       {run?.started_at && (
         <div style={styles.contextItem} className="watch-context-item">
@@ -506,6 +610,18 @@ function RunContextStrip() {
           <span style={styles.contextLabel}>Completed</span>
           <span style={styles.contextValue}>{completionReason}</span>
         </div>
+      )}
+      {/* Outcome badge: shown only post-run when completion_reason is present */}
+      {outcome && (
+        <span
+          className="watch-outcome-badge"
+          style={{
+            ...styles.outcomeBadge,
+            ...(outcome === 'Error' ? styles.outcomeBadgeError : styles.outcomeBadgeComplete),
+          }}
+        >
+          {outcome === 'Error' ? '✗' : '✓'} {outcome}
+        </span>
       )}
       {/* Show last error when present (without breaking layout) */}
       {lastError && (

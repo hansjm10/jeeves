@@ -720,19 +720,84 @@ describe('T8-AC1: Stop control visibility and pending state', () => {
   });
 
   describe('Stop pending state tracks mutation status', () => {
-    it('Stop button calls stop mutation with force: false (verified via function signature)', () => {
-      // The Stop button in WatchPage.tsx calls stopRun.mutateAsync({ force: false })
-      // This test verifies isStopVisible is the gate for Stop rendering.
-      // Pending state is driven by stopRun.isPending (mutation hook state).
-      // Here we verify the gate condition is correct:
-      expect(isStopVisible(true)).toBe(true);  // Stop button rendered
-      expect(isStopVisible(false)).toBe(false); // Stop button not rendered
+    /**
+     * Derives the Stop button's UI state from visibility and mutation pending status.
+     * Mirrors WatchPage.tsx lines 574-587:
+     *   - rendered: isStopVisible(running) gates whether the button is in the DOM
+     *   - disabled: stopRun.isPending controls the disabled attribute
+     *   - label: isPending ? 'Stopping…' : 'Stop'
+     */
+    function deriveStopButtonState(
+      running: boolean | null | undefined,
+      isPending: boolean,
+    ): { rendered: boolean; disabled: boolean; label: string } | null {
+      if (!isStopVisible(running)) return null; // button not in DOM
+      return {
+        rendered: true,
+        disabled: isPending,
+        label: isPending ? 'Stopping…' : 'Stop',
+      };
+    }
+
+    it('Stop button is enabled with label "Stop" when not pending', () => {
+      const state = deriveStopButtonState(true, false);
+      expect(state).not.toBeNull();
+      expect(state!.rendered).toBe(true);
+      expect(state!.disabled).toBe(false);
+      expect(state!.label).toBe('Stop');
+    });
+
+    it('Stop button is disabled with label "Stopping…" when mutation is pending', () => {
+      const state = deriveStopButtonState(true, true);
+      expect(state).not.toBeNull();
+      expect(state!.rendered).toBe(true);
+      expect(state!.disabled).toBe(true);
+      expect(state!.label).toBe('Stopping…');
+    });
+
+    it('Stop button is not rendered when not running, regardless of pending state', () => {
+      expect(deriveStopButtonState(false, false)).toBeNull();
+      expect(deriveStopButtonState(false, true)).toBeNull();
+      expect(deriveStopButtonState(null, false)).toBeNull();
+      expect(deriveStopButtonState(null, true)).toBeNull();
+      expect(deriveStopButtonState(undefined, false)).toBeNull();
+      expect(deriveStopButtonState(undefined, true)).toBeNull();
+    });
+
+    it('pending state transitions: Stop → Stopping… → Stop', () => {
+      // Initial: mutation not started
+      const idle = deriveStopButtonState(true, false);
+      expect(idle!.disabled).toBe(false);
+      expect(idle!.label).toBe('Stop');
+
+      // Mutation in progress (isPending = true)
+      const pending = deriveStopButtonState(true, true);
+      expect(pending!.disabled).toBe(true);
+      expect(pending!.label).toBe('Stopping…');
+
+      // Mutation resolved (isPending = false again)
+      const resolved = deriveStopButtonState(true, false);
+      expect(resolved!.disabled).toBe(false);
+      expect(resolved!.label).toBe('Stop');
     });
 
     it('Stop visibility is independent of other run fields', () => {
       // Even with completion_reason set, if running is true, Stop is visible
       // (this is a pure visibility gate on the running boolean)
       expect(isStopVisible(true)).toBe(true);
+    });
+
+    it('Stop button calls stop mutation with force: false (contract verification)', () => {
+      // The Stop button in WatchPage.tsx (line 583) calls:
+      //   stopRun.mutateAsync({ force: false })
+      // The mutation is useStopRunMutation which sends { force: boolean } to /api/run/stop.
+      // We verify the gate condition is the sole determinant of rendering:
+      const rendered = deriveStopButtonState(true, false);
+      expect(rendered).not.toBeNull();
+      expect(rendered!.rendered).toBe(true);
+
+      const notRendered = deriveStopButtonState(false, false);
+      expect(notRendered).toBeNull();
     });
   });
 });

@@ -30,6 +30,12 @@ export type AzureDevopsSyncStatus =
  */
 export type IssueProvider = 'github' | 'azure_devops';
 
+/** Valid issue providers. */
+export const VALID_ISSUE_PROVIDERS: readonly IssueProvider[] = [
+  'github',
+  'azure_devops',
+];
+
 /**
  * Ingest operation mode.
  */
@@ -515,6 +521,9 @@ function branchHasInvalidChars(value: string): boolean {
 /** Maximum workflow/phase ID length after trim. */
 export const WORKFLOW_MAX_LENGTH = 64;
 
+/** Pattern for valid workflow names: starts with alphanumeric, then alphanumeric/underscore/hyphen. */
+export const WORKFLOW_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
 /** Valid init phases. */
 export const VALID_INIT_PHASES: readonly InitPhase[] = [
   'design',
@@ -604,6 +613,35 @@ export type ValidatedPatchAzureDevops = Readonly<{
 
 export type ValidatedReconcileAzureDevops = Readonly<{
   force: boolean;
+}>;
+
+export type ValidatedExistingItemRef = Readonly<{
+  id?: number | string;
+  url?: string;
+}>;
+
+export type ValidatedCreateProviderIssueRequest = Readonly<{
+  provider: IssueProvider;
+  repo: string;
+  title: string;
+  body: string;
+  labels?: string[];
+  assignees?: string[];
+  milestone?: string;
+  azure?: AzureCreateOptions;
+  init?: IngestInitParams;
+  auto_select?: boolean;
+  auto_run?: IngestAutoRunParams;
+}>;
+
+export type ValidatedInitFromExistingRequest = Readonly<{
+  provider: IssueProvider;
+  repo: string;
+  existing: ValidatedExistingItemRef;
+  azure?: AzureInitFromExistingOptions;
+  init?: IngestInitParams;
+  auto_select?: boolean;
+  auto_run?: IngestAutoRunParams;
 }>;
 
 // ============================================================================
@@ -1124,6 +1162,14 @@ export function validateWorkflow(value: unknown): ValidationResult<string> {
     };
   }
 
+  if (!WORKFLOW_NAME_PATTERN.test(trimmed)) {
+    return {
+      valid: false,
+      error:
+        'Workflow must start with an alphanumeric character and contain only letters, digits, hyphens, or underscores.',
+    };
+  }
+
   return { valid: true, value: trimmed };
 }
 
@@ -1202,6 +1248,147 @@ export function validateIntegerRange(
   }
 
   return { valid: true, value };
+}
+
+/**
+ * Validate a provider value.
+ *
+ * Rules:
+ * - Must be a string
+ * - Must be one of the valid issue providers
+ */
+export function validateProvider(
+  value: unknown,
+): ValidationResult<IssueProvider> {
+  if (typeof value !== 'string') {
+    return { valid: false, error: 'Provider must be a string.' };
+  }
+
+  if (!(VALID_ISSUE_PROVIDERS as readonly string[]).includes(value)) {
+    return {
+      valid: false,
+      error: `Provider must be one of: ${VALID_ISSUE_PROVIDERS.join(', ')}.`,
+    };
+  }
+
+  return { valid: true, value: value as IssueProvider };
+}
+
+/**
+ * Validate an existing item reference (for init-from-existing).
+ *
+ * Rules:
+ * - Must be an object
+ * - Exactly one of id or url must be present
+ * - id must be a positive integer or non-empty string
+ * - url must be a non-empty trimmed string
+ */
+export function validateExistingItemRef(
+  value: unknown,
+  fieldErrors: Record<string, string>,
+): ValidatedExistingItemRef | null {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    fieldErrors['existing'] = 'Existing must be an object.';
+    return null;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const hasId = 'id' in obj && obj.id !== undefined;
+  const hasUrl = 'url' in obj && obj.url !== undefined;
+
+  if (hasId && hasUrl) {
+    fieldErrors['existing'] =
+      'Exactly one of existing.id or existing.url must be provided, not both.';
+    return null;
+  }
+
+  if (!hasId && !hasUrl) {
+    fieldErrors['existing'] =
+      'Exactly one of existing.id or existing.url must be provided.';
+    return null;
+  }
+
+  if (hasId) {
+    const id = obj.id;
+    if (typeof id === 'number') {
+      if (!Number.isInteger(id) || id <= 0) {
+        fieldErrors['existing'] =
+          'existing.id must be a positive integer when numeric.';
+        return null;
+      }
+      return { id };
+    }
+    if (typeof id === 'string') {
+      const trimmed = id.trim();
+      if (trimmed.length === 0) {
+        fieldErrors['existing'] =
+          'existing.id must not be empty after trimming.';
+        return null;
+      }
+      return { id: trimmed };
+    }
+    fieldErrors['existing'] = 'existing.id must be a number or string.';
+    return null;
+  }
+
+  // hasUrl
+  const url = obj.url;
+  if (typeof url !== 'string') {
+    fieldErrors['existing'] = 'existing.url must be a string.';
+    return null;
+  }
+  const trimmedUrl = url.trim();
+  if (trimmedUrl.length === 0) {
+    fieldErrors['existing'] =
+      'existing.url must not be empty after trimming.';
+    return null;
+  }
+  return { url: trimmedUrl };
+}
+
+/**
+ * Validate Azure init-from-existing options sub-object.
+ */
+export function validateAzureInitFromExistingOptions(
+  azure: unknown,
+  fieldErrors: Record<string, string>,
+): AzureInitFromExistingOptions | null {
+  if (azure === null || typeof azure !== 'object') {
+    fieldErrors['azure'] = 'Azure options must be an object.';
+    return null;
+  }
+
+  const obj = azure as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+
+  if ('organization' in obj && obj.organization !== undefined) {
+    const r = validateOrganization(obj.organization);
+    if (!r.valid) {
+      fieldErrors['azure.organization'] = r.error;
+    } else {
+      result.organization = r.value;
+    }
+  }
+
+  if ('project' in obj && obj.project !== undefined) {
+    const r = validateProject(obj.project);
+    if (!r.valid) {
+      fieldErrors['azure.project'] = r.error;
+    } else {
+      result.project = r.value;
+    }
+  }
+
+  if ('fetch_hierarchy' in obj && obj.fetch_hierarchy !== undefined) {
+    const r = validateBoolean(obj.fetch_hierarchy, 'azure.fetch_hierarchy');
+    if (!r.valid) {
+      fieldErrors['azure.fetch_hierarchy'] = r.error;
+    } else {
+      result.fetch_hierarchy = r.value;
+    }
+  }
+
+  return result as unknown as AzureInitFromExistingOptions;
 }
 
 // ============================================================================
@@ -1703,6 +1890,364 @@ export function validateAzureCreateOptions(
   }
 
   return result as unknown as AzureCreateOptions;
+}
+
+/**
+ * Validate a POST /api/issues/create request body.
+ *
+ * Provider validation failure returns code 'unsupported_provider' immediately.
+ * All other validation failures return code 'validation_failed' with field_errors.
+ */
+export function validateCreateProviderIssueRequest(
+  body: unknown,
+): CompoundValidationResult<ValidatedCreateProviderIssueRequest> {
+  if (body === null || typeof body !== 'object') {
+    return {
+      valid: false,
+      error: 'Request body must be an object.',
+      code: 'validation_failed',
+      field_errors: {},
+    };
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  // Validate provider first — unsupported_provider is a separate error code
+  if (!('provider' in obj) || obj.provider === undefined) {
+    return {
+      valid: false,
+      error: 'Provider is required.',
+      code: 'unsupported_provider',
+      field_errors: { provider: 'Provider is required.' },
+    };
+  }
+
+  const providerResult = validateProvider(obj.provider);
+  if (!providerResult.valid) {
+    return {
+      valid: false,
+      error: providerResult.error,
+      code: 'unsupported_provider',
+      field_errors: { provider: providerResult.error },
+    };
+  }
+
+  const validatedProvider = providerResult.value;
+  const fieldErrors: Record<string, string> = {};
+
+  // Validate repo (required)
+  let validatedRepo: string | undefined;
+  if (!('repo' in obj) || obj.repo === undefined) {
+    fieldErrors.repo = 'Repo is required.';
+  } else {
+    const r = validateRepo(obj.repo);
+    if (!r.valid) {
+      fieldErrors.repo = r.error;
+    } else {
+      validatedRepo = r.value;
+    }
+  }
+
+  // Validate title (required)
+  let validatedTitle: string | undefined;
+  if (!('title' in obj) || obj.title === undefined) {
+    fieldErrors.title = 'Title is required.';
+  } else {
+    const r = validateTitle(obj.title);
+    if (!r.valid) {
+      fieldErrors.title = r.error;
+    } else {
+      validatedTitle = r.value;
+    }
+  }
+
+  // Validate body (required)
+  let validatedBody: string | undefined;
+  if (!('body' in obj) || obj.body === undefined) {
+    fieldErrors.body = 'Body is required.';
+  } else {
+    const r = validateBody(obj.body);
+    if (!r.valid) {
+      fieldErrors.body = r.error;
+    } else {
+      validatedBody = r.value;
+    }
+  }
+
+  // Validate labels (optional)
+  let validatedLabels: string[] | undefined;
+  if ('labels' in obj && obj.labels !== undefined) {
+    const r = validateStringArray(
+      obj.labels,
+      'labels',
+      LABELS_MAX_ITEMS,
+      LABEL_ASSIGNEE_MAX_LENGTH,
+    );
+    if (!r.valid) {
+      fieldErrors.labels = r.error;
+    } else {
+      validatedLabels = r.value;
+    }
+  }
+
+  // Validate assignees (optional)
+  let validatedAssignees: string[] | undefined;
+  if ('assignees' in obj && obj.assignees !== undefined) {
+    const r = validateStringArray(
+      obj.assignees,
+      'assignees',
+      ASSIGNEES_MAX_ITEMS,
+      LABEL_ASSIGNEE_MAX_LENGTH,
+    );
+    if (!r.valid) {
+      fieldErrors.assignees = r.error;
+    } else {
+      validatedAssignees = r.value;
+    }
+  }
+
+  // Validate milestone (optional)
+  let validatedMilestone: string | undefined;
+  if ('milestone' in obj && obj.milestone !== undefined) {
+    const r = validateMilestone(obj.milestone);
+    if (!r.valid) {
+      fieldErrors.milestone = r.error;
+    } else {
+      validatedMilestone = r.value;
+    }
+  }
+
+  // Validate azure sub-object (optional)
+  let validatedAzure: AzureCreateOptions | undefined;
+  if ('azure' in obj && obj.azure !== undefined) {
+    const isCreate = true;
+    const result = validateAzureCreateOptions(obj.azure, isCreate, fieldErrors);
+    if (result !== null) {
+      validatedAzure = result;
+    }
+  }
+
+  // Validate init sub-object (optional)
+  let validatedInit: IngestInitParams | undefined;
+  const hasInit = 'init' in obj && obj.init !== undefined;
+  if (hasInit) {
+    const result = validateInitParams(obj.init, fieldErrors);
+    if (result !== null) {
+      validatedInit = result;
+    }
+  }
+
+  // Validate auto_select dependency
+  let validatedAutoSelect: boolean | undefined;
+  if ('auto_select' in obj && obj.auto_select !== undefined) {
+    if (!hasInit) {
+      fieldErrors.auto_select =
+        'auto_select requires init to be present.';
+    } else {
+      const r = validateBoolean(obj.auto_select, 'auto_select');
+      if (!r.valid) {
+        fieldErrors.auto_select = r.error;
+      } else {
+        validatedAutoSelect = r.value;
+      }
+    }
+  } else if (hasInit) {
+    // Default auto_select to true when init is present
+    validatedAutoSelect = true;
+  }
+
+  // Validate auto_run dependency and sub-object
+  let validatedAutoRun: IngestAutoRunParams | undefined;
+  if ('auto_run' in obj && obj.auto_run !== undefined) {
+    if (!hasInit) {
+      fieldErrors.auto_run =
+        'auto_run requires init to be present.';
+    } else if (validatedAutoSelect === false) {
+      fieldErrors.auto_run =
+        'auto_run requires auto_select to not be false.';
+    } else {
+      const result = validateAutoRunParams(obj.auto_run, fieldErrors);
+      if (result !== null) {
+        validatedAutoRun = result;
+      }
+    }
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return {
+      valid: false,
+      error: 'Validation failed.',
+      code: 'validation_failed',
+      field_errors: fieldErrors,
+    };
+  }
+
+  const value: ValidatedCreateProviderIssueRequest = {
+    provider: validatedProvider,
+    repo: validatedRepo!,
+    title: validatedTitle!,
+    body: validatedBody!,
+    ...(validatedLabels !== undefined && { labels: validatedLabels }),
+    ...(validatedMilestone !== undefined && { milestone: validatedMilestone }),
+    ...(validatedAssignees !== undefined && { assignees: validatedAssignees }),
+    ...(validatedAzure !== undefined && { azure: validatedAzure }),
+    ...(validatedInit !== undefined && { init: validatedInit }),
+    ...(validatedAutoSelect !== undefined && {
+      auto_select: validatedAutoSelect,
+    }),
+    ...(validatedAutoRun !== undefined && { auto_run: validatedAutoRun }),
+  };
+
+  return { valid: true, value };
+}
+
+/**
+ * Validate a POST /api/issues/init-from-existing request body.
+ *
+ * Provider validation failure returns code 'unsupported_provider' immediately.
+ * All other validation failures return code 'validation_failed' with field_errors.
+ */
+export function validateInitFromExistingRequest(
+  body: unknown,
+): CompoundValidationResult<ValidatedInitFromExistingRequest> {
+  if (body === null || typeof body !== 'object') {
+    return {
+      valid: false,
+      error: 'Request body must be an object.',
+      code: 'validation_failed',
+      field_errors: {},
+    };
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  // Validate provider first — unsupported_provider is a separate error code
+  if (!('provider' in obj) || obj.provider === undefined) {
+    return {
+      valid: false,
+      error: 'Provider is required.',
+      code: 'unsupported_provider',
+      field_errors: { provider: 'Provider is required.' },
+    };
+  }
+
+  const providerResult = validateProvider(obj.provider);
+  if (!providerResult.valid) {
+    return {
+      valid: false,
+      error: providerResult.error,
+      code: 'unsupported_provider',
+      field_errors: { provider: providerResult.error },
+    };
+  }
+
+  const validatedProvider = providerResult.value;
+  const fieldErrors: Record<string, string> = {};
+
+  // Validate repo (required)
+  let validatedRepo: string | undefined;
+  if (!('repo' in obj) || obj.repo === undefined) {
+    fieldErrors.repo = 'Repo is required.';
+  } else {
+    const r = validateRepo(obj.repo);
+    if (!r.valid) {
+      fieldErrors.repo = r.error;
+    } else {
+      validatedRepo = r.value;
+    }
+  }
+
+  // Validate existing (required)
+  let validatedExisting: ValidatedExistingItemRef | undefined;
+  if (!('existing' in obj) || obj.existing === undefined) {
+    fieldErrors.existing = 'Existing item reference is required.';
+  } else {
+    const result = validateExistingItemRef(obj.existing, fieldErrors);
+    if (result !== null) {
+      validatedExisting = result;
+    }
+  }
+
+  // Validate azure sub-object (optional, init-from-existing variant)
+  let validatedAzure: AzureInitFromExistingOptions | undefined;
+  if ('azure' in obj && obj.azure !== undefined) {
+    const result = validateAzureInitFromExistingOptions(
+      obj.azure,
+      fieldErrors,
+    );
+    if (result !== null) {
+      validatedAzure = result;
+    }
+  }
+
+  // Validate init sub-object (optional)
+  let validatedInit: IngestInitParams | undefined;
+  const hasInit = 'init' in obj && obj.init !== undefined;
+  if (hasInit) {
+    const result = validateInitParams(obj.init, fieldErrors);
+    if (result !== null) {
+      validatedInit = result;
+    }
+  }
+
+  // Validate auto_select dependency
+  let validatedAutoSelect: boolean | undefined;
+  if ('auto_select' in obj && obj.auto_select !== undefined) {
+    if (!hasInit) {
+      fieldErrors.auto_select =
+        'auto_select requires init to be present.';
+    } else {
+      const r = validateBoolean(obj.auto_select, 'auto_select');
+      if (!r.valid) {
+        fieldErrors.auto_select = r.error;
+      } else {
+        validatedAutoSelect = r.value;
+      }
+    }
+  } else if (hasInit) {
+    // Default auto_select to true when init is present
+    validatedAutoSelect = true;
+  }
+
+  // Validate auto_run dependency and sub-object
+  let validatedAutoRun: IngestAutoRunParams | undefined;
+  if ('auto_run' in obj && obj.auto_run !== undefined) {
+    if (!hasInit) {
+      fieldErrors.auto_run =
+        'auto_run requires init to be present.';
+    } else if (validatedAutoSelect === false) {
+      fieldErrors.auto_run =
+        'auto_run requires auto_select to not be false.';
+    } else {
+      const result = validateAutoRunParams(obj.auto_run, fieldErrors);
+      if (result !== null) {
+        validatedAutoRun = result;
+      }
+    }
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return {
+      valid: false,
+      error: 'Validation failed.',
+      code: 'validation_failed',
+      field_errors: fieldErrors,
+    };
+  }
+
+  const value: ValidatedInitFromExistingRequest = {
+    provider: validatedProvider,
+    repo: validatedRepo!,
+    existing: validatedExisting!,
+    ...(validatedAzure !== undefined && { azure: validatedAzure }),
+    ...(validatedInit !== undefined && { init: validatedInit }),
+    ...(validatedAutoSelect !== undefined && {
+      auto_select: validatedAutoSelect,
+    }),
+    ...(validatedAutoRun !== undefined && { auto_run: validatedAutoRun }),
+  };
+
+  return { valid: true, value };
 }
 
 // ============================================================================

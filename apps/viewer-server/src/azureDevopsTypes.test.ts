@@ -22,6 +22,11 @@ import {
   validateInitParams,
   validateAutoRunParams,
   validateAzureCreateOptions,
+  validateProvider,
+  validateExistingItemRef,
+  validateAzureInitFromExistingOptions,
+  validateCreateProviderIssueRequest,
+  validateInitFromExistingRequest,
   sanitizeErrorForUi,
   sanitizePatFromMessage,
   ORG_MIN_LENGTH,
@@ -37,6 +42,7 @@ import {
   AZURE_PATH_MAX_LENGTH,
   BRANCH_MAX_LENGTH,
   WORKFLOW_MAX_LENGTH,
+  WORKFLOW_NAME_PATTERN,
   DESIGN_DOC_MAX_LENGTH,
   MAX_ITERATIONS_MIN,
   MAX_ITERATIONS_MAX,
@@ -48,6 +54,7 @@ import {
   VALID_WORK_ITEM_TYPES,
   VALID_INIT_PHASES,
   VALID_AUTO_RUN_PROVIDERS,
+  VALID_ISSUE_PROVIDERS,
 } from './azureDevopsTypes.js';
 
 // ============================================================================
@@ -1181,6 +1188,864 @@ describe('Type safety - PAT never in status types', () => {
 });
 
 // ============================================================================
+// validateProvider
+// ============================================================================
+
+describe('validateProvider', () => {
+  it('accepts github', () => {
+    const result = validateProvider('github');
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value).toBe('github');
+    }
+  });
+
+  it('accepts azure_devops', () => {
+    const result = validateProvider('azure_devops');
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value).toBe('azure_devops');
+    }
+  });
+
+  it('rejects non-string', () => {
+    const result = validateProvider(123);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toContain('must be a string');
+    }
+  });
+
+  it('rejects null', () => {
+    expect(validateProvider(null).valid).toBe(false);
+  });
+
+  it('rejects undefined', () => {
+    expect(validateProvider(undefined).valid).toBe(false);
+  });
+
+  it('rejects empty string', () => {
+    const result = validateProvider('');
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toContain('must be one of');
+    }
+  });
+
+  it('rejects unknown provider string', () => {
+    const result = validateProvider('bitbucket');
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toContain('must be one of');
+    }
+  });
+
+  it('rejects case-variant of valid provider', () => {
+    expect(validateProvider('GitHub').valid).toBe(false);
+    expect(validateProvider('AZURE_DEVOPS').valid).toBe(false);
+  });
+});
+
+// ============================================================================
+// validateWorkflow – name pattern
+// ============================================================================
+
+describe('validateWorkflow - name pattern', () => {
+  it('accepts simple name', () => {
+    const result = validateWorkflow('default');
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value).toBe('default');
+    }
+  });
+
+  it('accepts name with hyphens', () => {
+    const result = validateWorkflow('quick-fix');
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts name with underscores', () => {
+    const result = validateWorkflow('my_workflow');
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts alphanumeric name starting with digit', () => {
+    const result = validateWorkflow('2fast');
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects name with spaces', () => {
+    const result = validateWorkflow('has space');
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toContain('alphanumeric');
+    }
+  });
+
+  it('rejects name starting with hyphen', () => {
+    const result = validateWorkflow('-starts-with-dash');
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects name starting with underscore', () => {
+    const result = validateWorkflow('_starts_underscore');
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects name with special characters', () => {
+    const result = validateWorkflow('has@special');
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects name with dots', () => {
+    const result = validateWorkflow('has.dot');
+    expect(result.valid).toBe(false);
+  });
+
+  it('WORKFLOW_NAME_PATTERN matches expected values', () => {
+    expect(WORKFLOW_NAME_PATTERN.test('default')).toBe(true);
+    expect(WORKFLOW_NAME_PATTERN.test('quick-fix')).toBe(true);
+    expect(WORKFLOW_NAME_PATTERN.test('a1_b-c')).toBe(true);
+    expect(WORKFLOW_NAME_PATTERN.test('-nope')).toBe(false);
+    expect(WORKFLOW_NAME_PATTERN.test('_nope')).toBe(false);
+    expect(WORKFLOW_NAME_PATTERN.test('no spaces')).toBe(false);
+  });
+});
+
+// ============================================================================
+// validateExistingItemRef
+// ============================================================================
+
+describe('validateExistingItemRef', () => {
+  it('accepts existing.id as a positive integer', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: 123 }, fieldErrors);
+    expect(result).toEqual({ id: 123 });
+    expect(Object.keys(fieldErrors)).toHaveLength(0);
+  });
+
+  it('accepts existing.id as a non-empty string', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: 'ABC-123' }, fieldErrors);
+    expect(result).toEqual({ id: 'ABC-123' });
+    expect(Object.keys(fieldErrors)).toHaveLength(0);
+  });
+
+  it('accepts existing.url as a non-empty string', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef(
+      { url: 'https://github.com/owner/repo/issues/1' },
+      fieldErrors,
+    );
+    expect(result).toEqual({
+      url: 'https://github.com/owner/repo/issues/1',
+    });
+    expect(Object.keys(fieldErrors)).toHaveLength(0);
+  });
+
+  it('trims url', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef(
+      { url: '  https://example.com  ' },
+      fieldErrors,
+    );
+    expect(result).toEqual({ url: 'https://example.com' });
+  });
+
+  it('trims string id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: '  456  ' }, fieldErrors);
+    expect(result).toEqual({ id: '456' });
+  });
+
+  it('rejects when both id and url provided', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef(
+      { id: 1, url: 'https://example.com' },
+      fieldErrors,
+    );
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('not both');
+  });
+
+  it('rejects when neither id nor url provided', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({}, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain(
+      'Exactly one of existing.id or existing.url must be provided',
+    );
+  });
+
+  it('rejects null', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef(null, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must be an object');
+  });
+
+  it('rejects non-object', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef('invalid', fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must be an object');
+  });
+
+  it('rejects negative id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: -1 }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('positive integer');
+  });
+
+  it('rejects zero id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: 0 }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('positive integer');
+  });
+
+  it('rejects non-integer numeric id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: 1.5 }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('positive integer');
+  });
+
+  it('rejects empty string id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: '' }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must not be empty');
+  });
+
+  it('rejects whitespace-only string id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: '   ' }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must not be empty');
+  });
+
+  it('rejects empty string url', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ url: '' }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must not be empty');
+  });
+
+  it('rejects non-string url', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ url: 123 }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must be a string');
+  });
+
+  it('rejects boolean id', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateExistingItemRef({ id: true }, fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.existing).toContain('must be a number or string');
+  });
+});
+
+// ============================================================================
+// validateAzureInitFromExistingOptions
+// ============================================================================
+
+describe('validateAzureInitFromExistingOptions', () => {
+  it('accepts valid options', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateAzureInitFromExistingOptions(
+      { organization: 'my-org', project: 'my-project', fetch_hierarchy: true },
+      fieldErrors,
+    );
+    expect(result).not.toBeNull();
+    expect(Object.keys(fieldErrors)).toHaveLength(0);
+  });
+
+  it('accepts empty object', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateAzureInitFromExistingOptions({}, fieldErrors);
+    expect(result).not.toBeNull();
+    expect(Object.keys(fieldErrors)).toHaveLength(0);
+  });
+
+  it('rejects non-object', () => {
+    const fieldErrors: Record<string, string> = {};
+    const result = validateAzureInitFromExistingOptions('bad', fieldErrors);
+    expect(result).toBeNull();
+    expect(fieldErrors.azure).toBeDefined();
+  });
+
+  it('validates organization format', () => {
+    const fieldErrors: Record<string, string> = {};
+    validateAzureInitFromExistingOptions(
+      { organization: 'a' },
+      fieldErrors,
+    );
+    expect(fieldErrors['azure.organization']).toBeDefined();
+  });
+
+  it('validates fetch_hierarchy must be boolean', () => {
+    const fieldErrors: Record<string, string> = {};
+    validateAzureInitFromExistingOptions(
+      { fetch_hierarchy: 'yes' },
+      fieldErrors,
+    );
+    expect(fieldErrors['azure.fetch_hierarchy']).toBeDefined();
+  });
+});
+
+// ============================================================================
+// validateCreateProviderIssueRequest
+// ============================================================================
+
+describe('validateCreateProviderIssueRequest', () => {
+  const validGitHub = {
+    provider: 'github',
+    repo: 'owner/repo',
+    title: 'My Issue',
+    body: 'Issue body text',
+  };
+
+  const validAzure = {
+    provider: 'azure_devops',
+    repo: 'owner/repo',
+    title: 'My Work Item',
+    body: 'Work item description',
+    azure: {
+      organization: 'my-org',
+      project: 'my-project',
+      work_item_type: 'Bug',
+    },
+  };
+
+  it('accepts a valid minimal GitHub create request', () => {
+    const result = validateCreateProviderIssueRequest(validGitHub);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.provider).toBe('github');
+      expect(result.value.repo).toBe('owner/repo');
+      expect(result.value.title).toBe('My Issue');
+      expect(result.value.body).toBe('Issue body text');
+    }
+  });
+
+  it('accepts a valid Azure create request with all azure fields', () => {
+    const result = validateCreateProviderIssueRequest(validAzure);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.provider).toBe('azure_devops');
+      expect(result.value.azure).toBeDefined();
+    }
+  });
+
+  it('accepts request with labels, assignees, milestone', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      labels: ['bug', 'priority'],
+      assignees: ['alice'],
+      milestone: 'v1.0',
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.labels).toEqual(['bug', 'priority']);
+      expect(result.value.assignees).toEqual(['alice']);
+      expect(result.value.milestone).toBe('v1.0');
+    }
+  });
+
+  it('accepts request with init and default auto_select', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/test' },
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.init).toBeDefined();
+      expect(result.value.auto_select).toBe(true); // default
+    }
+  });
+
+  it('accepts request with init, auto_select, and auto_run', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/test' },
+      auto_select: true,
+      auto_run: { provider: 'claude', max_iterations: 5 },
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.auto_run).toBeDefined();
+    }
+  });
+
+  it('rejects null body', () => {
+    const result = validateCreateProviderIssueRequest(null);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('validation_failed');
+    }
+  });
+
+  it('rejects non-object body', () => {
+    const result = validateCreateProviderIssueRequest('string');
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects missing provider with unsupported_provider code', () => {
+    const result = validateCreateProviderIssueRequest({
+      repo: 'owner/repo',
+      title: 'title',
+      body: 'body',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('unsupported_provider');
+      expect(result.field_errors.provider).toBeDefined();
+    }
+  });
+
+  it('rejects unknown provider with unsupported_provider code', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'bitbucket',
+      repo: 'owner/repo',
+      title: 'title',
+      body: 'body',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('unsupported_provider');
+      expect(result.field_errors.provider).toContain('must be one of');
+    }
+  });
+
+  it('rejects missing repo', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'github',
+      title: 'title',
+      body: 'body',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('validation_failed');
+      expect(result.field_errors.repo).toBeDefined();
+    }
+  });
+
+  it('rejects missing title', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'github',
+      repo: 'owner/repo',
+      body: 'body',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.title).toBeDefined();
+    }
+  });
+
+  it('rejects missing body', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'github',
+      repo: 'owner/repo',
+      title: 'title',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.body).toBeDefined();
+    }
+  });
+
+  it('collects multiple field errors', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'github',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.repo).toBeDefined();
+      expect(result.field_errors.title).toBeDefined();
+      expect(result.field_errors.body).toBeDefined();
+    }
+  });
+
+  it('rejects invalid labels array', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      labels: 'not-an-array',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.labels).toBeDefined();
+    }
+  });
+
+  it('rejects invalid assignees array', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      assignees: [123],
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.assignees).toBeDefined();
+    }
+  });
+
+  it('rejects invalid milestone', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      milestone: '',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.milestone).toBeDefined();
+    }
+  });
+
+  it('rejects invalid azure sub-object', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      azure: 'not-an-object',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.azure).toBeDefined();
+    }
+  });
+
+  it('rejects invalid init sub-object', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: 'not-an-object',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.init).toBeDefined();
+    }
+  });
+
+  it('rejects auto_select without init', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      auto_select: true,
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_select).toContain('requires init');
+    }
+  });
+
+  it('rejects auto_run without init', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_run).toContain('requires init');
+    }
+  });
+
+  it('rejects auto_run when auto_select is false', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/x' },
+      auto_select: false,
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_run).toContain('auto_select');
+    }
+  });
+
+  it('accepts auto_run with init and explicit auto_select true', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/x' },
+      auto_select: true,
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts auto_run with init and default auto_select (not specified)', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/x' },
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('validates init.workflow name pattern', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { workflow: '-invalid' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors['init.workflow']).toBeDefined();
+    }
+  });
+
+  it('validates auto_run.workflow name pattern', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/x' },
+      auto_run: { workflow: 'has spaces' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors['auto_run.workflow']).toBeDefined();
+    }
+  });
+
+  it('rejects non-boolean auto_select', () => {
+    const result = validateCreateProviderIssueRequest({
+      ...validGitHub,
+      init: { branch: 'feature/x' },
+      auto_select: 'yes',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_select).toContain('boolean');
+    }
+  });
+
+  it('validates azure.work_item_type required for create', () => {
+    const result = validateCreateProviderIssueRequest({
+      provider: 'azure_devops',
+      repo: 'owner/repo',
+      title: 'title',
+      body: 'body',
+      azure: { organization: 'my-org', project: 'my-project' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors['azure.work_item_type']).toBeDefined();
+    }
+  });
+});
+
+// ============================================================================
+// validateInitFromExistingRequest
+// ============================================================================
+
+describe('validateInitFromExistingRequest', () => {
+  const validWithId = {
+    provider: 'github',
+    repo: 'owner/repo',
+    existing: { id: 42 },
+  };
+
+  const validWithUrl = {
+    provider: 'azure_devops',
+    repo: 'owner/repo',
+    existing: { url: 'https://dev.azure.com/org/proj/_workitems/edit/42' },
+  };
+
+  it('accepts valid request with existing.id', () => {
+    const result = validateInitFromExistingRequest(validWithId);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.provider).toBe('github');
+      expect(result.value.existing).toEqual({ id: 42 });
+    }
+  });
+
+  it('accepts valid request with existing.url', () => {
+    const result = validateInitFromExistingRequest(validWithUrl);
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.provider).toBe('azure_devops');
+      expect(result.value.existing.url).toBeDefined();
+    }
+  });
+
+  it('accepts request with azure init-from-existing options', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithUrl,
+      azure: {
+        organization: 'my-org',
+        project: 'my-project',
+        fetch_hierarchy: true,
+      },
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.azure).toBeDefined();
+    }
+  });
+
+  it('accepts request with init and default auto_select', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      init: { branch: 'feature/test' },
+    });
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.auto_select).toBe(true);
+    }
+  });
+
+  it('rejects null body', () => {
+    const result = validateInitFromExistingRequest(null);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('validation_failed');
+    }
+  });
+
+  it('rejects missing provider with unsupported_provider code', () => {
+    const result = validateInitFromExistingRequest({
+      repo: 'owner/repo',
+      existing: { id: 1 },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('unsupported_provider');
+      expect(result.field_errors.provider).toBeDefined();
+    }
+  });
+
+  it('rejects unknown provider with unsupported_provider code', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'gitlab',
+      repo: 'owner/repo',
+      existing: { id: 1 },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.code).toBe('unsupported_provider');
+    }
+  });
+
+  it('rejects missing repo', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'github',
+      existing: { id: 1 },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.repo).toBeDefined();
+    }
+  });
+
+  it('rejects missing existing', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'github',
+      repo: 'owner/repo',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.existing).toBeDefined();
+    }
+  });
+
+  it('rejects existing with both id and url', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'github',
+      repo: 'owner/repo',
+      existing: { id: 1, url: 'https://example.com' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.existing).toContain('not both');
+    }
+  });
+
+  it('rejects existing with neither id nor url', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'github',
+      repo: 'owner/repo',
+      existing: {},
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.existing).toBeDefined();
+    }
+  });
+
+  it('rejects auto_select without init', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      auto_select: true,
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_select).toContain('requires init');
+    }
+  });
+
+  it('rejects auto_run without init', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_run).toContain('requires init');
+    }
+  });
+
+  it('rejects auto_run when auto_select is false', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      init: { branch: 'feature/x' },
+      auto_select: false,
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.auto_run).toContain('auto_select');
+    }
+  });
+
+  it('accepts auto_run with init and default auto_select', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      init: { branch: 'feature/x' },
+      auto_run: { provider: 'claude' },
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('collects multiple field errors', () => {
+    const result = validateInitFromExistingRequest({
+      provider: 'github',
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors.repo).toBeDefined();
+      expect(result.field_errors.existing).toBeDefined();
+    }
+  });
+
+  it('validates init.workflow name pattern', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithId,
+      init: { workflow: 'invalid name!' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors['init.workflow']).toBeDefined();
+    }
+  });
+
+  it('validates azure init-from-existing with invalid organization', () => {
+    const result = validateInitFromExistingRequest({
+      ...validWithUrl,
+      azure: { organization: 'a' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.field_errors['azure.organization']).toBeDefined();
+    }
+  });
+});
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -1209,5 +2074,13 @@ describe('Constants', () => {
     expect(INACTIVITY_TIMEOUT_MAX).toBe(7200);
     expect(ITERATION_TIMEOUT_MIN).toBe(30);
     expect(ITERATION_TIMEOUT_MAX).toBe(14400);
+  });
+
+  it('has correct valid issue providers', () => {
+    expect(VALID_ISSUE_PROVIDERS).toEqual(['github', 'azure_devops']);
+  });
+
+  it('has correct workflow name pattern', () => {
+    expect(WORKFLOW_NAME_PATTERN).toEqual(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
   });
 });

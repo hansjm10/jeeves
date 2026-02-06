@@ -29,12 +29,18 @@ import {
   validatePutAzureDevopsRequest,
   validatePatchAzureDevopsRequest,
   validateReconcileAzureDevopsRequest,
+  validateCreateProviderIssueRequest,
+  validateInitFromExistingRequest,
   sanitizePatFromMessage,
   AZURE_PAT_ENV_VAR_NAME,
   type AzureDevopsStatus,
   type AzureDevopsSyncStatus,
   type AzureDevopsStatusEvent,
   type AzureDevopsOperation,
+  type IngestResponse,
+  type IssueIngestStatusEvent,
+  type IngestRemoteRef,
+  type IngestHierarchy,
 } from './azureDevopsTypes.js';
 import { reconcileSonarTokenToWorktree } from './sonarTokenReconcile.js';
 import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret, SonarTokenSecretReadError } from './sonarTokenSecret.js';
@@ -51,6 +57,18 @@ import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import { cleanupStaleArtifacts, detectRecovery } from './providerOperationJournal.js';
+import {
+  createProviderIssue,
+  lookupExistingIssue,
+  fetchAzureHierarchy,
+  ProviderAdapterError,
+} from './providerIssueAdapter.js';
+import {
+  writeIssueSource,
+  writeIssueIngestStatus,
+  type IssueSource,
+  type IssueIngestStatus,
+} from './providerIssueState.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
@@ -1026,6 +1044,464 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
+  // ======================================================================
+  // Provider-Aware Ingest Endpoints
+  // ======================================================================
+
+  /**
+   * Shared ingest orchestration. Handles the full workflow:
+   * validate → create/lookup remote → hierarchy → persist state → init → select → auto-run → emit event.
+   *
+   * Returns an IngestResponse on success or partial, or throws with { status, body } on error.
+   */
+  async function executeProviderIngest(params: {
+    provider: 'github' | 'azure_devops';
+    mode: 'create' | 'init_existing';
+    repo: string;
+    // For create mode
+    title?: string;
+    body?: string;
+    labels?: string[];
+    assignees?: string[];
+    milestone?: string;
+    azure?: {
+      organization?: string;
+      project?: string;
+      work_item_type?: 'User Story' | 'Bug' | 'Task';
+      parent_id?: number;
+      area_path?: string;
+      iteration_path?: string;
+      tags?: string[];
+    };
+    // For init_existing mode
+    existing?: { id?: number | string; url?: string };
+    azureInitOptions?: { organization?: string; project?: string; fetch_hierarchy?: boolean };
+    // Shared optional params
+    init?: { branch?: string; workflow?: string; phase?: string; design_doc?: string; force?: boolean };
+    auto_select?: boolean;
+    auto_run?: { provider?: string; workflow?: string; max_iterations?: number; inactivity_timeout_sec?: number; iteration_timeout_sec?: number };
+  }): Promise<IngestResponse> {
+    const { provider, mode, repo } = params;
+    const initRequested = params.init !== undefined;
+    const autoSelectEnabled = initRequested ? (params.auto_select ?? true) : false;
+    const autoRunRequested = params.auto_run !== undefined;
+    const warnings: string[] = [];
+    let outcome: 'success' | 'partial' = 'success';
+    let remoteRef: IngestRemoteRef | null = null;
+    let hierarchy: IngestHierarchy | undefined;
+    let initResult: { ok: true; issue_ref: string; branch: string } | { ok: false; error: string } | undefined;
+    let autoSelectResult: { requested: boolean; ok: boolean; error?: string } | undefined;
+    let autoRunResult: { requested: boolean; ok: boolean; error?: string } | undefined;
+
+    // Determine the issue state dir for journal/lock (if an issue is selected)
+    const currentIssue = runManager.getIssue();
+
+    // Run conflict check
+    if (initRequested && runManager.getStatus().running) {
+      throw { status: 409, body: { ok: false, error: 'Cannot init while a run is active.', code: 'conflict_running' } };
+    }
+
+    // Resolve Azure credentials if needed
+    let azurePat: string | undefined;
+    let azureOrg: string | undefined;
+    let azureProject: string | undefined;
+    if (provider === 'azure_devops') {
+      const azureOpts = mode === 'create' ? params.azure : params.azureInitOptions;
+      azureOrg = azureOpts?.organization;
+      azureProject = azureOpts?.project;
+
+      // If org/project not provided in request, try to read from stored Azure credentials
+      if (currentIssue.stateDir && (!azureOrg || !azureProject)) {
+        try {
+          const secret = await readAzureDevopsSecret(currentIssue.stateDir);
+          if (secret.exists) {
+            if (!azureOrg) azureOrg = secret.data.organization;
+            if (!azureProject) azureProject = secret.data.project;
+            azurePat = secret.data.pat;
+          }
+        } catch {
+          // Non-fatal: proceed without stored credentials
+        }
+      }
+    }
+
+    // ---- Remote operation ----
+    if (mode === 'create') {
+      try {
+        remoteRef = await createProviderIssue({
+          provider,
+          repo,
+          title: params.title!,
+          body: params.body!,
+          labels: params.labels,
+          assignees: params.assignees,
+          milestone: params.milestone,
+          azure: provider === 'azure_devops'
+            ? {
+                organization: azureOrg,
+                project: azureProject,
+                work_item_type: params.azure?.work_item_type,
+                parent_id: params.azure?.parent_id,
+                area_path: params.azure?.area_path,
+                iteration_path: params.azure?.iteration_path,
+                tags: params.azure?.tags,
+                pat: azurePat,
+              }
+            : undefined,
+        });
+      } catch (err) {
+        if (err instanceof ProviderAdapterError) {
+          throw {
+            status: err.status,
+            body: { ok: false, error: err.message, code: err.code },
+          };
+        }
+        throw {
+          status: 500,
+          body: { ok: false, error: 'Failed to create remote item.', code: 'io_error' },
+        };
+      }
+    } else {
+      // init_existing: lookup the existing item
+      const existingId = params.existing?.id ?? params.existing?.url;
+      if (!existingId) {
+        throw {
+          status: 400,
+          body: { ok: false, error: 'existing.id or existing.url is required', code: 'validation_failed' },
+        };
+      }
+      try {
+        remoteRef = await lookupExistingIssue({
+          provider,
+          repo,
+          id: String(existingId),
+          azure: provider === 'azure_devops'
+            ? { organization: azureOrg, project: azureProject, pat: azurePat }
+            : undefined,
+        });
+      } catch (err) {
+        if (err instanceof ProviderAdapterError) {
+          throw {
+            status: err.status,
+            body: { ok: false, error: err.message, code: err.code },
+          };
+        }
+        throw {
+          status: 500,
+          body: { ok: false, error: 'Failed to resolve existing item.', code: 'io_error' },
+        };
+      }
+    }
+
+    // ---- Hierarchy fetch (Azure only) ----
+    if (provider === 'azure_devops' && azureOrg && azureProject) {
+      const fetchHierarchy = mode === 'init_existing'
+        ? (params.azureInitOptions?.fetch_hierarchy ?? true)
+        : true;
+      if (fetchHierarchy) {
+        try {
+          hierarchy = await fetchAzureHierarchy({
+            organization: azureOrg,
+            project: azureProject,
+            id: remoteRef.id,
+            pat: azurePat,
+          });
+        } catch {
+          // Hierarchy fetch failure is partial if remote already created/resolved
+          warnings.push('Failed to fetch Azure hierarchy. Hierarchy data is unavailable.');
+          if (mode === 'create') {
+            outcome = 'partial';
+          }
+        }
+      }
+    }
+
+    // ---- Persist issue state ----
+    let persistedStateDir: string | null = null;
+    if (initRequested) {
+      // Init will create issue state, then we persist source metadata
+      const issueNumber = parseInt(remoteRef.id, 10);
+      if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+        // For Azure work items, the id might not parse as int — use as-is
+        // For GitHub issues, it should be a positive integer
+      }
+
+      try {
+        const initRes = await initIssue({
+          dataDir,
+          workflowsDir,
+          body: {
+            repo,
+            issue: parseInt(remoteRef.id, 10) || 1,
+            branch: params.init?.branch,
+            workflow: params.init?.workflow,
+            phase: params.init?.phase,
+            design_doc: params.init?.design_doc,
+            force: params.init?.force,
+          },
+        });
+
+        persistedStateDir = initRes.state_dir;
+        initResult = { ok: true, issue_ref: initRes.issue_ref, branch: initRes.branch };
+
+        // Persist provider source metadata
+        try {
+          const issueSource: IssueSource = {
+            provider,
+            kind: remoteRef.kind,
+            id: remoteRef.id,
+            url: remoteRef.url,
+            title: remoteRef.title,
+            mode,
+            ...(hierarchy
+              ? {
+                  hierarchy: {
+                    parent: hierarchy.parent,
+                    children: [...hierarchy.children],
+                    fetched_at: new Date().toISOString(),
+                  },
+                }
+              : {}),
+          };
+          await writeIssueSource(initRes.state_dir, issueSource);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to persist issue source metadata.';
+          warnings.push(msg);
+          outcome = 'partial';
+        }
+
+        // Auto-select
+        if (autoSelectEnabled) {
+          try {
+            await runManager.setIssue(initRes.issue_ref);
+            await saveActiveIssue(dataDir, initRes.issue_ref);
+            await refreshFileTargets();
+            autoSelectResult = { requested: true, ok: true };
+
+            // Best-effort reconcile hooks
+            const reconcileIssue = runManager.getIssue();
+            if (reconcileIssue.issueRef && reconcileIssue.stateDir) {
+              try { await autoReconcileSonarToken(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+              try { await autoReconcileAzureDevops(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to auto-select issue.';
+            autoSelectResult = { requested: true, ok: false, error: msg };
+            outcome = 'partial';
+          }
+        } else {
+          autoSelectResult = { requested: false, ok: true };
+        }
+
+        // Auto-run
+        if (autoRunRequested) {
+          if (autoSelectResult?.ok) {
+            try {
+              await runManager.start({
+                provider: params.auto_run?.provider ?? undefined,
+                workflow: params.auto_run?.workflow,
+                max_iterations: params.auto_run?.max_iterations,
+                inactivity_timeout_sec: params.auto_run?.inactivity_timeout_sec,
+                iteration_timeout_sec: params.auto_run?.iteration_timeout_sec,
+              });
+              autoRunResult = { requested: true, ok: true };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : 'Failed to start run.';
+              autoRunResult = { requested: true, ok: false, error: msg };
+              outcome = 'partial';
+            }
+          } else {
+            autoRunResult = { requested: true, ok: false, error: 'Auto-run skipped: auto-select failed.' };
+            outcome = 'partial';
+          }
+        }
+      } catch (err) {
+        const safeMessage = err instanceof Error ? err.message : 'Failed to init issue.';
+        initResult = { ok: false, error: safeMessage };
+        outcome = 'partial';
+      }
+    } else {
+      // No init requested: just persist source metadata to current issue state if available
+      if (currentIssue.stateDir) {
+        try {
+          const issueSource: IssueSource = {
+            provider,
+            kind: remoteRef.kind,
+            id: remoteRef.id,
+            url: remoteRef.url,
+            title: remoteRef.title,
+            mode,
+            ...(hierarchy
+              ? {
+                  hierarchy: {
+                    parent: hierarchy.parent,
+                    children: [...hierarchy.children],
+                    fetched_at: new Date().toISOString(),
+                  },
+                }
+              : {}),
+          };
+          await writeIssueSource(currentIssue.stateDir, issueSource);
+          persistedStateDir = currentIssue.stateDir;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to persist issue source metadata.';
+          warnings.push(msg);
+          outcome = 'partial';
+        }
+      }
+    }
+
+    // ---- Record ingest status ----
+    const stateDir = persistedStateDir ?? currentIssue.stateDir;
+    if (stateDir) {
+      try {
+        const ingestStatus: IssueIngestStatus = {
+          provider,
+          mode,
+          outcome: outcome === 'success' ? 'success' : 'partial',
+          remote_id: remoteRef.id,
+          remote_url: remoteRef.url,
+          warnings: warnings.slice(0, 50),
+          auto_select_ok: autoSelectResult ? autoSelectResult.ok : null,
+          auto_run_ok: autoRunResult ? autoRunResult.ok : null,
+          occurred_at: new Date().toISOString(),
+        };
+        await writeIssueIngestStatus(stateDir, ingestStatus);
+      } catch {
+        warnings.push('Failed to record ingest status.');
+        outcome = 'partial';
+      }
+    }
+
+    // ---- Emit ingest status event ----
+    const issueRef = currentIssue.issueRef
+      ?? (initResult && initResult.ok ? initResult.issue_ref : null);
+    const ingestEvent: IssueIngestStatusEvent = {
+      issue_ref: issueRef,
+      provider,
+      mode,
+      outcome: outcome === 'success' ? 'success' : 'partial',
+      remote_id: remoteRef.id,
+      remote_url: remoteRef.url,
+      warnings,
+      auto_select: { requested: autoSelectResult?.requested ?? false, ok: autoSelectResult?.ok ?? true },
+      auto_run: { requested: autoRunResult?.requested ?? false, ok: autoRunResult?.ok ?? true },
+      occurred_at: new Date().toISOString(),
+    };
+    hub.broadcast('issue-ingest-status', ingestEvent);
+
+    // ---- Build response ----
+    const response: IngestResponse = {
+      ok: true,
+      provider,
+      mode,
+      outcome,
+      remote: remoteRef,
+      ...(hierarchy ? { hierarchy } : {}),
+      ...(initResult ? { init: initResult } : {}),
+      ...(autoSelectResult ? { auto_select: autoSelectResult } : {}),
+      ...(autoRunResult ? { auto_run: autoRunResult } : {}),
+      warnings,
+      run: { running: runManager.getStatus().running, runId: runManager.getStatus().run_id ?? undefined },
+    };
+
+    return response;
+  }
+
+  // POST /api/issues/create — provider-aware create
+  app.post('/api/issues/create', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    const body = getBody(req);
+    const validation = validateCreateProviderIssueRequest(body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.code === 'unsupported_provider'
+          ? `Unsupported provider: ${typeof body.provider === 'string' ? body.provider : 'unknown'}`
+          : 'Validation failed.',
+        code: validation.code,
+        ...(validation.field_errors && Object.keys(validation.field_errors).length > 0
+          ? { field_errors: validation.field_errors }
+          : {}),
+      });
+    }
+
+    const validated = validation.value;
+
+    try {
+      const result = await executeProviderIngest({
+        provider: validated.provider,
+        mode: 'create',
+        repo: validated.repo,
+        title: validated.title,
+        body: validated.body,
+        labels: validated.labels ? [...validated.labels] : undefined,
+        assignees: validated.assignees ? [...validated.assignees] : undefined,
+        milestone: validated.milestone,
+        azure: validated.azure,
+        init: validated.init,
+        auto_select: validated.auto_select,
+        auto_run: validated.auto_run,
+      });
+      return reply.send(result);
+    } catch (err) {
+      if (err && typeof err === 'object' && 'status' in err && 'body' in err) {
+        const { status, body: errBody } = err as { status: number; body: Record<string, unknown> };
+        return reply.code(status).send(errBody);
+      }
+      return reply.code(500).send({ ok: false, error: 'Internal server error.', code: 'io_error' });
+    }
+  });
+
+  // POST /api/issues/init-from-existing — provider-aware init from existing
+  app.post('/api/issues/init-from-existing', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    const body = getBody(req);
+    const validation = validateInitFromExistingRequest(body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.code === 'unsupported_provider'
+          ? `Unsupported provider: ${typeof body.provider === 'string' ? body.provider : 'unknown'}`
+          : 'Validation failed.',
+        code: validation.code,
+        ...(validation.field_errors && Object.keys(validation.field_errors).length > 0
+          ? { field_errors: validation.field_errors }
+          : {}),
+      });
+    }
+
+    const validated = validation.value;
+
+    try {
+      const result = await executeProviderIngest({
+        provider: validated.provider,
+        mode: 'init_existing',
+        repo: validated.repo,
+        existing: validated.existing,
+        azureInitOptions: validated.azure,
+        init: validated.init,
+        auto_select: validated.auto_select,
+        auto_run: validated.auto_run,
+      });
+      return reply.send(result);
+    } catch (err) {
+      if (err && typeof err === 'object' && 'status' in err && 'body' in err) {
+        const { status, body: errBody } = err as { status: number; body: Record<string, unknown> };
+        return reply.code(status).send(errBody);
+      }
+      return reply.code(500).send({ ok: false, error: 'Internal server error.', code: 'io_error' });
+    }
+  });
+
+  // ======================================================================
+  // Legacy GitHub Issue Create (backward-compatible shim)
+  // ======================================================================
+
 		  app.post('/api/github/issues/create', async (req, reply) => {
 		    const gate = await requireMutatingAllowed(req);
 		    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, run: runManager.getStatus() });
@@ -1104,6 +1580,10 @@ export async function buildServer(config: ViewerServerConfig) {
 		      return reply.code(mapped.status).send({ ok: false, error: mapped.message, run: runManager.getStatus() });
 		    }
 
+		    // Delegate to provider-aware flow:
+		    // 1. Create the issue via injected createGitHubIssue adapter (preserves testability)
+		    // 2. Post-create: init/select/run + provider-aware state persistence + event emission
+
 		    function parseGitHubDotComIssueUrl(issueUrl: string): { issueNumber: number } | null {
 		      let parsed: URL;
 		      try {
@@ -1128,9 +1608,43 @@ export async function buildServer(config: ViewerServerConfig) {
 		        ...(res.issue_ref ? { issue_ref: res.issue_ref } : {}),
 		      };
 
-		      if (!initRequested) return reply.send({ ...baseResponse, run: runManager.getStatus() });
-
+		      // Build provider-aware remote ref from the legacy create result
 		      const issueUrlInfo = parseGitHubDotComIssueUrl(res.issue_url);
+		      const remoteRef: IngestRemoteRef = {
+		        id: issueUrlInfo ? String(issueUrlInfo.issueNumber) : '0',
+		        url: res.issue_url,
+		        title: titleRaw.trim(),
+		        kind: 'issue',
+		      };
+
+		      // Emit provider-aware ingest event (non-blocking)
+		      const ingestWarnings: string[] = [];
+
+		      if (!initRequested) {
+		        // Persist provider source metadata to current issue if available
+		        const curIssue = runManager.getIssue();
+		        if (curIssue.stateDir) {
+		          try {
+		            await writeIssueSource(curIssue.stateDir, {
+		              provider: 'github', kind: 'issue', id: remoteRef.id,
+		              url: remoteRef.url, title: remoteRef.title, mode: 'create',
+		            });
+		          } catch { /* non-fatal */ }
+		        }
+
+		        // Emit ingest event
+		        hub.broadcast('issue-ingest-status', {
+		          issue_ref: curIssue.issueRef,
+		          provider: 'github', mode: 'create', outcome: 'success',
+		          remote_id: remoteRef.id, remote_url: remoteRef.url,
+		          warnings: [], auto_select: { requested: false, ok: true },
+		          auto_run: { requested: false, ok: true },
+		          occurred_at: new Date().toISOString(),
+		        } satisfies IssueIngestStatusEvent);
+
+		        return reply.send({ ...baseResponse, run: runManager.getStatus() });
+		      }
+
 		      if (!issueUrlInfo) {
 		        return reply.send({
 		          ...baseResponse,
@@ -1157,32 +1671,68 @@ export async function buildServer(config: ViewerServerConfig) {
 		          },
 		        });
 
+		        // Persist provider-aware source metadata
+		        try {
+		          await writeIssueSource(initRes.state_dir, {
+		            provider: 'github', kind: 'issue', id: remoteRef.id,
+		            url: remoteRef.url, title: remoteRef.title, mode: 'create',
+		          });
+		        } catch {
+		          ingestWarnings.push('Failed to persist issue source metadata.');
+		        }
+
+		        // Legacy title/url persistence (kept for backward compat)
 		        const issueJson = ((await readIssueJson(initRes.state_dir)) ?? {}) as Record<string, unknown>;
 		        const issueField =
 		          issueJson.issue && typeof issueJson.issue === 'object' && !Array.isArray(issueJson.issue)
 		            ? (issueJson.issue as Record<string, unknown>)
 		            : {};
-
 		        await writeIssueJson(initRes.state_dir, {
 		          ...issueJson,
-		          issue: {
-		            ...issueField,
-		            title: titleRaw.trim(),
-		            url: res.issue_url,
-		          },
+		          issue: { ...issueField, title: titleRaw.trim(), url: res.issue_url },
 		        });
 
+		        const autoSelectOk = true;
 		        if (autoSelectEnabled) {
 		          await runManager.setIssue(initRes.issue_ref);
 		          await saveActiveIssue(dataDir, initRes.issue_ref);
 		          await refreshFileTargets();
+
+		          // Best-effort reconcile hooks
+		          const reconcileIssue = runManager.getIssue();
+		          if (reconcileIssue.issueRef && reconcileIssue.stateDir) {
+		            try { await autoReconcileSonarToken(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+		            try { await autoReconcileAzureDevops(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+		          }
 		        } else {
 		          const activeIssueFile = path.join(dataDir, 'active-issue.json');
 		          if (prevActiveIssue) await saveActiveIssue(dataDir, prevActiveIssue);
 		          else await fs.rm(activeIssueFile, { force: true }).catch(() => void 0);
 		        }
 
+		        // Record ingest status
+		        try {
+		          await writeIssueIngestStatus(initRes.state_dir, {
+		            provider: 'github', mode: 'create',
+		            outcome: ingestWarnings.length > 0 ? 'partial' : 'success',
+		            remote_id: remoteRef.id, remote_url: remoteRef.url,
+		            warnings: ingestWarnings, auto_select_ok: autoSelectOk,
+		            auto_run_ok: null, occurred_at: new Date().toISOString(),
+		          });
+		        } catch { /* non-fatal */ }
+
 		        if (!autoRunRequested) {
+		          // Emit ingest event
+		          hub.broadcast('issue-ingest-status', {
+		            issue_ref: initRes.issue_ref, provider: 'github', mode: 'create',
+		            outcome: ingestWarnings.length > 0 ? 'partial' : 'success',
+		            remote_id: remoteRef.id, remote_url: remoteRef.url,
+		            warnings: ingestWarnings,
+		            auto_select: { requested: autoSelectEnabled, ok: autoSelectOk },
+		            auto_run: { requested: false, ok: true },
+		            occurred_at: new Date().toISOString(),
+		          } satisfies IssueIngestStatusEvent);
+
 		          return reply.send({
 		            ...baseResponse,
 		            init: { ok: true, result: initRes },
@@ -1205,6 +1755,28 @@ export async function buildServer(config: ViewerServerConfig) {
 		          const msg = err instanceof Error ? err.message : 'Failed to start run.';
 		          autoRunResult = { ok: false, run_started: false, error: msg };
 		        }
+
+		        // Update ingest status with auto_run result
+		        try {
+		          await writeIssueIngestStatus(initRes.state_dir, {
+		            provider: 'github', mode: 'create',
+		            outcome: (ingestWarnings.length > 0 || !autoRunResult.ok) ? 'partial' : 'success',
+		            remote_id: remoteRef.id, remote_url: remoteRef.url,
+		            warnings: ingestWarnings, auto_select_ok: autoSelectOk,
+		            auto_run_ok: autoRunResult.ok, occurred_at: new Date().toISOString(),
+		          });
+		        } catch { /* non-fatal */ }
+
+		        // Emit ingest event
+		        hub.broadcast('issue-ingest-status', {
+		          issue_ref: initRes.issue_ref, provider: 'github', mode: 'create',
+		          outcome: (ingestWarnings.length > 0 || !autoRunResult.ok) ? 'partial' : 'success',
+		          remote_id: remoteRef.id, remote_url: remoteRef.url,
+		          warnings: ingestWarnings,
+		          auto_select: { requested: autoSelectEnabled, ok: autoSelectOk },
+		          auto_run: { requested: true, ok: autoRunResult.ok },
+		          occurred_at: new Date().toISOString(),
+		        } satisfies IssueIngestStatusEvent);
 
 		        return reply.send({
 		          ...baseResponse,

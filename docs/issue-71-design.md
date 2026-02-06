@@ -17,6 +17,7 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 - [ ] (G3) Surface run-time control in context by showing Stop while running and deterministic completion outcome semantics (`Complete` vs `Error`) after completion.
 - [ ] (G4) Persist a user override for sidebar visibility during runs across page reloads/sessions.
 - [ ] (G5) When a run starts with override `"auto"`, animate sidebar hide/content expansion inside a 150-200ms envelope.
+- [ ] (G6) Require repository quality gates (`pnpm lint`, `pnpm typecheck`, `pnpm test`) to pass before implementation sign-off.
 
 ### Issue Acceptance Criteria Mapping
 | Issue acceptance criterion | Design coverage |
@@ -26,6 +27,7 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 | Edge-case transitions are deterministic (animation in-flight, refresh mid-run, websocket reconnection, manual-hide/run-restart transitions) | Section 2 transitions `TR7`-`TR9` and Edge Cases `EC1`-`EC4`; Section 5 tasks `T1`/`T2`; Section 6 scenario checks |
 | Run context keeps stop controls in Watch and persists run override | G3, G4; Sections 4 and 5 tasks `T1`/`T3`; Section 6 automated + manual checks |
 | Completion outcome badge semantics are deterministic (`Complete` vs `Error`) | G3; Section 5 task `T3` acceptance criteria + semantic mapping; Section 6 badge-semantic assertions |
+| Quality checks pass (`pnpm lint && pnpm typecheck && pnpm test`) | G6; Section 5 task `T5`; Section 6 post-implementation checks |
 
 ### Non-Goals
 - Add new sidebar interaction modes (peek overlay, sliver collapse, or partial-width variants).
@@ -152,6 +154,7 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
   3. (G3) Show run-time controls in context (Stop while running + deterministic completion badge semantics).
   4. (G4) Persist run-time sidebar override across reloads/sessions.
   5. (G5) Apply a 150-200ms run-start hide/expand animation when override is `"auto"`.
+  6. (G6) Ensure workspace quality gates pass (`pnpm lint`, `pnpm typecheck`, `pnpm test`) before handoff.
 - **Workflow from Section 2**:
   - UI states `W0`-`W4`, transitions `TR1`-`TR9`, and required edge cases `EC1`-`EC4`.
   - No backend viewer-server workflow/state-machine contract changes.
@@ -169,6 +172,7 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
 | G3: In-context Stop + deterministic outcome badge semantics (`Complete` vs `Error`) | T3, T4 |
 | G4: Persist run-time sidebar override across sessions | T1, T2 |
 | G5: Run-start animation timing target (150-200ms) | T2, T4 |
+| G6: Quality checks pass (`pnpm lint`, `pnpm typecheck`, `pnpm test`) | T5 |
 
 ### Completion Outcome Semantic Mapping
 | Condition (run ended and `completion_reason` is present) | Badge label |
@@ -178,14 +182,14 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
 
 ### Planning Gates (Explicit Answers)
 1. **Smallest independently testable unit**: a pure helper that parses/persists `jeeves.watch.sidebar.runOverride` and derives effective sidebar visibility from `run.running` + override + user toggle action.
-2. **Dependencies between tasks**: yes; AppShell wiring depends on the helper model (T2 depends on T1), and final style/integration pass depends on behavior work (T4 depends on T2/T3).
+2. **Dependencies between tasks**: yes; AppShell wiring depends on the helper model (T2 depends on T1), final style/integration pass depends on behavior work (T4 depends on T2/T3), and quality-gate verification depends on all feature work being complete (T5 depends on T4).
 3. **Parallelizable tasks**: yes; T2 (layout behavior) and T3 (Watch context controls) can be implemented in parallel after T1 is available.
-4. **Specific files per task**: listed in the Task Breakdown and Task Details for T1-T4.
+4. **Specific files per task**: listed in the Task Breakdown and Task Details for T1-T5.
 5. **Acceptance criteria per task**: listed as concrete, verifiable criteria for each task below.
 6. **Verification command per task**: listed for each task (`pnpm test` targets, `pnpm typecheck`, `pnpm lint`, viewer build).
 7. **Must be done first**: T1, because it defines the single source of truth for persisted override parsing/defaulting and focus-mode visibility derivation.
-8. **Can only be done last**: T4, because it finalizes styling/integration assertions after T2 and T3 behavior is wired.
-9. **Circular dependencies**: none; dependency graph is a DAG (`T1 -> T2`, `T1 -> T3`, `T2,T3 -> T4`).
+8. **Can only be done last**: T5, because it verifies repository-wide quality gates after all implementation and integration work is complete.
+9. **Circular dependencies**: none; dependency graph is a DAG (`T1 -> T2`, `T1 -> T3`, `T2,T3 -> T4`, `T4 -> T5`).
 10. **Build/config changes needed**: none expected; existing viewer and workspace build configuration is sufficient.
 11. **New dependencies to install**: none.
 12. **Environment variables or secrets needed**: none; persistence is browser-local only (`localStorage`), with in-memory fallback when unavailable.
@@ -196,6 +200,7 @@ T1 (no deps)
 T2 → depends on T1
 T3 → depends on T1
 T4 → depends on T2, T3
+T5 → depends on T4
 ```
 
 ### Task Breakdown
@@ -205,6 +210,7 @@ T4 → depends on T2, T3
 | T2 | AppShell focused-mode wiring | Wire AppShell + Header to run the 150-200ms run-start hide transition and required transition overrides. | `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/layout/Header.tsx`, `apps/viewer/src/layout/AppShell.test.ts` | `W0 -> W1 -> W2` uses 150-200ms timing; explicit reopen sets override `"open"`; explicit hide in `W3` clears override to `"auto"` and enters `W2` directly; run start from `W4` enters `W2` without animation. |
 | T3 | Watch run-context controls | Add Stop action during active runs and completion outcome badge after runs end in the Watch context strip. | `apps/viewer/src/pages/WatchPage.tsx`, `apps/viewer/src/pages/WatchPage.test.ts` | Stop button is visible only while running and calls stop mutation; completion badge maps deterministically to `Complete` vs `Error` (not only presence of `completion_reason`); tests cover semantic mapping and reason formatting. |
 | T4 | Focused-mode styling + integration polish | Add/adjust shared + Watch styles for focused layout, animation timing token wiring, and run-context action/badge presentation across desktop/mobile. | `apps/viewer/src/styles/tokens.css`, `apps/viewer/src/styles.css`, `apps/viewer/src/pages/WatchPage.css`, `apps/viewer/src/pages/WatchPage.tsx` | Sidebar hide transition token is set within 150-200ms and applied to focused-mode classes; hidden sidebar consumes no layout width; Watch context controls wrap without overflow on tablet/mobile; style changes use tokens/RGBA overlays only. |
+| T5 | Workspace quality-gate verification | Execute repository quality gates after implementation to satisfy the issue-level delivery requirement. | N/A (workspace command validation) | `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass in the same post-implementation verification cycle; failures are captured and block sign-off until resolved. |
 
 ### Task Details
 
@@ -271,6 +277,18 @@ T4 → depends on T2, T3
 - Dependencies: T2, T3
 - Verification: `pnpm --filter @jeeves/viewer build && pnpm lint`
 
+**T5: Workspace quality-gate verification**
+- Summary: Run and record repository-level quality checks required by the issue before implementation handoff.
+- Files:
+  - N/A (validation-only task; no source-file changes required).
+- Acceptance Criteria:
+  1. `pnpm lint` passes with no errors.
+  2. `pnpm typecheck` passes with no errors.
+  3. `pnpm test` passes.
+  4. Any failure in these commands blocks completion until fixed and rerun.
+- Dependencies: T4
+- Verification: `pnpm lint && pnpm typecheck && pnpm test`
+
 ## 6. Validation
 
 ### Pre-Implementation Checks
@@ -279,6 +297,7 @@ T4 → depends on T2, T3
 - [ ] Existing tests pass: `pnpm test`
 
 ### Post-Implementation Checks
+- [ ] Workspace quality-gate sequence passes: `pnpm lint && pnpm typecheck && pnpm test`
 - [ ] Types check: `pnpm typecheck`
 - [ ] Lint passes: `pnpm lint`
 - [ ] All tests pass: `pnpm test`

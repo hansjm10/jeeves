@@ -1,3 +1,7 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import {
   type FocusState,
@@ -1316,5 +1320,159 @@ describe('T11: AppShell reconnect does not flicker through visible-idle', () => 
 
     const header = deriveHeaderControl(sim.focusState);
     expect(header.showFocusControl).toBe(false);
+  });
+});
+
+// ============================================================================
+// T12: Run-start slide/expansion animation conformance
+// ============================================================================
+
+/**
+ * T12 Acceptance Criteria:
+ * 1. Run start in W0 with override "auto" uses a slide hide (transform-based)
+ *    plus content expansion transition in the 150-200ms envelope, rather than
+ *    opacity-only hide.
+ * 2. Focused layout transition remains deterministic for TR1/TR2 and does not
+ *    replay on W4 -> W2 restarts.
+ * 3. Automated assertions verify the configured run-start duration token is
+ *    within 150-200ms and that focused-mode classes apply slide/expansion behavior.
+ */
+
+// --- CSS file reading helpers ---
+const __test_dirname = dirname(fileURLToPath(import.meta.url));
+const TOKENS_CSS_PATH = resolve(__test_dirname, '../styles/tokens.css');
+const STYLES_CSS_PATH = resolve(__test_dirname, '../styles.css');
+
+function readCssFile(filePath: string): string {
+  return readFileSync(filePath, 'utf-8');
+}
+
+describe('T12-AC1/AC3: duration token is within 150-200ms envelope', () => {
+  it('--duration-sidebar-hide token value is between 150ms and 200ms', () => {
+    const tokensCss = readCssFile(TOKENS_CSS_PATH);
+    const match = tokensCss.match(/--duration-sidebar-hide:\s*(\d+)ms/);
+    expect(match).not.toBeNull();
+
+    const durationMs = parseInt(match![1], 10);
+    expect(durationMs).toBeGreaterThanOrEqual(150);
+    expect(durationMs).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('T12-AC1/AC3: sidebar-hiding class uses transform-based slide hide', () => {
+  let stylesCss: string;
+
+  beforeEach(() => {
+    stylesCss = readCssFile(STYLES_CSS_PATH);
+  });
+
+  it('sidebar base class includes transform transition property', () => {
+    // The .sidebar rule should include a transition with transform
+    const sidebarRule = stylesCss.match(/\.sidebar\s*\{[^}]*\}/);
+    expect(sidebarRule).not.toBeNull();
+    const rule = sidebarRule![0];
+    expect(rule).toContain('transition:');
+    expect(rule).toMatch(/transition:[^;]*transform/);
+    expect(rule).toMatch(/var\(--duration-sidebar-hide\)/);
+  });
+
+  it('sidebar base class sets initial transform: translateX(0)', () => {
+    const sidebarRule = stylesCss.match(/\.sidebar\s*\{[^}]*\}/);
+    expect(sidebarRule).not.toBeNull();
+    expect(sidebarRule![0]).toMatch(/transform:\s*translateX\(0\)/);
+  });
+
+  it('sidebar-hiding class applies transform: translateX(-100%) for slide hide', () => {
+    const hidingRule = stylesCss.match(/\.sidebar\.sidebar-hiding\s*\{[^}]*\}/);
+    expect(hidingRule).not.toBeNull();
+    expect(hidingRule![0]).toMatch(/transform:\s*translateX\(-100%\)/);
+  });
+
+  it('sidebar-hiding class also includes opacity: 0 for combined effect', () => {
+    const hidingRule = stylesCss.match(/\.sidebar\.sidebar-hiding\s*\{[^}]*\}/);
+    expect(hidingRule).not.toBeNull();
+    expect(hidingRule![0]).toMatch(/opacity:\s*0/);
+  });
+});
+
+describe('T12-AC1/AC3: layout-focusing class applies content expansion transition', () => {
+  let stylesCss: string;
+
+  beforeEach(() => {
+    stylesCss = readCssFile(STYLES_CSS_PATH);
+  });
+
+  it('layout-focusing class includes grid-template-columns transition', () => {
+    const focusingRule = stylesCss.match(/\.layout\.layout-focusing\s*\{[^}]*\}/);
+    expect(focusingRule).not.toBeNull();
+    const rule = focusingRule![0];
+    expect(rule).toMatch(/transition:[^;]*grid-template-columns/);
+    expect(rule).toMatch(/var\(--duration-sidebar-hide\)/);
+  });
+
+  it('layout-focusing class uses 0fr to collapse sidebar column', () => {
+    const focusingRule = stylesCss.match(/\.layout\.layout-focusing\s*\{[^}]*\}/);
+    expect(focusingRule).not.toBeNull();
+    expect(focusingRule![0]).toMatch(/grid-template-columns:\s*0fr\s+1fr/);
+  });
+
+  it('layout-focused class sets single-column layout with no sidebar width reservation', () => {
+    const focusedRule = stylesCss.match(/\.layout\.layout-focused\s*\{[^}]*\}/);
+    expect(focusedRule).not.toBeNull();
+    expect(focusedRule![0]).toMatch(/grid-template-columns:\s*1fr/);
+  });
+});
+
+describe('T12-AC2: TR1/TR2 determinism and W4->W2 no-replay (via focus model)', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('TR1 (W0 -> W1): animate=true triggers sidebar-hiding and layout-focusing classes', () => {
+    const sim = new AppShellFocusSimulator(false);
+    const result = sim.onRunStateChange(true);
+
+    expect(sim.focusState).toBe('W1');
+    expect(result?.animate).toBe(true);
+    // W1 produces the animating CSS classes used for slide + expansion
+    expect(sim.sidebarClasses).toContain('sidebar-hiding');
+    expect(sim.layoutClasses).toContain('layout-focusing');
+    // Not the settled classes
+    expect(sim.sidebarClasses).not.toContain('sidebar-hidden');
+    expect(sim.layoutClasses).not.toContain('layout-focused');
+  });
+
+  it('TR2 (W1 -> W2): animation settles to hidden/focused classes', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W1
+    sim.onHideTransitionEnd(); // W2
+
+    expect(sim.focusState).toBe('W2');
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
+    // Not the animating classes
+    expect(sim.sidebarClasses).not.toContain('sidebar-hiding');
+    expect(sim.layoutClasses).not.toContain('layout-focusing');
+  });
+
+  it('TR9 (W4 -> W2): no animation replay — settles directly to hidden/focused', () => {
+    const sim = new AppShellFocusSimulator(false);
+    // Reach W4
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false);
+    expect(sim.focusState).toBe('W4');
+
+    // Restart from W4
+    const result = sim.onRunStateChange(true);
+    expect(sim.focusState).toBe('W2');
+    expect(result?.animate).toBe(false);
+    // Must NOT have animating classes (no W1 step)
+    expect(sim.sidebarClasses).not.toContain('sidebar-hiding');
+    expect(sim.layoutClasses).not.toContain('layout-focusing');
+    // Must have settled classes
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
   });
 });

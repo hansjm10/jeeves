@@ -74,6 +74,8 @@ export class WorkerTailerManager {
         stateDir,
         draining: false,
       });
+
+      console.error(`[WorkerTailer] Created tailer for ${worker.taskId}, log=${path.join(stateDir, 'last-run.log')}, sdk=${path.join(stateDir, 'sdk-output.json')}`);
     }
   }
 
@@ -88,6 +90,7 @@ export class WorkerTailerManager {
       const logs = await set.logTailer.getNewLines();
       if (logs.changed && logs.lines.length) {
         workerLogs.push({ taskId, lines: logs.lines });
+        console.error(`[WorkerTailer] poll ${taskId}: ${logs.lines.length} new log lines`);
       }
 
       // Read SDK events

@@ -34,6 +34,7 @@ import {
   type SonarSyncStatus,
 } from './sonarTokenTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
+import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
@@ -480,11 +481,39 @@ export async function buildServer(config: ViewerServerConfig) {
   const workerTailerManager = new WorkerTailerManager();
 
   let currentStateDir: string | null = null;
+  let cachedIssueJsonStateDir: string | null = null;
+  let cachedIssueJsonMtimeMs = 0;
+  let cachedIssueJson: Record<string, unknown> | null = null;
+  let warnedMissingWorkerArtifactsRunId = false;
+
+  async function readIssueJsonCached(stateDir: string): Promise<Record<string, unknown> | null> {
+    const issuePath = path.join(stateDir, 'issue.json');
+    const stat = await fs.stat(issuePath).catch(() => null);
+    if (!stat || !stat.isFile()) {
+      cachedIssueJsonStateDir = stateDir;
+      cachedIssueJsonMtimeMs = 0;
+      cachedIssueJson = null;
+      return null;
+    }
+
+    if (cachedIssueJsonStateDir === stateDir && stat.mtimeMs === cachedIssueJsonMtimeMs) {
+      return cachedIssueJson;
+    }
+
+    cachedIssueJsonStateDir = stateDir;
+    cachedIssueJsonMtimeMs = stat.mtimeMs;
+    cachedIssueJson = await readIssueJson(stateDir);
+    return cachedIssueJson;
+  }
 
   async function refreshFileTargets(): Promise<void> {
     const stateDir = runManager.getIssue().stateDir;
     if (stateDir !== currentStateDir) {
       currentStateDir = stateDir;
+      cachedIssueJsonStateDir = null;
+      cachedIssueJsonMtimeMs = 0;
+      cachedIssueJson = null;
+      warnedMissingWorkerArtifactsRunId = false;
       logTailer.reset(stateDir ? path.join(stateDir, 'last-run.log') : null);
       viewerLogTailer.reset(stateDir ? path.join(stateDir, 'viewer-run.log') : null);
       sdkTailer.reset(stateDir ? path.join(stateDir, 'sdk-output.json') : null);
@@ -623,11 +652,28 @@ export async function buildServer(config: ViewerServerConfig) {
 
       // Reconcile worker tailers with active workers and poll for events
       const runStatus = runManager.getStatus();
-      workerTailerManager.reconcile(runStatus.workers ?? [], (taskId) => {
-        if (!currentStateDir || !runStatus.run_id) return null;
-        return path.join(currentStateDir, '.runs', runStatus.run_id, 'workers', taskId);
+      const activeWorkers = runStatus.workers ?? [];
+      const issueJsonForWorkers =
+        activeWorkers.length > 0 ? await readIssueJsonCached(currentStateDir) : null;
+      const workerArtifactsRunId = resolveWorkerArtifactsRunId({ run: runStatus, issueJson: issueJsonForWorkers });
+      if (activeWorkers.length > 0 && !workerArtifactsRunId && !warnedMissingWorkerArtifactsRunId) {
+        warnedMissingWorkerArtifactsRunId = true;
+        console.error(
+          `[pollTick] Unable to resolve worker artifacts runId (run.run_id=${runStatus.run_id ?? 'null'}). ` +
+            `Expected issue.json.status.parallel.runId during parallel execution.`,
+        );
+      }
+      if (activeWorkers.length > 0) {
+        console.error(`[pollTick] Reconciling ${activeWorkers.length} workers: ${activeWorkers.map(w => w.taskId).join(', ')}`);
+      }
+      workerTailerManager.reconcile(activeWorkers, (taskId) => {
+        if (!currentStateDir || !workerArtifactsRunId) return null;
+        return path.join(currentStateDir, '.runs', workerArtifactsRunId, 'workers', taskId);
       });
       const workerResults = await workerTailerManager.poll();
+      if (workerResults.workerLogs.length > 0 || workerResults.workerSdkEvents.length > 0) {
+        console.error(`[pollTick] Worker results: ${workerResults.workerLogs.length} log batches, ${workerResults.workerSdkEvents.length} SDK events`);
+      }
       for (const wl of workerResults.workerLogs) {
         hub.broadcast('worker-logs', { workerId: wl.taskId, lines: wl.lines });
       }

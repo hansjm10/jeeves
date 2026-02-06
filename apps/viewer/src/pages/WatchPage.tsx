@@ -660,24 +660,45 @@ export function WatchPage() {
     }
   }, [rawView, searchParams, setSearchParams]);
 
-  // Auto-clear selection when selected worker disappears
+  // Auto-clear selection when selected worker disappears (but keep if data exists)
   const workers = stream.state?.run?.workers;
   useEffect(() => {
-    if (selectedWorker && (!workers || !workers.some((w) => w.taskId === selectedWorker))) {
+    if (!selectedWorker) return;
+    // Don't clear if we still have data for this worker
+    const hasData = (stream.workerLogs[selectedWorker]?.length ?? 0) > 0
+      || (stream.workerSdkEvents[selectedWorker]?.length ?? 0) > 0;
+    if (hasData) return;
+    if (!workers || !workers.some((w) => w.taskId === selectedWorker)) {
       setSelectedWorker(null);
     }
-  }, [workers, selectedWorker]);
+  }, [workers, selectedWorker, stream.workerLogs, stream.workerSdkEvents]);
 
   // Compute effective logs/SDK events based on selected worker
   const effectiveLogs = useMemo<string[]>(() => {
-    if (!selectedWorker) return stream.logs;
-    return stream.workerLogs[selectedWorker] ?? [];
-  }, [selectedWorker, stream.logs, stream.workerLogs]);
+    if (selectedWorker) return stream.workerLogs[selectedWorker] ?? [];
+    // During parallel: aggregate all worker logs
+    if (workers && workers.length > 0) {
+      const entries = Object.entries(stream.workerLogs);
+      if (entries.length > 0) {
+        return entries.flatMap(([wid, lines]) =>
+          lines.map((line) => `[${wid}] ${line}`),
+        );
+      }
+    }
+    return stream.logs;
+  }, [selectedWorker, stream.logs, stream.workerLogs, workers]);
 
   const effectiveSdkEvents = useMemo<SdkEvent[]>(() => {
-    if (!selectedWorker) return stream.sdkEvents;
-    return stream.workerSdkEvents[selectedWorker] ?? [];
-  }, [selectedWorker, stream.sdkEvents, stream.workerSdkEvents]);
+    if (selectedWorker) return stream.workerSdkEvents[selectedWorker] ?? [];
+    // During parallel: aggregate all worker SDK events
+    if (workers && workers.length > 0) {
+      const entries = Object.entries(stream.workerSdkEvents);
+      if (entries.length > 0) {
+        return entries.flatMap(([, events]) => events);
+      }
+    }
+    return stream.sdkEvents;
+  }, [selectedWorker, stream.sdkEvents, stream.workerSdkEvents, workers]);
 
   // Handle view change - update URL
   const handleViewChange = useCallback(

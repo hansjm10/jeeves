@@ -131,6 +131,12 @@ export const MAX_WARNINGS = 50;
 /** Maximum length of a single warning string. */
 export const MAX_WARNING_LENGTH = 512;
 
+/** Pattern for positive-integer strings (Section 4: checkpoint.remote_id, checkpoint.pr_id). */
+export const POSITIVE_INTEGER_STRING_PATTERN = /^[1-9][0-9]{0,18}$/;
+
+/** Maximum length for checkpoint.remote_url. */
+export const MAX_REMOTE_URL_LENGTH = 2048;
+
 /** Valid operation kinds. */
 const VALID_KINDS: readonly ProviderOperationKind[] = ['credentials', 'ingest', 'pr_prepare'];
 
@@ -393,6 +399,23 @@ export async function updateJournalCheckpoint(
     throw new Error('No journal file exists to update');
   }
 
+  // Validate checkpoint field constraints (Section 4)
+  if (checkpoint.remote_id !== undefined && checkpoint.remote_id !== null) {
+    if (!POSITIVE_INTEGER_STRING_PATTERN.test(checkpoint.remote_id)) {
+      throw new Error('Invalid remote_id: must be a positive-integer string');
+    }
+  }
+  if (checkpoint.remote_url !== undefined && checkpoint.remote_url !== null) {
+    if (!isAbsoluteHttpsUrl(checkpoint.remote_url)) {
+      throw new Error('Invalid remote_url: must be an absolute https:// URL');
+    }
+  }
+  if (checkpoint.pr_id !== undefined && checkpoint.pr_id !== null) {
+    if (!POSITIVE_INTEGER_STRING_PATTERN.test(checkpoint.pr_id)) {
+      throw new Error('Invalid pr_id: must be a positive-integer string');
+    }
+  }
+
   // Merge checkpoint, enforcing warning limits
   let mergedWarnings = checkpoint.warnings !== undefined
     ? checkpoint.warnings
@@ -526,6 +549,14 @@ export async function detectRecovery(issueStateDir: string): Promise<RecoveryRes
   if (!journal) return { needed: false };
   if (journal.completed_at !== null) return { needed: false };
 
+  // Validate lock/journal operation_id alignment (Section 4: lock.operation_id must equal journal operation_id)
+  const lock = await readLock(issueStateDir);
+  if (lock && lock.operation_id !== journal.operation_id) {
+    // Mismatched lock: this is an inconsistent state — the lock belongs to a different
+    // operation. Clean up the stale lock so it doesn't block future operations.
+    await releaseLock(issueStateDir);
+  }
+
   // Journal present and incomplete -> recovery needed
   const recoveryState = computeRecoveryState(journal);
   return { needed: true, journal, recovery_state: recoveryState };
@@ -626,6 +657,26 @@ function computeRecoveryState(journal: ProviderOperationJournal): string {
 }
 
 /**
+ * Validate that a checkpoint string field is a valid positive-integer string.
+ * Returns true if null (null is valid default) or matches pattern.
+ */
+function isValidPositiveIntegerString(value: string | null): boolean {
+  if (value === null) return true;
+  return POSITIVE_INTEGER_STRING_PATTERN.test(value);
+}
+
+/**
+ * Validate that a checkpoint URL is an absolute https:// URL.
+ * Returns true if null (null is valid default).
+ */
+function isAbsoluteHttpsUrl(value: string | null): boolean {
+  if (value === null) return true;
+  if (typeof value !== 'string') return false;
+  if (value.length > MAX_REMOTE_URL_LENGTH) return false;
+  return value.startsWith('https://') && value.length > 'https://'.length;
+}
+
+/**
  * Validate that a parsed value is a valid lock file.
  */
 function isValidLock(value: unknown): value is ProviderOperationLock {
@@ -662,9 +713,9 @@ function isValidJournal(value: unknown): value is ProviderOperationJournal {
   // Validate checkpoint
   if (obj.checkpoint === null || typeof obj.checkpoint !== 'object') return false;
   const cp = obj.checkpoint as Record<string, unknown>;
-  if (cp.remote_id !== null && typeof cp.remote_id !== 'string') return false;
-  if (cp.remote_url !== null && typeof cp.remote_url !== 'string') return false;
-  if (cp.pr_id !== null && typeof cp.pr_id !== 'string') return false;
+  if (cp.remote_id !== null && (typeof cp.remote_id !== 'string' || !isValidPositiveIntegerString(cp.remote_id))) return false;
+  if (cp.remote_url !== null && (typeof cp.remote_url !== 'string' || !isAbsoluteHttpsUrl(cp.remote_url))) return false;
+  if (cp.pr_id !== null && (typeof cp.pr_id !== 'string' || !isValidPositiveIntegerString(cp.pr_id))) return false;
   if (typeof cp.issue_state_persisted !== 'boolean') return false;
   if (typeof cp.init_completed !== 'boolean') return false;
   if (typeof cp.auto_selected !== 'boolean') return false;

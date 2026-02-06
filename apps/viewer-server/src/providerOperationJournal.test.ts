@@ -18,9 +18,11 @@ import {
   getOpsDir,
   ISSUE_REF_PATTERN,
   isLockStale,
+  MAX_REMOTE_URL_LENGTH,
   MAX_WARNING_LENGTH,
   MAX_WARNINGS,
   OPERATION_ID_PATTERN,
+  POSITIVE_INTEGER_STRING_PATTERN,
   readJournal,
   readLock,
   refreshLock,
@@ -115,6 +117,26 @@ describe('providerOperationJournal', () => {
 
     it('MAX_WARNING_LENGTH is 512', () => {
       expect(MAX_WARNING_LENGTH).toBe(512);
+    });
+
+    it('POSITIVE_INTEGER_STRING_PATTERN accepts valid positive integers', () => {
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('1')).toBe(true);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('12345')).toBe(true);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('999999999999999999')).toBe(true);
+    });
+
+    it('POSITIVE_INTEGER_STRING_PATTERN rejects invalid values', () => {
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('0')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('01')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('-1')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('abc')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('12.34')).toBe(false);
+      expect(POSITIVE_INTEGER_STRING_PATTERN.test('1'.repeat(20))).toBe(false); // too long
+    });
+
+    it('MAX_REMOTE_URL_LENGTH is 2048', () => {
+      expect(MAX_REMOTE_URL_LENGTH).toBe(2048);
     });
   });
 
@@ -548,6 +570,88 @@ describe('providerOperationJournal', () => {
       expect(updated.checkpoint.warnings[0]).toHaveLength(MAX_WARNING_LENGTH);
     });
 
+    // ---------- checkpoint field validation ----------
+
+    it('accepts valid remote_id (positive-integer string)', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { remote_id: '1' });
+      expect(updated.checkpoint.remote_id).toBe('1');
+    });
+
+    it('accepts valid remote_id with many digits', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { remote_id: '123456789012345678' });
+      expect(updated.checkpoint.remote_id).toBe('123456789012345678');
+    });
+
+    it('accepts null remote_id', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { remote_id: null });
+      expect(updated.checkpoint.remote_id).toBeNull();
+    });
+
+    it('rejects remote_id that is not a positive-integer string', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_id: 'abc' })).rejects.toThrow('Invalid remote_id');
+    });
+
+    it('rejects remote_id "0"', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_id: '0' })).rejects.toThrow('Invalid remote_id');
+    });
+
+    it('rejects remote_id "-1"', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_id: '-1' })).rejects.toThrow('Invalid remote_id');
+    });
+
+    it('rejects remote_id "01" (leading zero)', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_id: '01' })).rejects.toThrow('Invalid remote_id');
+    });
+
+    it('accepts valid remote_url (absolute https:// URL)', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { remote_url: 'https://github.com/owner/repo/issues/42' });
+      expect(updated.checkpoint.remote_url).toBe('https://github.com/owner/repo/issues/42');
+    });
+
+    it('accepts null remote_url', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { remote_url: null });
+      expect(updated.checkpoint.remote_url).toBeNull();
+    });
+
+    it('rejects remote_url with http:// (not https)', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_url: 'http://example.com' })).rejects.toThrow('Invalid remote_url');
+    });
+
+    it('rejects remote_url that is not a URL', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_url: 'not-a-url' })).rejects.toThrow('Invalid remote_url');
+    });
+
+    it('rejects remote_url with ftp://', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_url: 'ftp://example.com/file' })).rejects.toThrow('Invalid remote_url');
+    });
+
+    it('rejects remote_url that is just "https://" (no host)', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { remote_url: 'https://' })).rejects.toThrow('Invalid remote_url');
+    });
+
+    it('rejects remote_url exceeding MAX_REMOTE_URL_LENGTH', async () => {
+      const longUrl = 'https://example.com/' + 'a'.repeat(MAX_REMOTE_URL_LENGTH);
+      await expect(updateJournalCheckpoint(tempDir, { remote_url: longUrl })).rejects.toThrow('Invalid remote_url');
+    });
+
+    it('accepts valid pr_id (positive-integer string)', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { pr_id: '42' });
+      expect(updated.checkpoint.pr_id).toBe('42');
+    });
+
+    it('accepts null pr_id', async () => {
+      const updated = await updateJournalCheckpoint(tempDir, { pr_id: null });
+      expect(updated.checkpoint.pr_id).toBeNull();
+    });
+
+    it('rejects pr_id that is not a positive-integer string', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { pr_id: 'abc' })).rejects.toThrow('Invalid pr_id');
+    });
+
+    it('rejects pr_id "0"', async () => {
+      await expect(updateJournalCheckpoint(tempDir, { pr_id: '0' })).rejects.toThrow('Invalid pr_id');
+    });
+
     it('throws when no journal exists', async () => {
       const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'empty-'));
       try {
@@ -678,6 +782,152 @@ describe('providerOperationJournal', () => {
       expect(read!.operation_id).toBe(created.operation_id);
       expect(read!.kind).toBe('credentials');
       expect(read!.provider).toBe('azure_devops');
+    });
+
+    // ---------- checkpoint field validation on read ----------
+
+    it('returns null when checkpoint.remote_id is non-null but not a positive-integer string', async () => {
+      const opsDir = getOpsDir(tempDir);
+      await fs.mkdir(opsDir, { recursive: true });
+      const badJournal = {
+        schemaVersion: 1,
+        operation_id: 'test-op-12345678',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        checkpoint: {
+          remote_id: 'abc',
+          remote_url: null,
+          pr_id: null,
+          issue_state_persisted: false,
+          init_completed: false,
+          auto_selected: false,
+          auto_run_started: false,
+          warnings: [],
+        },
+      };
+      await fs.writeFile(getJournalPath(tempDir), JSON.stringify(badJournal), 'utf-8');
+      expect(await readJournal(tempDir)).toBeNull();
+    });
+
+    it('returns null when checkpoint.remote_url is non-null but not an https:// URL', async () => {
+      const opsDir = getOpsDir(tempDir);
+      await fs.mkdir(opsDir, { recursive: true });
+      const badJournal = {
+        schemaVersion: 1,
+        operation_id: 'test-op-12345678',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        checkpoint: {
+          remote_id: null,
+          remote_url: 'http://example.com',
+          pr_id: null,
+          issue_state_persisted: false,
+          init_completed: false,
+          auto_selected: false,
+          auto_run_started: false,
+          warnings: [],
+        },
+      };
+      await fs.writeFile(getJournalPath(tempDir), JSON.stringify(badJournal), 'utf-8');
+      expect(await readJournal(tempDir)).toBeNull();
+    });
+
+    it('returns null when checkpoint.pr_id is non-null but not a positive-integer string', async () => {
+      const opsDir = getOpsDir(tempDir);
+      await fs.mkdir(opsDir, { recursive: true });
+      const badJournal = {
+        schemaVersion: 1,
+        operation_id: 'test-op-12345678',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        checkpoint: {
+          remote_id: null,
+          remote_url: null,
+          pr_id: '0',
+          issue_state_persisted: false,
+          init_completed: false,
+          auto_selected: false,
+          auto_run_started: false,
+          warnings: [],
+        },
+      };
+      await fs.writeFile(getJournalPath(tempDir), JSON.stringify(badJournal), 'utf-8');
+      expect(await readJournal(tempDir)).toBeNull();
+    });
+
+    it('returns valid journal when checkpoint fields are null (defaults)', async () => {
+      const opsDir = getOpsDir(tempDir);
+      await fs.mkdir(opsDir, { recursive: true });
+      const goodJournal = {
+        schemaVersion: 1,
+        operation_id: 'test-op-12345678',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        checkpoint: {
+          remote_id: null,
+          remote_url: null,
+          pr_id: null,
+          issue_state_persisted: false,
+          init_completed: false,
+          auto_selected: false,
+          auto_run_started: false,
+          warnings: [],
+        },
+      };
+      await fs.writeFile(getJournalPath(tempDir), JSON.stringify(goodJournal), 'utf-8');
+      expect(await readJournal(tempDir)).not.toBeNull();
+    });
+
+    it('returns valid journal when checkpoint fields have valid non-null values', async () => {
+      const opsDir = getOpsDir(tempDir);
+      await fs.mkdir(opsDir, { recursive: true });
+      const goodJournal = {
+        schemaVersion: 1,
+        operation_id: 'test-op-12345678',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        checkpoint: {
+          remote_id: '42',
+          remote_url: 'https://github.com/owner/repo/issues/42',
+          pr_id: '99',
+          issue_state_persisted: true,
+          init_completed: false,
+          auto_selected: false,
+          auto_run_started: false,
+          warnings: [],
+        },
+      };
+      await fs.writeFile(getJournalPath(tempDir), JSON.stringify(goodJournal), 'utf-8');
+      const result = await readJournal(tempDir);
+      expect(result).not.toBeNull();
+      expect(result!.checkpoint.remote_id).toBe('42');
+      expect(result!.checkpoint.remote_url).toBe('https://github.com/owner/repo/issues/42');
+      expect(result!.checkpoint.pr_id).toBe('99');
     });
   });
 
@@ -941,6 +1191,76 @@ describe('providerOperationJournal', () => {
       if (result.needed) {
         expect(result.journal.operation_id).toBe('test-op-12345678');
         expect(result.journal.kind).toBe('credentials');
+      }
+    });
+
+    // ---------- lock/journal operation_id alignment ----------
+
+    it('cleans up lock with mismatched operation_id during recovery', async () => {
+      // Create journal with one operation_id
+      await createJournal(tempDir, {
+        operation_id: 'journal-op-1234567',
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'github',
+      });
+
+      // Write a lock with a different operation_id (ops dir already created by createJournal)
+      const mismatchedLock: ProviderOperationLock = {
+        schemaVersion: 1,
+        operation_id: 'lock-op-99999999',
+        issue_ref: 'owner/repo#42',
+        acquired_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 30_000).toISOString(),
+        pid: process.pid,
+      };
+      await fs.writeFile(getLockPath(tempDir), JSON.stringify(mismatchedLock, null, 2) + '\n', 'utf-8');
+
+      const result = await detectRecovery(tempDir);
+      expect(result.needed).toBe(true);
+      if (result.needed) {
+        expect(result.recovery_state).toBe('ingest.validating');
+      }
+
+      // Lock should have been cleaned up due to mismatch
+      expect(await readLock(tempDir)).toBeNull();
+    });
+
+    it('preserves lock with matching operation_id during recovery', async () => {
+      // Acquire lock and create journal with same operation_id
+      await acquireLock(tempDir, {
+        operation_id: 'same-op-12345678',
+        issue_ref: 'owner/repo#42',
+      });
+      await createJournal(tempDir, {
+        operation_id: 'same-op-12345678',
+        kind: 'credentials',
+        state: 'cred.validating',
+        issue_ref: 'owner/repo#42',
+        provider: 'azure_devops',
+      });
+
+      const result = await detectRecovery(tempDir);
+      expect(result.needed).toBe(true);
+
+      // Lock should still be present since operation_ids match
+      expect(await readLock(tempDir)).not.toBeNull();
+    });
+
+    it('handles recovery when no lock exists alongside journal', async () => {
+      await createJournal(tempDir, {
+        operation_id: 'orphan-op-123456',
+        kind: 'pr_prepare',
+        state: 'pr.creating',
+        issue_ref: 'owner/repo#42',
+        provider: 'azure_devops',
+      });
+
+      const result = await detectRecovery(tempDir);
+      expect(result.needed).toBe(true);
+      if (result.needed) {
+        expect(result.recovery_state).toBe('pr.checking_existing');
       }
     });
   });

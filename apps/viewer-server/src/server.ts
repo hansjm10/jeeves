@@ -37,7 +37,7 @@ import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
-import { cleanupStaleArtifacts } from './providerOperationJournal.js';
+import { cleanupStaleArtifacts, detectRecovery } from './providerOperationJournal.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
@@ -630,7 +630,24 @@ export async function buildServer(config: ViewerServerConfig) {
       await cleanupStaleArtifacts(startupIssue.stateDir);
     } catch (err) {
       console.error(
-        'Startup provider operation recovery failed (non-fatal):',
+        'Startup provider operation cleanup failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    // Detect incomplete operations that need recovery and expose resumable checkpoint state.
+    // Non-fatal: failures are logged without blocking server startup.
+    try {
+      const recovery = await detectRecovery(startupIssue.stateDir);
+      if (recovery.needed) {
+        console.warn(
+          `Provider operation recovery needed: operation=${recovery.journal.operation_id} ` +
+          `kind=${recovery.journal.kind} recovery_state=${recovery.recovery_state}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        'Startup provider operation recovery detection failed (non-fatal):',
         err instanceof Error ? err.message : String(err),
       );
     }

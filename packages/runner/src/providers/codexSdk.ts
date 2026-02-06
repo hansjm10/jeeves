@@ -1,4 +1,4 @@
-import type { AgentProvider, ProviderEvent, ProviderRunOptions } from '../provider.js';
+import type { AgentProvider, ProviderEvent, ProviderRunOptions, UsageData } from '../provider.js';
 
 // NOTE: Keep all Codex CLI integration in this file so the rest of the runner is provider-agnostic.
 import { spawn } from 'node:child_process';
@@ -424,6 +424,11 @@ export class CodexSdkProvider implements AgentProvider {
     rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     const activeRl = rl;
 
+    let accInputTokens = 0;
+    let accOutputTokens = 0;
+    let accCachedInputTokens = 0;
+    let turnCount = 0;
+
     try {
       for await (const line of activeRl) {
         if (!line || !line.trim()) continue;
@@ -440,8 +445,31 @@ export class CodexSdkProvider implements AgentProvider {
           continue;
         }
 
+        // Accumulate usage from turn.completed events
+        if (isPlainObject(parsed) && getString(parsed, 'type') === 'turn.completed') {
+          turnCount++;
+          const usage = getRecord(parsed, 'usage');
+          if (usage) {
+            accInputTokens += getNumber(usage, 'input_tokens') ?? 0;
+            accOutputTokens += getNumber(usage, 'output_tokens') ?? 0;
+            accCachedInputTokens += getNumber(usage, 'cached_input_tokens') ?? 0;
+          }
+        }
+
         const mapped = mapCodexEventToProviderEvents(parsed, state, () => Date.now(), () => nowIso());
         for (const out of mapped) yield out;
+      }
+
+      // Emit accumulated usage after all events have been processed
+      if (turnCount > 0) {
+        const usage: UsageData = {
+          input_tokens: accInputTokens,
+          output_tokens: accOutputTokens,
+          cache_read_input_tokens: accCachedInputTokens,
+          total_cost_usd: null,
+          num_turns: turnCount,
+        };
+        yield { type: 'usage', usage, timestamp: nowIso() };
       }
 
       const exitCode = await completion;

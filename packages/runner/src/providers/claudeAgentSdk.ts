@@ -1,4 +1,4 @@
-import type { AgentProvider, ProviderEvent, ProviderRunOptions } from '../provider.js';
+import type { AgentProvider, ProviderEvent, ProviderRunOptions, UsageData } from '../provider.js';
 
 // NOTE: Keep all SDK imports in this file so the rest of the runner is provider-agnostic.
 import {
@@ -217,6 +217,15 @@ export class ClaudeAgentProvider implements AgentProvider {
 
       if (msg.type === 'result') {
         yield { type: 'result', content: extractResultContent(msg), timestamp: ts };
+        const usage: UsageData = {
+          input_tokens: msg.usage.input_tokens,
+          output_tokens: msg.usage.output_tokens,
+          cache_read_input_tokens: msg.usage.cache_read_input_tokens,
+          cache_creation_input_tokens: msg.usage.cache_creation_input_tokens,
+          total_cost_usd: msg.total_cost_usd,
+          num_turns: msg.num_turns,
+        };
+        yield { type: 'usage', usage, timestamp: ts };
         continue;
       }
 

@@ -9,6 +9,15 @@ export type ProviderRunOptions = Readonly<{
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }>;
 
+export type UsageData = Readonly<{
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  total_cost_usd?: number | null;
+  num_turns?: number;
+}>;
+
 export type ProviderEvent =
   | Readonly<{
       type: 'system';
@@ -35,6 +44,11 @@ export type ProviderEvent =
       content: string;
       isError?: boolean;
       durationMs?: number | null;
+      timestamp?: string;
+    }>
+  | Readonly<{
+      type: 'usage';
+      usage: UsageData;
       timestamp?: string;
     }>;
 

@@ -58,6 +58,10 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
         await logLine(`[TOOL] ${evt.name} ${JSON.stringify(evt.input)}`);
       } else if (evt.type === 'tool_result') {
         await logLine(`[TOOL_RESULT] ${evt.toolUseId} ${evt.content}`);
+      } else if (evt.type === 'usage') {
+        const u = evt.usage;
+        const costStr = u.total_cost_usd != null ? ` cost=$${u.total_cost_usd.toFixed(4)}` : '';
+        await logLine(`[USAGE] in=${u.input_tokens} out=${u.output_tokens}${costStr}`);
       }
 
       await writer.writeIncremental();

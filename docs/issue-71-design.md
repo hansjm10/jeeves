@@ -32,7 +32,7 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 N/A - This feature does not involve workflow or state machine changes.
 
 ## 3. Interfaces
-[To be completed in design_api phase]
+N/A - This feature does not add or modify external interfaces.
 
 ## 4. Data
 [To be completed in design_data phase]

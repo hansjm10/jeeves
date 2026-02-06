@@ -1,7 +1,7 @@
 /**
  * MCP grep tool handler.
  *
- * Executes `grep -rn --color=never <pattern> <path>` and returns results with
+ * Executes `grep -Ern --color=never <pattern> <path>` and returns results with
  * optional context-focus pruning.
  */
 
@@ -30,7 +30,8 @@ function execGrep(
   cwd: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("grep", ["-rn", "--color=never", pattern, searchPath], {
+    // Use ERE (`-E`) so alternation like `foo|bar` behaves as users expect.
+    const child = spawn("grep", ["-Ern", "--color=never", pattern, searchPath], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });

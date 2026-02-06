@@ -897,6 +897,7 @@ export class RunManager {
           continue;
         }
 
+        let transitionedToPhase: string | null = null;
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
           // If a phase intentionally switched workflows by editing issue.json, honor it immediately.
@@ -919,6 +920,7 @@ export class RunManager {
           await this.commitDesignDocCheckpoint({ phase: currentPhase, issueJson: updatedIssue });
           const nextPhase = engine.evaluateTransitions(currentPhase, updatedIssue);
           if (nextPhase) {
+            transitionedToPhase = nextPhase;
             updatedIssue.phase = nextPhase;
 
             const control = updatedIssue.control;
@@ -949,6 +951,16 @@ export class RunManager {
         }
 
         if (await this.checkCompletionPromise()) {
+          // Promise-based completion is only honored in terminal phase context.
+          // Non-terminal phases should continue through workflow transitions.
+          const completionPhase = transitionedToPhase ?? currentPhase;
+          if (!engine.isTerminal(completionPhase)) {
+            await this.appendViewerLog(
+              viewerLogPath,
+              `[COMPLETE] Ignoring completion promise in non-terminal phase: ${completionPhase}`,
+            );
+            continue;
+          }
           await this.appendViewerLog(viewerLogPath, `[COMPLETE] Agent signaled completion after ${iteration} iteration(s)`);
           this.status = {
             ...this.status,

@@ -665,3 +665,464 @@ describe('T4: content accessibility in focused mode', () => {
     expect(sim.sidebarClasses).toContain('sidebar-hidden');
   });
 });
+
+// ============================================================================
+// T6: AppShell/Header Integration Tests
+// ============================================================================
+
+/**
+ * Header control derivation helper (mirrors Header.tsx logic).
+ *
+ * Computes focused-mode control visibility, label, and action type
+ * from the current focus state, exactly as Header.tsx does.
+ */
+function deriveHeaderControl(focusState: FocusState) {
+  const showFocusControl = focusState !== 'W0';
+  const sidebarVisible = isSidebarVisible(focusState);
+
+  return {
+    showFocusControl,
+    label: sidebarVisible ? 'Hide Sidebar' : 'Show Sidebar',
+    action: sidebarVisible ? ('hide' as const) : ('reopen' as const),
+  };
+}
+
+// ============================================================================
+// T6-AC1: Run-start W0 -> W1 -> W2 path under override "auto" and no
+//         duplicate restart on repeated run-start signals
+// ============================================================================
+
+describe('T6-AC1: integrated run-start W0 -> W1 -> W2 with Header controls', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('W0: Header shows no focus control before run starts', () => {
+    const sim = new AppShellFocusSimulator(false);
+    const header = deriveHeaderControl(sim.focusState);
+    expect(sim.focusState).toBe('W0');
+    expect(header.showFocusControl).toBe(false);
+  });
+
+  it('W0 -> W1: run start with "auto" begins hide, Header shows "Show Sidebar"', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+
+    expect(sim.focusState).toBe('W1');
+    expect(sim.animatingHide).toBe(true);
+    expect(sim.sidebarClasses).toContain('sidebar-hiding');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('W1 -> W2: transition end settles hidden, Header still shows "Show Sidebar"', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+
+    expect(sim.focusState).toBe('W2');
+    expect(sim.sidebarVisible).toBe(false);
+    expect(sim.animatingHide).toBe(false);
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('full W0 -> W1 -> W2 path: layout classes and Header controls transition correctly', () => {
+    const sim = new AppShellFocusSimulator(false);
+
+    // W0: idle
+    expect(sim.focusState).toBe('W0');
+    expect(deriveHeaderControl(sim.focusState).showFocusControl).toBe(false);
+    expect(sim.layoutClasses).toEqual(['layout']);
+
+    // W0 -> W1: run starts
+    sim.onRunStateChange(true);
+    expect(sim.focusState).toBe('W1');
+    expect(deriveHeaderControl(sim.focusState).showFocusControl).toBe(true);
+    expect(sim.layoutClasses).toContain('layout-focusing');
+
+    // W1 -> W2: transition completes
+    sim.onHideTransitionEnd();
+    expect(sim.focusState).toBe('W2');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+    expect(sim.layoutClasses).toContain('layout-focused');
+  });
+
+  it('duplicate RUN_START from W1 is a no-op, Header control unchanged', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W0 -> W1
+    expect(sim.focusState).toBe('W1');
+
+    const headerBefore = deriveHeaderControl(sim.focusState);
+
+    // Duplicate dispatch (simulating rapid double signal)
+    const result = sim.dispatch({ type: 'RUN_START', override: 'auto' });
+    expect(result.state).toBe('W1');
+    expect(result.animate).toBe(false);
+
+    const headerAfter = deriveHeaderControl(sim.focusState);
+    expect(headerAfter.showFocusControl).toBe(headerBefore.showFocusControl);
+    expect(headerAfter.label).toBe(headerBefore.label);
+    expect(headerAfter.action).toBe(headerBefore.action);
+  });
+
+  it('duplicate RUN_START from W2 is a no-op, state stays W2', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    const result = sim.dispatch({ type: 'RUN_START', override: 'auto' });
+    expect(result.state).toBe('W2');
+    expect(result.animate).toBe(false);
+    expect(sim.focusState).toBe('W2');
+  });
+
+  it('repeated run-start signals do not accumulate animation timers', () => {
+    const sim = new AppShellFocusSimulator(false);
+
+    // First run start
+    sim.onRunStateChange(true); // W0 -> W1
+    expect(sim.hideTimerActive).toBe(true);
+
+    // Duplicate dispatch at reducer level (no-op)
+    sim.dispatch({ type: 'RUN_START', override: 'auto' });
+    // Timer state unchanged — the simulator only sets hideTimerActive on animate=true
+    expect(sim.focusState).toBe('W1');
+    expect(sim.hideTimerActive).toBe(true);
+  });
+});
+
+// ============================================================================
+// T6-AC2: Explicit reopen during in-flight/hidden focused states and
+//         explicit hide from W3 to W2 with override clearing
+// ============================================================================
+
+describe('T6-AC2: integrated reopen during in-flight W1 with Header controls', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('reopen from W1 via Header: sidebar visible, Header shows "Hide Sidebar", override "open" persisted', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W0 -> W1
+
+    // Simulate Header reopen action
+    sim.onUserReopen(); // W1 -> W3
+    expect(sim.focusState).toBe('W3');
+    expect(sim.sidebarVisible).toBe(true);
+    expect(sim.animatingHide).toBe(false);
+    expect(sim.hideTimerActive).toBe(false);
+    expect(readRunOverride()).toBe('open');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Hide Sidebar');
+    expect(header.action).toBe('hide');
+  });
+
+  it('reopen from W1 cancels animation classes on sidebar and layout', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W1
+    expect(sim.sidebarClasses).toContain('sidebar-hiding');
+    expect(sim.layoutClasses).toContain('layout-focusing');
+
+    sim.onUserReopen(); // W1 -> W3
+    expect(sim.sidebarClasses).not.toContain('sidebar-hiding');
+    expect(sim.sidebarClasses).not.toContain('sidebar-hidden');
+    expect(sim.layoutClasses).not.toContain('layout-focusing');
+    expect(sim.layoutClasses).not.toContain('layout-focused');
+  });
+});
+
+describe('T6-AC2: integrated reopen during hidden W2 with Header controls', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('reopen from W2 via Header: sidebar visible, override "open" persisted', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    sim.onUserReopen(); // W2 -> W3
+    expect(sim.focusState).toBe('W3');
+    expect(sim.sidebarVisible).toBe(true);
+    expect(readRunOverride()).toBe('open');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.label).toBe('Hide Sidebar');
+  });
+
+  it('reopen from W2 removes hidden CSS classes', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
+
+    sim.onUserReopen(); // W2 -> W3
+    expect(sim.sidebarClasses).not.toContain('sidebar-hidden');
+    expect(sim.layoutClasses).not.toContain('layout-focused');
+  });
+});
+
+describe('T6-AC2: integrated hide from W3 to W2 with override clearing', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('hide from W3 via Header: transitions to W2, clears override, Header updates', () => {
+    writeRunOverride('open');
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W0 -> W3 (override "open")
+    expect(sim.focusState).toBe('W3');
+
+    // Simulate Header hide action
+    sim.onUserHide(); // W3 -> W2
+    expect(sim.focusState).toBe('W2');
+    expect(sim.sidebarVisible).toBe(false);
+    expect(sim.animatingHide).toBe(false);
+    expect(readRunOverride()).toBe('auto');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('hide from W3 does not replay run-start animation (no W1 step)', () => {
+    writeRunOverride('open');
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W3
+
+    sim.onUserHide(); // W3 -> W2 (direct)
+    expect(sim.focusState).toBe('W2');
+    expect(sim.animatingHide).toBe(false);
+    expect(sim.sidebarClasses).not.toContain('sidebar-hiding');
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+  });
+
+  it('reopen-then-hide round-trip: W2 -> W3 -> W2 with correct overrides', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    // Header reopen
+    sim.onUserReopen(); // W2 -> W3
+    expect(sim.focusState).toBe('W3');
+    expect(readRunOverride()).toBe('open');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Hide Sidebar');
+
+    // Header hide
+    sim.onUserHide(); // W3 -> W2
+    expect(sim.focusState).toBe('W2');
+    expect(readRunOverride()).toBe('auto');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+  });
+
+  it('multiple reopen-hide cycles maintain correct state', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    for (let i = 0; i < 3; i++) {
+      sim.onUserReopen(); // W2 -> W3
+      expect(sim.focusState).toBe('W3');
+      expect(readRunOverride()).toBe('open');
+      expect(deriveHeaderControl(sim.focusState).label).toBe('Hide Sidebar');
+
+      sim.onUserHide(); // W3 -> W2
+      expect(sim.focusState).toBe('W2');
+      expect(readRunOverride()).toBe('auto');
+      expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+    }
+  });
+});
+
+// ============================================================================
+// T6-AC3: Completion/restart behavior (W2 -> W4, W4 -> W2) without
+//         replaying run-start animation
+// ============================================================================
+
+describe('T6-AC3: integrated completion W2 -> W4 with Header controls', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('run end from W2: transitions to W4, sidebar stays hidden, Header shows "Show Sidebar"', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+    sim.onRunStateChange(false); // W2 -> W4
+
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('W4 sticky hidden persists until explicit reopen via Header', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+
+    // Sidebar remains hidden (no auto-reopen)
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+
+    // Explicit reopen via Header
+    sim.onUserReopen(); // W4 -> W0
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+    expect(readRunOverride()).toBe('auto');
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(false);
+  });
+});
+
+describe('T6-AC3: integrated restart W4 -> W2 without animation replay', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('new run from W4: transitions directly to W2, no W1 animation step', () => {
+    const sim = new AppShellFocusSimulator(false);
+    // Get to W4
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+
+    // New run starts
+    const result = sim.onRunStateChange(true); // W4 -> W2
+    expect(sim.focusState).toBe('W2');
+    expect(result?.animate).toBe(false);
+    expect(sim.hideTimerActive).toBe(false);
+    expect(sim.animatingHide).toBe(false);
+  });
+
+  it('W4 -> W2 restart: no animation CSS classes applied', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+
+    sim.onRunStateChange(true); // W4 -> W2
+    expect(sim.sidebarClasses).not.toContain('sidebar-hiding');
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).not.toContain('layout-focusing');
+    expect(sim.layoutClasses).toContain('layout-focused');
+  });
+
+  it('W4 -> W2 restart: Header control stays "Show Sidebar"', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+
+    sim.onRunStateChange(true); // W4 -> W2
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('full cycle: W0 -> W1 -> W2 -> W4 -> W2 -> W4 -> W0 with Header controls at each step', () => {
+    const sim = new AppShellFocusSimulator(false);
+
+    // W0: idle
+    expect(sim.focusState).toBe('W0');
+    expect(deriveHeaderControl(sim.focusState).showFocusControl).toBe(false);
+
+    // First run: W0 -> W1 -> W2
+    sim.onRunStateChange(true);
+    expect(sim.focusState).toBe('W1');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+    sim.onHideTransitionEnd();
+    expect(sim.focusState).toBe('W2');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+
+    // Run ends: W2 -> W4
+    sim.onRunStateChange(false);
+    expect(sim.focusState).toBe('W4');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+
+    // Second run from sticky hidden: W4 -> W2 (no animation)
+    const restartResult = sim.onRunStateChange(true);
+    expect(sim.focusState).toBe('W2');
+    expect(restartResult?.animate).toBe(false);
+    expect(sim.animatingHide).toBe(false);
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Show Sidebar');
+
+    // Second run ends: W2 -> W4
+    sim.onRunStateChange(false);
+    expect(sim.focusState).toBe('W4');
+
+    // Explicit reopen via Header: W4 -> W0
+    sim.onUserReopen();
+    expect(sim.focusState).toBe('W0');
+    expect(deriveHeaderControl(sim.focusState).showFocusControl).toBe(false);
+    expect(sim.sidebarVisible).toBe(true);
+  });
+
+  it('W4 -> W2 -> W4 consecutive restarts: never enters W1', () => {
+    const sim = new AppShellFocusSimulator(false);
+    // Initial run to reach W4
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false);
+    expect(sim.focusState).toBe('W4');
+
+    // Three consecutive restart cycles from W4
+    for (let i = 0; i < 3; i++) {
+      const result = sim.onRunStateChange(true); // W4 -> W2
+      expect(sim.focusState).toBe('W2');
+      expect(result?.animate).toBe(false);
+      expect(sim.animatingHide).toBe(false);
+
+      sim.onRunStateChange(false); // W2 -> W4
+      expect(sim.focusState).toBe('W4');
+    }
+  });
+
+  it('reopen during W2 after restart from W4: transitions to W3 with override', () => {
+    const sim = new AppShellFocusSimulator(false);
+    // Get to W4, then restart
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+    sim.onRunStateChange(true); // W4 -> W2
+
+    // Reopen during the restarted run
+    sim.onUserReopen(); // W2 -> W3
+    expect(sim.focusState).toBe('W3');
+    expect(readRunOverride()).toBe('open');
+    expect(deriveHeaderControl(sim.focusState).label).toBe('Hide Sidebar');
+
+    // Run ends from W3: back to W0
+    sim.onRunStateChange(false);
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+  });
+});

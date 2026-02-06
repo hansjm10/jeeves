@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/core" },
+    { "path": "./packages/mcp-pruner" },
     { "path": "./packages/runner" },
     { "path": "./packages/cli" },
     { "path": "./apps/viewer-server" },

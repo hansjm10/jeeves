@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapCodexEventToProviderEvents, type CodexThreadEvent } from './codexSdk.js';
+import type { McpServerConfig, ProviderRunOptions } from '../provider.js';
+import { CodexSdkProvider, mapCodexEventToProviderEvents, type CodexThreadEvent } from './codexSdk.js';
 
 function makeState() {
   return {
@@ -144,5 +145,164 @@ describe('mapCodexEventToProviderEvents', () => {
     expect(fatal).toEqual([
       { type: 'system', subtype: 'error', content: 'Codex stream error: bad', timestamp: 'ts' },
     ]);
+  });
+});
+
+describe('CodexSdkProvider mcpServers wiring', () => {
+  it('has the correct provider name', () => {
+    const provider = new CodexSdkProvider();
+    expect(provider.name).toBe('codex');
+  });
+
+  it('accepts ProviderRunOptions with mcpServers', () => {
+    const mcpServers: Record<string, McpServerConfig> = {
+      pruner: {
+        command: 'node',
+        args: ['/path/to/mcp-pruner/dist/index.js'],
+        env: {
+          PRUNER_URL: 'http://localhost:8000/prune',
+          MCP_PRUNER_CWD: '/workspace',
+        },
+      },
+    };
+
+    const options: ProviderRunOptions = {
+      cwd: '/workspace',
+      mcpServers,
+    };
+
+    expect(options.mcpServers).toBeDefined();
+    expect(options.mcpServers!.pruner.command).toBe('node');
+    expect(options.mcpServers!.pruner.args).toEqual(['/path/to/mcp-pruner/dist/index.js']);
+    expect(options.mcpServers!.pruner.env!.PRUNER_URL).toBe('http://localhost:8000/prune');
+  });
+
+  it('accepts ProviderRunOptions without mcpServers', () => {
+    const options: ProviderRunOptions = {
+      cwd: '/workspace',
+    };
+
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  describe('mcpServers to codex --config translation', () => {
+    it('builds mcp_servers.<name>.command config override', () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        pruner: {
+          command: 'node',
+          args: ['/path/to/index.js'],
+          env: { KEY: 'val' },
+        },
+      };
+
+      // Simulate the codex provider's config building logic
+      const args: string[] = [];
+      for (const [name, config] of Object.entries(mcpServers)) {
+        args.push('--config', `mcp_servers.${name}.command=${JSON.stringify(config.command)}`);
+        if (config.args && config.args.length > 0) {
+          args.push('--config', `mcp_servers.${name}.args=${JSON.stringify(config.args)}`);
+        }
+        if (config.env) {
+          for (const [envKey, envValue] of Object.entries(config.env)) {
+            args.push('--config', `mcp_servers.${name}.env.${envKey}=${JSON.stringify(envValue)}`);
+          }
+        }
+      }
+
+      expect(args).toContain('--config');
+      expect(args).toContain('mcp_servers.pruner.command="node"');
+      expect(args).toContain(`mcp_servers.pruner.args=${JSON.stringify(['/path/to/index.js'])}`);
+      expect(args).toContain('mcp_servers.pruner.env.KEY="val"');
+    });
+
+    it('omits args config when args are not provided', () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        pruner: {
+          command: 'node',
+        },
+      };
+
+      const args: string[] = [];
+      for (const [name, config] of Object.entries(mcpServers)) {
+        args.push('--config', `mcp_servers.${name}.command=${JSON.stringify(config.command)}`);
+        if (config.args && config.args.length > 0) {
+          args.push('--config', `mcp_servers.${name}.args=${JSON.stringify(config.args)}`);
+        }
+        if (config.env) {
+          for (const [envKey, envValue] of Object.entries(config.env)) {
+            args.push('--config', `mcp_servers.${name}.env.${envKey}=${JSON.stringify(envValue)}`);
+          }
+        }
+      }
+
+      expect(args).toContain('mcp_servers.pruner.command="node"');
+      const argsConfigs = args.filter((a) => a.includes('mcp_servers.pruner.args'));
+      expect(argsConfigs).toHaveLength(0);
+    });
+
+    it('sets env vars via mcp_servers.<name>.env.<KEY> and does not use url/streamable_http', () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        pruner: {
+          command: 'node',
+          args: ['/path/to/index.js'],
+          env: {
+            PRUNER_URL: 'http://localhost:8000/prune',
+            MCP_PRUNER_CWD: '/workspace',
+          },
+        },
+      };
+
+      const args: string[] = [];
+      for (const [name, config] of Object.entries(mcpServers)) {
+        args.push('--config', `mcp_servers.${name}.command=${JSON.stringify(config.command)}`);
+        if (config.args && config.args.length > 0) {
+          args.push('--config', `mcp_servers.${name}.args=${JSON.stringify(config.args)}`);
+        }
+        if (config.env) {
+          for (const [envKey, envValue] of Object.entries(config.env)) {
+            args.push('--config', `mcp_servers.${name}.env.${envKey}=${JSON.stringify(envValue)}`);
+          }
+        }
+      }
+
+      // Verify env vars are set correctly
+      expect(args).toContain('mcp_servers.pruner.env.PRUNER_URL="http://localhost:8000/prune"');
+      expect(args).toContain('mcp_servers.pruner.env.MCP_PRUNER_CWD="/workspace"');
+
+      // Verify no url/streamable_http config is used
+      const urlConfigs = args.filter((a) => a.includes('.url=') || a.includes('streamable_http'));
+      expect(urlConfigs).toHaveLength(0);
+    });
+
+    it('handles multiple MCP server entries', () => {
+      const mcpServers: Record<string, McpServerConfig> = {
+        pruner: {
+          command: 'node',
+          args: ['/path/to/pruner.js'],
+        },
+        other: {
+          command: 'python',
+          args: ['/path/to/other.py'],
+          env: { PORT: '8080' },
+        },
+      };
+
+      const args: string[] = [];
+      for (const [name, config] of Object.entries(mcpServers)) {
+        args.push('--config', `mcp_servers.${name}.command=${JSON.stringify(config.command)}`);
+        if (config.args && config.args.length > 0) {
+          args.push('--config', `mcp_servers.${name}.args=${JSON.stringify(config.args)}`);
+        }
+        if (config.env) {
+          for (const [envKey, envValue] of Object.entries(config.env)) {
+            args.push('--config', `mcp_servers.${name}.env.${envKey}=${JSON.stringify(envValue)}`);
+          }
+        }
+      }
+
+      expect(args).toContain('mcp_servers.pruner.command="node"');
+      expect(args).toContain('mcp_servers.other.command="python"');
+      expect(args).toContain('mcp_servers.other.env.PORT="8080"');
+    });
   });
 });

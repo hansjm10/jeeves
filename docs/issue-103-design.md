@@ -181,7 +181,7 @@ All mutating operations run under a per-issue mutex so only one credential/inges
 | `cred.validating` | Invalid org/project/PAT payload | `cred.done_error` | Return 400 with field-level validation errors; log sanitized details. |
 | `cred.validating` | Per-issue mutex timeout | `cred.done_error` | Return 503 `busy`; log concurrency timeout and operation id. |
 | `cred.persisting_secret` | Secret file write/delete permission or IO failure | `cred.done_error` | Abort operation; log sanitized FS error; keep old secret unchanged. |
-| `cred.reconciling_worktree` | Worktree reconcile warning (env/exclude update partially failed) | `cred.recording_status` | Continue with warning; record `sync_status=warning` and warning list. |
+| `cred.reconciling_worktree` | Worktree reconcile warning (env/exclude update partially failed) | `cred.recording_status` | Continue with warning; record exact reconcile status code (`failed_exclude`, `failed_env_write`, or `failed_env_delete`) and warning list. |
 | `cred.reconciling_worktree` | Fatal reconcile exception (path resolution or unrecoverable FS failure) | `cred.done_error` | Abort; log sanitized fatal error. |
 | `cred.recording_status` | `issue.json` status update failure | `cred.done_error` | Emit fallback error event and leave prior status as last known good. |
 | `ingest.validating` | Invalid payload, run conflict, missing Azure credentials | `ingest.done_error` | Return 400/409; log sanitized validation/conflict reason. |

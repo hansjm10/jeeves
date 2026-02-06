@@ -18,6 +18,9 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 - [ ] (G4) Persist a user override for sidebar visibility during runs across page reloads/sessions.
 - [ ] (G5) When a run starts with override `"auto"`, animate sidebar hide/content expansion inside a 150-200ms envelope.
 - [ ] (G6) Require repository quality gates (`pnpm lint`, `pnpm typecheck`, `pnpm test`) to pass before implementation sign-off.
+- [ ] (G7) Provide a focused-mode Header `Show Sidebar` control so users can explicitly reopen from hidden states.
+- [ ] (G8) Preserve readable, non-overlapping focused-mode controls and context-strip content at tablet/mobile breakpoints.
+- [ ] (G9) Keep all style changes compliant with the viewer design token system in `apps/viewer/CLAUDE.md`.
 
 ### Issue Acceptance Criteria Mapping
 | Issue acceptance criterion | Design coverage |
@@ -27,6 +30,9 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 | Edge-case transitions are deterministic (animation in-flight, refresh mid-run, websocket reconnection, manual-hide/run-restart transitions) | Section 2 transitions `TR7`-`TR9` and Edge Cases `EC1`-`EC4`; Section 5 tasks `T1`/`T2`; Section 6 scenario checks |
 | Run context keeps stop controls in Watch and persists run override | G3, G4; Sections 4 and 5 tasks `T1`/`T3`; Section 6 automated + manual checks |
 | Completion outcome badge semantics are deterministic (`Complete` vs `Error`) | G3; Section 5 task `T3` acceptance criteria + semantic mapping; Section 6 badge-semantic assertions |
+| Header provides focused-mode `Show Sidebar` control for explicit reopen | G7; Section 2 transitions `TR3`/`TR6`; Section 5 task `T2`; Section 6 automated/manual focused-toggle checks |
+| Responsive/mobile behavior remains correct in focused mode | G8; Section 5 task `T4`; Section 6 responsive manual checks (`<=900px`, `<=768px`) |
+| Styling follows design token system constraints | G9; Section 5 task `T4`; Section 6 style compliance checks (token usage and no `color-mix()`) |
 | Quality checks pass (`pnpm lint && pnpm typecheck && pnpm test`) | G6; Section 5 task `T5`; Section 6 post-implementation checks |
 
 ### Non-Goals
@@ -155,6 +161,9 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
   4. (G4) Persist run-time sidebar override across reloads/sessions.
   5. (G5) Apply a 150-200ms run-start hide/expand animation when override is `"auto"`.
   6. (G6) Ensure workspace quality gates pass (`pnpm lint`, `pnpm typecheck`, `pnpm test`) before handoff.
+  7. (G7) Provide a focused-mode Header `Show Sidebar` control for explicit reopen.
+  8. (G8) Preserve responsive/mobile readability and non-overlap for focused-mode controls.
+  9. (G9) Enforce design-token-system compliance for all styling changes.
 - **Workflow from Section 2**:
   - UI states `W0`-`W4`, transitions `TR1`-`TR9`, and required edge cases `EC1`-`EC4`.
   - No backend viewer-server workflow/state-machine contract changes.
@@ -173,6 +182,9 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
 | G4: Persist run-time sidebar override across sessions | T1, T2 |
 | G5: Run-start animation timing target (150-200ms) | T2, T4 |
 | G6: Quality checks pass (`pnpm lint`, `pnpm typecheck`, `pnpm test`) | T5 |
+| G7: Focused-mode Header `Show Sidebar` control | T2 |
+| G8: Responsive/mobile behavior remains correct | T4 |
+| G9: Design-token-system compliance | T4 |
 
 ### Completion Outcome Semantic Mapping
 | Condition (run ended and `completion_reason` is present) | Badge label |
@@ -210,7 +222,7 @@ T5 → depends on T4
 | T2 | AppShell focused-mode wiring | Wire AppShell + Header to run the 150-200ms run-start hide transition and required transition overrides. | `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/layout/Header.tsx`, `apps/viewer/src/layout/AppShell.test.ts` | `W0 -> W1 -> W2` uses 150-200ms timing; explicit reopen sets override `"open"`; explicit hide in `W3` clears override to `"auto"` and enters `W2` directly; run start from `W4` enters `W2` without animation. |
 | T3 | Watch run-context controls | Add Stop action during active runs and completion outcome badge after runs end in the Watch context strip. | `apps/viewer/src/pages/WatchPage.tsx`, `apps/viewer/src/pages/WatchPage.test.ts` | Stop button is visible only while running and calls stop mutation; completion badge maps deterministically to `Complete` vs `Error` (not only presence of `completion_reason`); tests cover semantic mapping and reason formatting. |
 | T4 | Focused-mode styling + integration polish | Add/adjust shared + Watch styles for focused layout, animation timing token wiring, and run-context action/badge presentation across desktop/mobile. | `apps/viewer/src/styles/tokens.css`, `apps/viewer/src/styles.css`, `apps/viewer/src/pages/WatchPage.css`, `apps/viewer/src/pages/WatchPage.tsx` | Sidebar hide transition token is set within 150-200ms and applied to focused-mode classes; hidden sidebar consumes no layout width; Watch context controls wrap without overflow on tablet/mobile; style changes use tokens/RGBA overlays only. |
-| T5 | Workspace quality-gate verification | Execute repository quality gates after implementation to satisfy the issue-level delivery requirement. | N/A (workspace command validation) | `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass in the same post-implementation verification cycle; failures are captured and block sign-off until resolved. |
+| T5 | Workspace quality-gate verification | Execute repository quality gates after implementation to satisfy the issue-level delivery requirement. | `.jeeves/progress.txt`, `.jeeves/last-run.log` | `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass in the same post-implementation verification cycle; failures are captured and block sign-off until resolved; pass/fail evidence is recorded in `.jeeves/progress.txt` and command output is available in `.jeeves/last-run.log`. |
 
 ### Task Details
 
@@ -280,12 +292,14 @@ T5 → depends on T4
 **T5: Workspace quality-gate verification**
 - Summary: Run and record repository-level quality checks required by the issue before implementation handoff.
 - Files:
-  - N/A (validation-only task; no source-file changes required).
+  - `.jeeves/progress.txt` - append timestamped quality-gate execution summary (commands run + pass/fail).
+  - `.jeeves/last-run.log` - retain command output for `pnpm lint`, `pnpm typecheck`, and `pnpm test`.
 - Acceptance Criteria:
   1. `pnpm lint` passes with no errors.
   2. `pnpm typecheck` passes with no errors.
   3. `pnpm test` passes.
   4. Any failure in these commands blocks completion until fixed and rerun.
+  5. Quality-gate evidence is written to `.jeeves/progress.txt` with corresponding command output present in `.jeeves/last-run.log`.
 - Dependencies: T4
 - Verification: `pnpm lint && pnpm typecheck && pnpm test`
 
@@ -298,6 +312,7 @@ T5 → depends on T4
 
 ### Post-Implementation Checks
 - [ ] Workspace quality-gate sequence passes: `pnpm lint && pnpm typecheck && pnpm test`
+- [ ] Quality-gate evidence is recorded in `.jeeves/progress.txt` and corresponding command output is present in `.jeeves/last-run.log`.
 - [ ] Types check: `pnpm typecheck`
 - [ ] Lint passes: `pnpm lint`
 - [ ] All tests pass: `pnpm test`

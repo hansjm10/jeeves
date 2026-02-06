@@ -4285,3 +4285,922 @@ describe('sonar-token endpoints', () => {
     });
   });
 });
+
+// ============================================================================
+// Azure DevOps credential endpoints (T5)
+// ============================================================================
+
+describe('azure-devops credential endpoints', () => {
+  it('GET /api/issue/azure-devops returns 400 when no issue selected', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-noissue-get-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-noissue-get-');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/azure-devops',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, code: 'no_issue_selected' });
+
+    await app.close();
+  });
+
+  it('GET /api/issue/azure-devops returns status with has_pat=false when no secret exists', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-get-nopat-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-get-nopat-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/issue/azure-devops',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.has_pat).toBe(false);
+    expect(body.configured).toBe(false);
+    expect(body.organization).toBeNull();
+    expect(body.project).toBeNull();
+    expect(body.pat_env_var_name).toBe('AZURE_DEVOPS_EXT_PAT');
+    expect(body.sync_status).toBe('in_sync');
+    expect(body.worktree_present).toBe(false);
+    // PAT value should never be present
+    expect((body as Record<string, unknown>).pat).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/azure-devops saves credentials and returns status with has_pat=true', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-put-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-put-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'my-secret-pat-value',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+
+    const status = body.status as Record<string, unknown>;
+    expect(status.has_pat).toBe(true);
+    expect(status.configured).toBe(true);
+    expect(status.organization).toBe('https://dev.azure.com/myorg');
+    expect(status.project).toBe('MyProject');
+    expect(status.pat_env_var_name).toBe('AZURE_DEVOPS_EXT_PAT');
+    // PAT value should NEVER be in response
+    expect(status.pat).toBeUndefined();
+    expect((body as Record<string, unknown>).pat).toBeUndefined();
+
+    // Verify .env.jeeves was created with the PAT env var
+    const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+    expect(envContent).toContain('AZURE_DEVOPS_EXT_PAT=');
+
+    // Verify GET returns the same status
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/issue/azure-devops',
+    });
+    expect(getRes.statusCode).toBe(200);
+    const getBody = getRes.json() as Record<string, unknown>;
+    expect(getBody.has_pat).toBe(true);
+    expect(getBody.configured).toBe(true);
+    expect(getBody.pat).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/azure-devops returns 403 from non-local address', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-put-forbidden-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-put-forbidden-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '192.168.1.100',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, code: 'forbidden' });
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/azure-devops returns 400 with field_errors for invalid organization', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-put-invalid-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-put-invalid-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: '',  // invalid
+        project: 'MyProject',
+        pat: 'test-pat',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe('validation_failed');
+    expect(body.field_errors).toBeDefined();
+    const fieldErrors = body.field_errors as Record<string, string>;
+    expect(fieldErrors.organization).toBeDefined();
+
+    await app.close();
+  });
+
+  it('PUT /api/issue/azure-devops sets deferred_worktree_absent when no worktree', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-put-noworktree-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-put-noworktree-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    // No worktree dir created
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    const status = body.status as Record<string, unknown>;
+    expect(status.sync_status).toBe('deferred_worktree_absent');
+    expect(status.has_pat).toBe(true);
+
+    await app.close();
+  });
+
+  it('DELETE /api/issue/azure-devops removes credentials and returns updated=true', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-delete-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-delete-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First PUT credentials
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'my-secret-pat',
+      },
+    });
+    expect(putRes.statusCode).toBe(200);
+
+    // Now DELETE
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+
+    const status = body.status as Record<string, unknown>;
+    expect(status.has_pat).toBe(false);
+    expect(status.configured).toBe(false);
+    expect(status.organization).toBeNull();
+    expect(status.project).toBeNull();
+    // PAT should not be in response
+    expect(status.pat).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('DELETE /api/issue/azure-devops is idempotent (returns updated=false when no secret)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-delete-idempotent-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-delete-idempotent-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(false);
+
+    await app.close();
+  });
+
+  it('POST /api/issue/azure-devops/reconcile returns updated=false and skips when in_sync', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-reconcile-insync-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-reconcile-insync-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // PUT credentials first (establishes in_sync after reconcile)
+    await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat',
+      },
+    });
+
+    // Now reconcile should skip (already in_sync)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/azure-devops/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(false);
+    expect((body.warnings as string[])).toContain('Already in sync; use force=true to re-run reconciliation.');
+
+    await app.close();
+  });
+
+  it('POST /api/issue/azure-devops/reconcile with force=true re-runs reconciliation', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-reconcile-force-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-reconcile-force-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // PUT credentials first
+    await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat',
+      },
+    });
+
+    // Force reconcile even though in_sync
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/azure-devops/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: { force: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(false);  // reconcile never changes credential presence
+    const status = body.status as Record<string, unknown>;
+    expect(status.sync_status).toBe('in_sync');
+
+    await app.close();
+  });
+
+  it('PATCH /api/issue/azure-devops updates organization without touching pat', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-patch-org-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-patch-org-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First PUT full credentials
+    await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/origorg',
+        project: 'OrigProject',
+        pat: 'original-pat',
+      },
+    });
+
+    // PATCH only organization
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/neworg',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+
+    const status = body.status as Record<string, unknown>;
+    expect(status.organization).toBe('https://dev.azure.com/neworg');
+    expect(status.project).toBe('OrigProject');
+    expect(status.has_pat).toBe(true);  // PAT preserved
+    expect(status.pat).toBeUndefined();  // PAT never exposed
+
+    await app.close();
+  });
+
+  it('PATCH /api/issue/azure-devops with clear_pat deletes secret but keeps org/project', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-patch-clearpat-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-patch-clearpat-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // First PUT full credentials
+    await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'secret-pat-value',
+      },
+    });
+
+    // PATCH with clear_pat
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        clear_pat: true,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+
+    const status = body.status as Record<string, unknown>;
+    expect(status.has_pat).toBe(false);
+    // Organization and project should be preserved in status
+    expect(status.organization).toBe('https://dev.azure.com/myorg');
+    expect(status.project).toBe('MyProject');
+
+    await app.close();
+  });
+
+  it('PATCH /api/issue/azure-devops returns 400 when both pat and clear_pat sent', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-patch-conflict-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-patch-conflict-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        pat: 'some-value',
+        clear_pat: true,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe('validation_failed');
+
+    await app.close();
+  });
+
+  it('emits azure-devops-status event after PUT', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-event-put-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-event-put-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    // Connect via WebSocket
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    // Wait for initial events
+    await new Promise((r) => setTimeout(r, 100));
+
+    // PUT Azure credentials
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'event-test-pat',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Wait for event
+    await waitFor(() => receivedEvents.some((e) => e.event === 'azure-devops-status'));
+
+    const azureEvent = receivedEvents.find((e) => e.event === 'azure-devops-status');
+    expect(azureEvent).toBeDefined();
+    const eventData = azureEvent!.data as Record<string, unknown>;
+    expect(eventData.has_pat).toBe(true);
+    expect(eventData.operation).toBe('put');
+    expect(eventData.configured).toBe(true);
+    // PAT value should NEVER be in the event
+    expect(eventData.pat).toBeUndefined();
+
+    ws.close();
+    await app.close();
+  });
+
+  it('/api/issues/select triggers Azure auto-reconcile and emits azure-devops-status', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-select-autoreconcile-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-select-autoreconcile-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    // Connect via WebSocket
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Select the issue
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueRef },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Wait for azure-devops-status event from auto-reconcile
+    await waitFor(() => receivedEvents.some((e) => e.event === 'azure-devops-status'));
+
+    const azureEvent = receivedEvents.find((e) => e.event === 'azure-devops-status');
+    expect(azureEvent).toBeDefined();
+    const eventData = azureEvent!.data as Record<string, unknown>;
+    expect(eventData.operation).toBe('auto_reconcile');
+    expect(eventData.has_pat).toBe(false);
+
+    ws.close();
+    await app.close();
+  });
+
+  describe('Azure DevOps mutex 503 busy (deterministic with fake timers)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('returns 503 busy after timeout when Azure DevOps mutex is held during PUT', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-azure-busy-put-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-azure-busy-put-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      // Hold the mutex
+      const mutex = await __test__.acquireAzureDevopsMutex(issueRef);
+
+      try {
+        const putPromise = app.inject({
+          method: 'PUT',
+          url: '/api/issue/azure-devops',
+          remoteAddress: '127.0.0.1',
+          payload: {
+            organization: 'https://dev.azure.com/myorg',
+            project: 'MyProject',
+            pat: 'test-pat',
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(1501);
+
+        const res = await putPromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+
+    it('returns 503 busy after timeout when Azure DevOps mutex is held during DELETE', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-azure-busy-del-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-azure-busy-del-');
+      const owner = 'testorg';
+      const repo = 'testrepo';
+      const issueRef = `${owner}/${repo}#42`;
+      const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+      const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(worktreeDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+      await git(['init'], { cwd: worktreeDir });
+
+      const { app, __test__ } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+        initialIssue: issueRef,
+      });
+
+      const mutex = await __test__.acquireAzureDevopsMutex(issueRef);
+
+      try {
+        const deletePromise = app.inject({
+          method: 'DELETE',
+          url: '/api/issue/azure-devops',
+          remoteAddress: '127.0.0.1',
+        });
+
+        await vi.advanceTimersByTimeAsync(1501);
+
+        const res = await deletePromise;
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+      } finally {
+        mutex.release();
+      }
+
+      await app.close();
+    });
+  });
+
+  it('responses never contain PAT values across all Azure endpoints', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-azure-pat-safe-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-azure-pat-safe-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+    });
+
+    const patValue = 'my-super-secret-pat-12345';
+
+    // PUT
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: patValue,
+      },
+    });
+    expect(putRes.statusCode).toBe(200);
+    expect(putRes.payload).not.toContain(patValue);
+
+    // GET
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/issue/azure-devops',
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.payload).not.toContain(patValue);
+
+    // PATCH
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        project: 'UpdatedProject',
+      },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.payload).not.toContain(patValue);
+
+    // RECONCILE
+    const reconcileRes = await app.inject({
+      method: 'POST',
+      url: '/api/issue/azure-devops/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: { force: true },
+    });
+    expect(reconcileRes.statusCode).toBe(200);
+    expect(reconcileRes.payload).not.toContain(patValue);
+
+    // DELETE
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(deleteRes.statusCode).toBe(200);
+    expect(deleteRes.payload).not.toContain(patValue);
+
+    await app.close();
+  });
+});

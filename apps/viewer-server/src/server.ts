@@ -23,6 +23,19 @@ import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
+import { reconcileAzureDevopsToWorktree } from './azureDevopsReconcile.js';
+import { readAzureDevopsSecret, writeAzureDevopsSecret, deleteAzureDevopsSecret, AzureDevopsSecretReadError } from './azureDevopsSecret.js';
+import {
+  validatePutAzureDevopsRequest,
+  validatePatchAzureDevopsRequest,
+  validateReconcileAzureDevopsRequest,
+  sanitizePatFromMessage,
+  AZURE_PAT_ENV_VAR_NAME,
+  type AzureDevopsStatus,
+  type AzureDevopsSyncStatus,
+  type AzureDevopsStatusEvent,
+  type AzureDevopsOperation,
+} from './azureDevopsTypes.js';
 import { reconcileSonarTokenToWorktree } from './sonarTokenReconcile.js';
 import { readSonarTokenSecret, writeSonarTokenSecret, deleteSonarTokenSecret, SonarTokenSecretReadError } from './sonarTokenSecret.js';
 import {
@@ -385,6 +398,8 @@ export type ViewerServerConfig = Readonly<{
   createGitHubIssue?: CreateGitHubIssueAdapter;
   /** Mutex timeout for sonar token operations (ms). Default: 1500. For testing only. */
   sonarTokenMutexTimeoutMs?: number;
+  /** Mutex timeout for Azure DevOps credential operations (ms). Default: 1500. For testing only. */
+  azureDevopsMutexTimeoutMs?: number;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -469,6 +484,56 @@ export async function buildServer(config: ViewerServerConfig) {
 
     if (mutex.waiters.length > 0) {
       // Pass to next waiter
+      const next = mutex.waiters.shift();
+      if (next) next(true);
+    } else {
+      mutex.locked = false;
+    }
+  }
+
+  // ── Azure DevOps credential mutex (same pattern as sonar token) ──
+  const AZURE_DEVOPS_MUTEX_TIMEOUT_MS = config.azureDevopsMutexTimeoutMs ?? 1500;
+  const azureDevopsMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
+
+  /**
+   * Acquire a per-issue mutex for Azure DevOps credential operations.
+   * Returns true if acquired, false on timeout.
+   */
+  async function acquireAzureDevopsMutex(issueRef: string): Promise<boolean> {
+    let mutex = azureDevopsMutexes.get(issueRef);
+    if (!mutex) {
+      mutex = { locked: false, waiters: [] };
+      azureDevopsMutexes.set(issueRef, mutex);
+    }
+
+    if (!mutex.locked) {
+      mutex.locked = true;
+      return true;
+    }
+
+    // Wait for mutex with timeout
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        const idx = mutex!.waiters.indexOf(waiterCallback);
+        if (idx !== -1) mutex!.waiters.splice(idx, 1);
+        resolve(false);
+      }, AZURE_DEVOPS_MUTEX_TIMEOUT_MS);
+
+      const waiterCallback = (acquired: boolean) => {
+        clearTimeout(timer);
+        resolve(acquired);
+      };
+
+      mutex!.waiters.push(waiterCallback);
+    });
+  }
+
+  /** Release Azure DevOps mutex for issue. */
+  function releaseAzureDevopsMutex(issueRef: string): void {
+    const mutex = azureDevopsMutexes.get(issueRef);
+    if (!mutex) return;
+
+    if (mutex.waiters.length > 0) {
       const next = mutex.waiters.shift();
       if (next) next(true);
     } else {
@@ -620,6 +685,16 @@ export async function buildServer(config: ViewerServerConfig) {
       // (e.g., disk full, permission errors on writeIssueJson)
       console.error(
         'Startup sonar token reconcile failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    // Startup Azure DevOps reconcile (best-effort, non-fatal)
+    try {
+      await autoReconcileAzureDevops(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    } catch (err) {
+      console.error(
+        'Startup Azure DevOps reconcile failed (non-fatal):',
         err instanceof Error ? err.message : String(err),
       );
     }
@@ -1253,6 +1328,11 @@ export async function buildServer(config: ViewerServerConfig) {
 	        } catch {
 	          // Non-fatal - ignore reconcile errors
 	        }
+	        try {
+	          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
 	      }
 
 	      return reply.send({ ok: true, issue_ref: issueRef });
@@ -1304,6 +1384,11 @@ export async function buildServer(config: ViewerServerConfig) {
 	      if (issue.issueRef && issue.stateDir) {
 	        try {
 	          await autoReconcileSonarToken(issue.issueRef, issue.stateDir, issue.workDir);
+	        } catch {
+	          // Non-fatal - ignore reconcile errors
+	        }
+	        try {
+	          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
 	        } catch {
 	          // Non-fatal - ignore reconcile errors
 	        }
@@ -1802,6 +1887,222 @@ export async function buildServer(config: ViewerServerConfig) {
     emitSonarTokenStatus(status);
   }
 
+  // ── Azure DevOps credential status helpers ──
+
+  /**
+   * Build the current Azure DevOps credential status for an issue.
+   * Reads secret file + issue.json status to produce the full status object.
+   */
+  async function buildAzureDevopsStatus(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<AzureDevopsStatus> {
+    const secret = await readAzureDevopsSecret(stateDir);
+    const hasPat = secret.exists;
+
+    const worktreePresent = Boolean(
+      workDir && (await fs.stat(workDir).catch(() => null))?.isDirectory(),
+    );
+
+    // Read status from issue.json
+    const issueJson = await readIssueJson(stateDir);
+    const azureStatus = (issueJson?.status as Record<string, unknown> | undefined)?.azureDevops as
+      | Record<string, unknown>
+      | undefined;
+
+    const organization =
+      typeof azureStatus?.organization === 'string' ? azureStatus.organization : null;
+    const project =
+      typeof azureStatus?.project === 'string' ? azureStatus.project : null;
+    const patLastUpdatedAt =
+      typeof azureStatus?.pat_last_updated_at === 'string' ? azureStatus.pat_last_updated_at : null;
+
+    const configured = organization !== null && project !== null;
+
+    const storedSyncStatus = (azureStatus?.sync_status as AzureDevopsSyncStatus) ?? 'never_attempted';
+    const lastAttemptAt =
+      typeof azureStatus?.last_attempt_at === 'string' ? azureStatus.last_attempt_at : null;
+    const lastSuccessAt =
+      typeof azureStatus?.last_success_at === 'string' ? azureStatus.last_success_at : null;
+    const lastError =
+      typeof azureStatus?.last_error === 'string' ? azureStatus.last_error : null;
+
+    // Sync status override when worktree is absent
+    let syncStatus: AzureDevopsSyncStatus;
+    if (!worktreePresent) {
+      syncStatus = hasPat ? 'deferred_worktree_absent' : 'in_sync';
+    } else {
+      syncStatus = storedSyncStatus;
+    }
+
+    return {
+      issue_ref: issueRef,
+      worktree_present: worktreePresent,
+      configured,
+      organization,
+      project,
+      has_pat: hasPat,
+      pat_last_updated_at: patLastUpdatedAt,
+      pat_env_var_name: AZURE_PAT_ENV_VAR_NAME,
+      sync_status: syncStatus,
+      last_attempt_at: lastAttemptAt,
+      last_success_at: lastSuccessAt,
+      last_error: lastError,
+    };
+  }
+
+  /**
+   * Update Azure DevOps status fields in issue.json (at status.azureDevops).
+   * Creates nested structure if needed.
+   */
+  async function updateAzureDevopsStatusInIssueJson(
+    stateDir: string,
+    updates: Partial<{
+      organization: string | null;
+      project: string | null;
+      pat_last_updated_at: string | null;
+      sync_status: AzureDevopsSyncStatus;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+    }>,
+  ): Promise<void> {
+    const issueJson = (await readIssueJson(stateDir)) ?? {};
+
+    // Ensure status object exists
+    if (!issueJson.status || typeof issueJson.status !== 'object') {
+      issueJson.status = {};
+    }
+    const status = issueJson.status as Record<string, unknown>;
+
+    // Ensure azureDevops object exists
+    if (!status.azureDevops || typeof status.azureDevops !== 'object') {
+      status.azureDevops = {};
+    }
+    const azureDevops = status.azureDevops as Record<string, unknown>;
+
+    // Apply updates
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        azureDevops[key] = value;
+      }
+    }
+
+    await writeIssueJson(stateDir, issueJson);
+  }
+
+  /** Emit azure-devops-status event with operation context. */
+  function emitAzureDevopsStatus(status: AzureDevopsStatus, operation: AzureDevopsOperation): void {
+    const event: AzureDevopsStatusEvent = { ...status, operation };
+    hub.broadcast('azure-devops-status', event);
+  }
+
+  /**
+   * Best-effort auto-reconcile of Azure DevOps credentials to worktree.
+   * Called after /api/init/issue, /api/issues/select, and on startup.
+   * Non-fatal: errors are recorded in status but do not propagate.
+   *
+   * MUTEX: Acquires per-issue Azure DevOps mutex. If busy, skips as best-effort no-op.
+   */
+  async function autoReconcileAzureDevops(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    const acquired = await acquireAzureDevopsMutex(issueRef);
+    if (!acquired) {
+      // Mutex is busy - skip reconcile (best-effort)
+      return;
+    }
+
+    try {
+      await autoReconcileAzureDevopsCore(issueRef, stateDir, workDir);
+    } finally {
+      releaseAzureDevopsMutex(issueRef);
+    }
+  }
+
+  /** Core Azure DevOps auto-reconcile logic (must be called with mutex held). */
+  async function autoReconcileAzureDevopsCore(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+
+    // Read secret — distinguish I/O errors from "not present"
+    let secret: Awaited<ReturnType<typeof readAzureDevopsSecret>>;
+    try {
+      secret = await readAzureDevopsSecret(stateDir);
+    } catch (err) {
+      const lastError = err instanceof AzureDevopsSecretReadError
+        ? sanitizePatFromMessage(err.message)
+        : sanitizeErrorForUi(err);
+      await updateAzureDevopsStatusInIssueJson(stateDir, {
+        sync_status: 'failed_secret_read',
+        last_attempt_at: now,
+        last_error: lastError,
+      });
+      try {
+        const status = await buildAzureDevopsStatus(issueRef, stateDir, workDir);
+        emitAzureDevopsStatus(status, 'auto_reconcile');
+      } catch {
+        // Ignore — already recorded the error
+      }
+      return;
+    }
+
+    const hasSecret = secret.exists;
+
+    // Reconcile if worktree exists
+    let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
+    let lastError: string | null = null;
+
+    if (workDir) {
+      const worktreeExists = (await fs.stat(workDir).catch(() => null))?.isDirectory();
+      if (worktreeExists) {
+        const patValue = secret.exists ? secret.data.pat : undefined;
+
+        try {
+          const reconcileResult = await reconcileAzureDevopsToWorktree({
+            worktreeDir: workDir,
+            hasSecret,
+            pat: patValue,
+          });
+
+          syncStatus = reconcileResult.sync_status;
+          lastError = reconcileResult.last_error;
+        } catch (err) {
+          syncStatus = 'failed_exclude';
+          lastError = sanitizeErrorForUi(err);
+        }
+      } else {
+        syncStatus = hasSecret ? 'deferred_worktree_absent' : 'in_sync';
+      }
+    } else {
+      syncStatus = hasSecret ? 'deferred_worktree_absent' : 'in_sync';
+    }
+
+    // Read current status to preserve last_success_at
+    const issueJson = await readIssueJson(stateDir);
+    const azureStatus = (issueJson?.status as Record<string, unknown> | undefined)?.azureDevops as
+      | Record<string, unknown>
+      | undefined;
+
+    // Update status in issue.json
+    await updateAzureDevopsStatusInIssueJson(stateDir, {
+      sync_status: syncStatus,
+      last_attempt_at: now,
+      last_success_at: syncStatus === 'in_sync' ? now : (azureStatus?.last_success_at as string | null) ?? null,
+      last_error: lastError,
+    });
+
+    // Build and emit final status
+    const status = await buildAzureDevopsStatus(issueRef, stateDir, workDir);
+    emitAzureDevopsStatus(status, 'auto_reconcile');
+  }
+
   // GET /api/issue/sonar-token
   app.get('/api/issue/sonar-token', async (_req, reply) => {
     const issue = runManager.getIssue();
@@ -2119,6 +2420,490 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   });
 
+  // ── Azure DevOps credential endpoints ──
+
+  // GET /api/issue/azure-devops
+  app.get('/api/issue/azure-devops', async (_req, reply) => {
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    try {
+      const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      return reply.send({ ok: true, ...status });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    }
+  });
+
+  // PUT /api/issue/azure-devops
+  app.put('/api/issue/azure-devops', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validatePutAzureDevopsRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireAzureDevopsMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Write secret file (organization, project, pat)
+      await writeAzureDevopsSecret(
+        issue.stateDir,
+        validation.value.organization,
+        validation.value.project,
+        validation.value.pat,
+      );
+
+      // Update non-secret status fields in issue.json
+      await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+        organization: validation.value.organization,
+        project: validation.value.project,
+        pat_last_updated_at: now,
+      });
+
+      // Reconcile if sync_now is true (default) and worktree exists
+      let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
+      let lastError: string | null = null;
+
+      if (validation.value.sync_now && issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          try {
+            const reconcileResult = await reconcileAzureDevopsToWorktree({
+              worktreeDir: issue.workDir,
+              hasSecret: true,
+              pat: validation.value.pat,
+            });
+            syncStatus = reconcileResult.sync_status;
+            lastError = reconcileResult.last_error;
+            warnings.push(...reconcileResult.warnings);
+          } catch (err) {
+            syncStatus = 'failed_exclude';
+            lastError = sanitizeErrorForUi(err);
+          }
+
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_success_at: syncStatus === 'in_sync' ? now : null,
+            last_error: lastError,
+          });
+        } else {
+          syncStatus = 'deferred_worktree_absent';
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_error: null,
+          });
+        }
+      } else if (!validation.value.sync_now) {
+        // sync_now=false: mark as never_attempted so UI shows syncing is needed
+        syncStatus = 'never_attempted';
+        await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+          sync_status: syncStatus,
+          last_error: null,
+        });
+      } else {
+        // sync_now=true but no workDir
+        syncStatus = 'deferred_worktree_absent';
+        await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+          sync_status: syncStatus,
+          last_attempt_at: now,
+          last_error: null,
+        });
+      }
+
+      // Build final status
+      const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitAzureDevopsStatus(status, 'put');
+
+      return reply.send({ ok: true, updated: true, status, warnings });
+    } catch (err) {
+      const message = sanitizePatFromMessage(sanitizeErrorForUi(err));
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseAzureDevopsMutex(issue.issueRef);
+    }
+  });
+
+  // PATCH /api/issue/azure-devops
+  app.patch('/api/issue/azure-devops', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validatePatchAzureDevopsRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireAzureDevopsMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Read existing secret to merge changes
+      const existingSecret = await readAzureDevopsSecret(issue.stateDir);
+      const existingStatus = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      const { value } = validation;
+      let meaningfulChange = false;
+
+      // Handle clear_pat: delete secret but keep org/project in status
+      if (value.clear_pat) {
+        if (existingSecret.exists) {
+          await deleteAzureDevopsSecret(issue.stateDir);
+          meaningfulChange = true;
+        }
+
+        // Update org/project in status if provided
+        const statusUpdates: Record<string, unknown> = {};
+        if (value.organization !== undefined) {
+          statusUpdates.organization = value.organization;
+          meaningfulChange = true;
+        }
+        if (value.project !== undefined) {
+          statusUpdates.project = value.project;
+          meaningfulChange = true;
+        }
+        statusUpdates.pat_last_updated_at = existingSecret.exists ? now : existingStatus.pat_last_updated_at;
+
+        if (Object.keys(statusUpdates).length > 0) {
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, statusUpdates as Parameters<typeof updateAzureDevopsStatusInIssueJson>[1]);
+        }
+      } else if (value.pat !== undefined) {
+        // New PAT provided: write or update secret
+        const org = value.organization ?? (existingSecret.exists ? existingSecret.data.organization : existingStatus.organization ?? '');
+        const proj = value.project ?? (existingSecret.exists ? existingSecret.data.project : existingStatus.project ?? '');
+
+        await writeAzureDevopsSecret(issue.stateDir, org, proj, value.pat);
+
+        await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+          organization: org,
+          project: proj,
+          pat_last_updated_at: now,
+        });
+        meaningfulChange = true;
+      } else {
+        // Only org/project updates (no PAT change)
+        if (value.organization !== undefined || value.project !== undefined) {
+          const statusUpdates: Record<string, unknown> = {};
+          if (value.organization !== undefined) statusUpdates.organization = value.organization;
+          if (value.project !== undefined) statusUpdates.project = value.project;
+
+          // If a secret exists, update it with new org/project
+          if (existingSecret.exists) {
+            const org = value.organization ?? existingSecret.data.organization;
+            const proj = value.project ?? existingSecret.data.project;
+            await writeAzureDevopsSecret(issue.stateDir, org, proj, existingSecret.data.pat);
+          }
+
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, statusUpdates as Parameters<typeof updateAzureDevopsStatusInIssueJson>[1]);
+          meaningfulChange = true;
+        }
+      }
+
+      // Reconcile if sync_now and there were changes (or always if sync_now=true)
+      let syncStatus: AzureDevopsSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (value.sync_now && issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          const secretResult = await readAzureDevopsSecret(issue.stateDir);
+          const patValue = secretResult.exists ? secretResult.data.pat : undefined;
+
+          try {
+            const reconcileResult = await reconcileAzureDevopsToWorktree({
+              worktreeDir: issue.workDir,
+              hasSecret: secretResult.exists,
+              pat: patValue,
+            });
+            syncStatus = reconcileResult.sync_status;
+            lastError = reconcileResult.last_error;
+            warnings.push(...reconcileResult.warnings);
+          } catch (err) {
+            syncStatus = 'failed_exclude';
+            lastError = sanitizeErrorForUi(err);
+          }
+
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+            last_error: lastError,
+          });
+        } else {
+          const secretResult = await readAzureDevopsSecret(issue.stateDir);
+          syncStatus = secretResult.exists ? 'deferred_worktree_absent' : 'in_sync';
+          await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+            sync_status: syncStatus,
+            last_attempt_at: now,
+            last_error: null,
+          });
+        }
+      } else if (meaningfulChange) {
+        // Changed without reconciliation — reset sync_status
+        syncStatus = 'never_attempted';
+        lastError = null;
+        await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+          sync_status: syncStatus,
+          last_error: null,
+        });
+      }
+
+      // Build final status
+      const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitAzureDevopsStatus(status, 'patch');
+
+      return reply.send({ ok: true, updated: meaningfulChange, status, warnings });
+    } catch (err) {
+      const message = sanitizePatFromMessage(sanitizeErrorForUi(err));
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseAzureDevopsMutex(issue.issueRef);
+    }
+  });
+
+  // DELETE /api/issue/azure-devops
+  app.delete('/api/issue/azure-devops', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireAzureDevopsMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+
+      // Check if secret existed before deletion
+      const existingStatus = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      const hadSecret = existingStatus.has_pat;
+
+      // Delete the secret file
+      await deleteAzureDevopsSecret(issue.stateDir);
+
+      // Reconcile (remove env var from .env.jeeves) if worktree exists
+      let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
+      let lastError: string | null = null;
+
+      if (issue.workDir) {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (worktreeExists) {
+          try {
+            const reconcileResult = await reconcileAzureDevopsToWorktree({
+              worktreeDir: issue.workDir,
+              hasSecret: false,
+            });
+            syncStatus = reconcileResult.sync_status;
+            lastError = reconcileResult.last_error;
+            warnings.push(...reconcileResult.warnings);
+          } catch (err) {
+            syncStatus = 'failed_exclude';
+            lastError = sanitizeErrorForUi(err);
+          }
+        } else {
+          syncStatus = 'in_sync'; // No worktree — trivially satisfied
+        }
+      } else {
+        syncStatus = 'in_sync'; // No worktree — trivially satisfied
+      }
+
+      // Clear status fields (org/project and sync state)
+      await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+        organization: null,
+        project: null,
+        pat_last_updated_at: null,
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitAzureDevopsStatus(status, 'delete');
+
+      return reply.send({ ok: true, updated: hadSecret, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseAzureDevopsMutex(issue.issueRef);
+    }
+  });
+
+  // POST /api/issue/azure-devops/reconcile
+  app.post('/api/issue/azure-devops/reconcile', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    // Validate request body
+    const validation = validateReconcileAzureDevopsRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    // Acquire mutex
+    const acquired = await acquireAzureDevopsMutex(issue.issueRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const warnings: string[] = [];
+      const now = new Date().toISOString();
+      const forceReconcile = validation.value.force;
+
+      // Get current status
+      const existingStatus = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Skip if already in_sync and force is not set
+      if (existingStatus.sync_status === 'in_sync' && !forceReconcile) {
+        return reply.send({
+          ok: true,
+          updated: false,
+          status: existingStatus,
+          warnings: ['Already in sync; use force=true to re-run reconciliation.'],
+        });
+      }
+
+      // Reconcile only if worktree exists
+      let syncStatus: AzureDevopsSyncStatus = existingStatus.sync_status;
+      let lastError: string | null = existingStatus.last_error;
+
+      if (!issue.workDir) {
+        syncStatus = existingStatus.has_pat ? 'deferred_worktree_absent' : 'in_sync';
+        warnings.push('Worktree not present; deferred.');
+      } else {
+        const worktreeExists = (await fs.stat(issue.workDir).catch(() => null))?.isDirectory();
+        if (!worktreeExists) {
+          syncStatus = existingStatus.has_pat ? 'deferred_worktree_absent' : 'in_sync';
+          warnings.push('Worktree directory does not exist; deferred.');
+        } else {
+          // Read secret for reconciliation
+          const secretResult = await readAzureDevopsSecret(issue.stateDir);
+          const patValue = secretResult.exists ? secretResult.data.pat : undefined;
+          const hasSecretNow = secretResult.exists;
+
+          try {
+            const reconcileResult = await reconcileAzureDevopsToWorktree({
+              worktreeDir: issue.workDir,
+              hasSecret: hasSecretNow,
+              pat: patValue,
+            });
+            syncStatus = reconcileResult.sync_status;
+            lastError = reconcileResult.last_error;
+            warnings.push(...reconcileResult.warnings);
+          } catch (err) {
+            syncStatus = 'failed_exclude';
+            lastError = sanitizeErrorForUi(err);
+          }
+        }
+      }
+
+      await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: lastError,
+      });
+
+      // Build final status
+      const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
+
+      // Emit event
+      emitAzureDevopsStatus(status, 'reconcile');
+
+      // Reconcile never changes credential presence, so updated is always false
+      return reply.send({ ok: true, updated: false, status, warnings });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseAzureDevopsMutex(issue.issueRef);
+    }
+  });
+
   app.get('/api/stream', async (req, reply) => {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
     reply.raw.writeHead(200, {
@@ -2199,6 +2984,14 @@ export async function buildServer(config: ViewerServerConfig) {
         throw new Error('Failed to acquire sonar token mutex (timeout)');
       }
       return { release: () => releaseSonarTokenMutex(issueRef) };
+    },
+    /** Acquire the Azure DevOps mutex for the given issue. Returns release function. */
+    acquireAzureDevopsMutex: async (issueRef: string): Promise<{ release: () => void }> => {
+      const acquired = await acquireAzureDevopsMutex(issueRef);
+      if (!acquired) {
+        throw new Error('Failed to acquire Azure DevOps mutex (timeout)');
+      }
+      return { release: () => releaseAzureDevopsMutex(issueRef) };
     },
   };
 

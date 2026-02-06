@@ -831,6 +831,15 @@ export class ParallelRunner {
   }
 
   /**
+   * Clears all active workers from the map and broadcasts the updated status.
+   * Called at the end of a wave so the viewer stops polling for worker data.
+   */
+  private clearActiveWorkers(): void {
+    this.activeWorkers.clear();
+    this.broadcastRunStatus();
+  }
+
+  /**
    * Records activity (log output, progress) to reset inactivity timer.
    */
   private recordActivity(): void {
@@ -1613,6 +1622,7 @@ export class ParallelRunner {
       // If wave timed out, handle cleanup per §6.2.8 "Timeout stop" (no merging)
       if (this.timedOut) {
         await this.handleSpecCheckWaveTimeout(waveId, outcomes);
+        this.clearActiveWorkers();
         return {
           waveResult,
           continueExecution: false,
@@ -1687,6 +1697,7 @@ export class ParallelRunner {
         await this.options.appendLog(
           `[PARALLEL] Wave ${phase} completed with merge conflict on task ${mergeResult.conflictTaskId}`,
         );
+        this.clearActiveWorkers();
         return {
           waveResult,
           continueExecution: false,
@@ -1737,6 +1748,7 @@ export class ParallelRunner {
       );
       this.lastImplementWaveResult = null;
 
+      this.clearActiveWorkers();
       return {
         waveResult,
         continueExecution: !this.stopRequested && !this.timedOut,
@@ -1764,6 +1776,7 @@ export class ParallelRunner {
       await this.handleImplementWaveTimeout(waveId, outcomes);
     }
 
+    this.clearActiveWorkers();
     return {
       waveResult,
       continueExecution: !this.stopRequested && !this.timedOut,
@@ -2243,10 +2256,8 @@ export class ParallelRunner {
       `[WORKER ${taskId}][${phase}] Completed with exit code ${exitCode}, status=${status}`,
     );
 
-    this.activeWorkers.delete(taskId);
-
-    // Broadcast worker removal
-    this.broadcastRunStatus();
+    // NOTE: We no longer delete the worker here — workers stay in activeWorkers
+    // until the entire wave ends so the viewer can still poll their log/SDK data.
 
     return {
       taskId,

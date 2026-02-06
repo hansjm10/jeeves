@@ -3,34 +3,47 @@ workflow:
   version: 3
   start: design_classify
   default_provider: codex
-  default_model: gpt-5.2
+  default_model: gpt-5.3-codex
   default_reasoning_effort: xhigh
 phases:
-  # ============================================
-  # DESIGN PHASES (Sequential, Feature-Type Based)
-  # ============================================
-  design_classify:
+  code_fix:
     type: execute
-    provider: codex
-    prompt: design.classify.md
-    description: Classify feature types and establish scope
+    provider: claude
+    prompt: review.fix.md
+    description: Apply fixes from code review
     transitions:
-      - to: design_workflow
+      - to: code_review
         auto: true
-    model: gpt-5.2
-    reasoning_effort: high
-
-  design_workflow:
-    type: execute
+    model: opus
+    thinking_budget: max
+  code_review:
+    type: evaluate
     provider: codex
-    prompt: design.workflow.md
-    description: Design state transitions and error handling
+    prompt: review.evaluate.md
+    description: Review code changes (read-only)
     transitions:
-      - to: design_api
-        auto: true
-    model: gpt-5.2
-    reasoning_effort: high
-
+      - to: code_fix
+        when: status.reviewNeedsChanges == true
+      - to: complete
+        when: status.reviewClean == true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  complete:
+    type: terminal
+    description: Workflow complete
+    transitions: []
+  completeness_verification:
+    type: evaluate
+    provider: codex
+    prompt: verify.completeness.md
+    description: Verify complete implementation against design
+    transitions:
+      - to: implement_task
+        when: status.missingWork == true
+      - to: prepare_pr
+        when: status.implementationComplete == true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
   design_api:
     type: execute
     provider: codex
@@ -39,9 +52,18 @@ phases:
     transitions:
       - to: design_data
         auto: true
-    model: gpt-5.2
-    reasoning_effort: high
-
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  design_classify:
+    type: execute
+    provider: codex
+    prompt: design.classify.md
+    description: Classify feature types and establish scope
+    transitions:
+      - to: design_workflow
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
   design_data:
     type: execute
     provider: codex
@@ -50,33 +72,8 @@ phases:
     transitions:
       - to: design_plan
         auto: true
-    model: gpt-5.2
-    reasoning_effort: high
-
-  design_plan:
-    type: execute
-    provider: codex
-    prompt: design.plan.md
-    description: Break down design into implementable tasks
-    transitions:
-      - to: design_review
-        auto: true
-    model: gpt-5.2
+    model: gpt-5.3-codex
     reasoning_effort: xhigh
-
-  design_review:
-    type: evaluate
-    provider: codex
-    prompt: design.review.md
-    description: Review complete design document (read-only)
-    transitions:
-      - to: design_edit
-        when: status.designNeedsChanges == true
-      - to: pre_implementation_check
-        when: status.designApproved == true
-    model: gpt-5.2
-    reasoning_effort: high
-
   design_edit:
     type: execute
     provider: codex
@@ -85,25 +82,59 @@ phases:
     transitions:
       - to: design_review
         auto: true
-    model: gpt-5.2
+    model: gpt-5.3-codex
     reasoning_effort: high
-
-  # ============================================
-  # IMPLEMENTATION PHASES
-  # ============================================
-  pre_implementation_check:
+  design_plan:
+    type: execute
+    provider: codex
+    prompt: design.plan.md
+    description: Break down design into implementable tasks
+    transitions:
+      - to: design_review
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  design_review:
     type: evaluate
     provider: codex
-    prompt: verify.pre_implementation.md
-    description: Verify task coverage before implementation
+    prompt: design.review.md
+    description: Review complete design document (read-only)
     transitions:
-      - to: implement_task
-        when: status.preCheckPassed == true
       - to: design_edit
-        when: status.preCheckFailed == true
-    model: gpt-5.2
-    reasoning_effort: high
-
+        when: status.designNeedsChanges == true
+      - to: task_decomposition
+        when: status.designApproved == true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  design_workflow:
+    type: execute
+    provider: codex
+    prompt: design.workflow.md
+    description: Design state transitions and error handling
+    transitions:
+      - to: design_api
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  task_decomposition:
+    type: execute
+    provider: codex
+    prompt: task.decompose.md
+    description: Decompose design into implementable tasks
+    transitions:
+      - to: pre_implementation_check
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  fix_ci:
+    type: execute
+    provider: claude
+    prompt: ci.fix.md
+    description: Fix commit/push failures (lint, pre-push hooks, etc)
+    transitions:
+      - to: task_spec_check
+        auto: true
+    model: opus
   implement_task:
     type: execute
     provider: claude
@@ -112,13 +143,33 @@ phases:
     transitions:
       - to: implement_task
         when: control.restartPhase == true
-        priority: 0
       - to: task_spec_check
         auto: true
         priority: 1
     model: opus
     thinking_budget: max
-
+  pre_implementation_check:
+    type: evaluate
+    provider: codex
+    prompt: verify.pre_implementation.md
+    description: Verify task coverage before implementation
+    transitions:
+      - to: design_edit
+        when: status.preCheckFailed == true
+      - to: implement_task
+        when: status.preCheckPassed == true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  prepare_pr:
+    type: execute
+    provider: claude
+    prompt: pr.prepare.md
+    description: Create pull request after all tasks complete
+    transitions:
+      - to: code_review
+        when: status.prCreated == true
+    model: sonnet
+    thinking_budget: max
   task_spec_check:
     type: evaluate
     provider: codex
@@ -140,71 +191,5 @@ phases:
       - to: completeness_verification
         when: status.allTasksComplete == true
         priority: 5
-    model: gpt-5.2
-    reasoning_effort: high
-
-  fix_ci:
-    type: execute
-    provider: claude
-    prompt: ci.fix.md
-    description: Fix commit/push failures (lint, pre-push hooks, etc)
-    transitions:
-      - to: task_spec_check
-        auto: true
-    model: opus
-
-  # ============================================
-  # COMPLETION PHASES
-  # ============================================
-  completeness_verification:
-    type: evaluate
-    provider: codex
-    prompt: verify.completeness.md
-    description: Verify complete implementation against design
-    transitions:
-      - to: implement_task
-        when: status.missingWork == true
-      - to: prepare_pr
-        when: status.implementationComplete == true
-    model: gpt-5.2
-    reasoning_effort: high
-
-  prepare_pr:
-    type: execute
-    provider: claude
-    prompt: pr.prepare.md
-    description: Create pull request after all tasks complete
-    transitions:
-      - to: code_review
-        when: status.prCreated == true
-    model: sonnet
-    thinking_budget: max
-
-  code_review:
-    type: evaluate
-    provider: codex
-    prompt: review.evaluate.md
-    description: Review code changes (read-only)
-    transitions:
-      - to: code_fix
-        when: status.reviewNeedsChanges == true
-      - to: complete
-        when: status.reviewClean == true
-    model: gpt-5.2
-    reasoning_effort: high
-
-  code_fix:
-    type: execute
-    provider: claude
-    prompt: review.fix.md
-    description: Apply fixes from code review
-    transitions:
-      - to: code_review
-        auto: true
-    model: opus
-    thinking_budget: max
-
-  complete:
-    type: terminal
-    description: Workflow complete
-    transitions: []
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh

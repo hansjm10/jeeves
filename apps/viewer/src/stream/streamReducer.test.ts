@@ -12,6 +12,8 @@ function makeState(): ExtendedStreamState {
     logs: [],
     viewerLogs: [],
     sdkEvents: [],
+    workerLogs: {},
+    workerSdkEvents: {},
     runOverride: null,
     effectiveRun: null,
     sonarTokenStatus: null,

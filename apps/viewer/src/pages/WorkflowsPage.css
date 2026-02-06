@@ -1,43 +1,256 @@
-/* Workflows Page - Terminal-inspired dark theme */
-/* Uses shared design tokens from styles/tokens.css */
-/* Typography: var(--font-sans) for general UI, var(--font-mono) for code/JSON surfaces */
+/* ============================================================
+   WorkflowsPage.css — Overlay panel layout for workflow editor
+   Uses shared design tokens from styles/tokens.css
+   Typography: var(--font-sans) for UI, var(--font-mono) for code
+   ============================================================ */
 
+/* ---- Container ---- */
 .wf-container {
-  display: grid;
-  grid-template-columns: 280px 1fr 320px;
-  gap: var(--space-6);
-  padding: var(--space-6);
-  min-height: calc(100vh - 160px);
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 120px);
+  overflow: hidden;
   background: var(--color-bg);
   font-family: var(--font-sans);
 }
 
-/* Panel base styles */
-.wf-panel {
+/* ---- Graph canvas (full-bleed) ---- */
+.wf-graph-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+/* ================================================================
+   LEFT SIDEBAR — collapsible overlay
+   ================================================================ */
+.wf-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 10;
+  width: 260px;
   background: var(--color-surface-1);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  transition: width 0.2s ease;
 }
 
-.wf-panel-header {
+.wf-sidebar.collapsed {
+  width: 48px;
+}
+
+.wf-sidebar.open {
+  width: 260px;
+}
+
+.wf-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  flex-shrink: 0;
 }
 
-.wf-panel-title {
+.wf-sidebar-toggle {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.wf-sidebar-toggle:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.wf-sidebar-title {
   margin: 0;
   font-size: var(--font-size-ui-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-/* Buttons */
+/* Sidebar scrollable content area (everything below the header) */
+.wf-sidebar > :not(.wf-sidebar-header) {
+  padding: var(--space-4);
+}
+
+.wf-sidebar.collapsed > :not(.wf-sidebar-header) {
+  display: none;
+}
+
+/* ================================================================
+   RIGHT INSPECTOR — slide-out overlay
+   ================================================================ */
+.wf-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  width: 360px;
+  background: var(--color-surface-1);
+  border-left: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  overflow: hidden;
+}
+
+.wf-inspector.open {
+  transform: translateX(0);
+}
+
+.wf-inspector-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border-subtle);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: var(--color-surface-1);
+  z-index: 1;
+}
+
+.wf-inspector-title {
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.wf-inspector-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.wf-inspector-close {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.wf-inspector-close:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.wf-inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.wf-inspector-info {
+  font-size: var(--font-size-ui-xs);
+  color: var(--color-text-dim);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.wf-inspector-selection {
+  font-size: var(--font-size-ui-sm);
+  color: var(--color-text-muted);
+}
+
+.wf-inspector-selection strong {
+  color: var(--color-accent-cyan);
+}
+
+/* ================================================================
+   CARDS — collapsible <details> sections inside inspector
+   ================================================================ */
+.wf-card {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.wf-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid transparent;
+  transition: background 0.15s ease;
+  list-style: none; /* removes default <summary> marker */
+}
+
+.wf-card-header::-webkit-details-marker {
+  display: none;
+}
+
+.wf-card-header::before {
+  content: '\25B6'; /* right-pointing triangle */
+  font-size: 9px;
+  color: var(--color-text-dim);
+  margin-right: var(--space-3);
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+details.wf-card[open] > .wf-card-header::before {
+  transform: rotate(90deg);
+}
+
+.wf-card-header:hover {
+  background: rgba(88, 166, 255, 0.05);
+}
+
+details.wf-card[open] > .wf-card-header {
+  border-bottom-color: var(--color-border-subtle);
+}
+
+.wf-card-body {
+  padding: var(--space-5);
+}
+
+/* ================================================================
+   BUTTONS
+   ================================================================ */
 .wf-btn {
   background: var(--color-surface-2);
   border: 1px solid var(--color-border);
@@ -86,7 +299,9 @@
   background: transparent;
 }
 
-/* Inputs */
+/* ================================================================
+   FORM INPUTS
+   ================================================================ */
 .wf-input {
   width: 100%;
   padding: var(--space-3) var(--space-5);
@@ -147,7 +362,9 @@
   box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
 }
 
-/* Checkbox */
+/* ================================================================
+   CHECKBOX
+   ================================================================ */
 .wf-checkbox-label {
   display: flex;
   align-items: center;
@@ -161,7 +378,9 @@
   accent-color: var(--color-accent-blue);
 }
 
-/* Field group */
+/* ================================================================
+   FIELD GROUP
+   ================================================================ */
 .wf-field {
   display: flex;
   flex-direction: column;
@@ -174,11 +393,35 @@
   text-transform: lowercase;
 }
 
-/* Workflow list panel */
-.wf-list-panel {
+.wf-field-hint {
+  font-size: var(--font-size-ui-xs);
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
+/* ================================================================
+   FORM LAYOUT
+   ================================================================ */
+.wf-form-grid {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-5);
 }
 
+.wf-inline-form {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.wf-inline-form .wf-input,
+.wf-inline-form .wf-select {
+  flex: 1;
+}
+
+/* ================================================================
+   ISSUE REF & CREATE SECTION (sidebar)
+   ================================================================ */
 .wf-issue-ref {
   font-size: var(--font-size-ui-xs);
   color: var(--color-text-dim);
@@ -208,6 +451,9 @@
   flex: 1;
 }
 
+/* ================================================================
+   WORKFLOW LIST (sidebar)
+   ================================================================ */
 .wf-workflow-list {
   display: flex;
   flex-direction: column;
@@ -253,55 +499,9 @@
   border-radius: var(--radius-sm);
 }
 
-/* Graph panel */
-.wf-graph-panel {
-  min-height: 520px;
-}
-
-.wf-graph-container {
-  flex: 1;
-  margin-top: var(--space-3);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--color-bg);
-  border: 1px dashed var(--color-border);
-}
-
-.wf-graph-container svg {
-  width: 100%;
-  height: 100%;
-  background: var(--color-bg);
-}
-
-/* Inspector panel */
-.wf-inspector-panel {
-  gap: var(--space-5);
-  overflow-y: auto;
-}
-
-.wf-inspector-actions {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.wf-inspector-info {
-  font-size: var(--font-size-ui-xs);
-  color: var(--color-text-dim);
-  padding: var(--space-3) var(--space-5);
-  background: var(--color-bg);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border-subtle);
-}
-
-.wf-inspector-selection {
-  font-size: var(--font-size-ui-sm);
-  color: var(--color-text-muted);
-}
-
-.wf-inspector-selection strong {
-  color: var(--color-accent-cyan);
-}
-
+/* ================================================================
+   SET ACTIVE SECTION
+   ================================================================ */
 .wf-set-active-section {
   display: flex;
   align-items: center;
@@ -309,12 +509,9 @@
   padding: var(--space-3) 0;
 }
 
-/* Section divider */
-.wf-section {
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
+/* ================================================================
+   SECTION HEADERS
+   ================================================================ */
 .wf-section-header {
   display: flex;
   align-items: center;
@@ -329,76 +526,9 @@
   letter-spacing: 0.05em;
 }
 
-/* Form grid */
-.wf-form-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-/* Dialog inline form */
-.wf-inline-form {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-}
-
-.wf-inline-form .wf-input,
-.wf-inline-form .wf-select {
-  flex: 1;
-}
-
-/* JSON preview */
-.wf-json-details {
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
-.wf-json-details summary {
-  font-size: var(--font-size-ui-xs);
-  color: var(--color-text-dim);
-  cursor: pointer;
-  padding: var(--space-1) 0;
-}
-
-.wf-json-details summary:hover {
-  color: var(--color-text-muted);
-}
-
-.wf-json-pre {
-  margin-top: var(--space-3);
-  padding: var(--space-5);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  overflow: auto;
-  max-height: 280px;
-  font-size: var(--font-size-ui-xs);
-  font-family: var(--font-mono);
-  line-height: 1.5;
-  color: var(--color-text-muted);
-}
-
-/* Error messages */
-.wf-error {
-  font-size: var(--font-size-ui-xs);
-  color: var(--color-accent-red);
-  padding: var(--space-3) var(--space-5);
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  border-radius: var(--radius-sm);
-  margin-top: var(--space-3);
-}
-
-/* Loading state */
-.wf-loading {
-  font-size: var(--font-size-ui-sm);
-  color: var(--color-text-dim);
-  padding: var(--space-5);
-  text-align: center;
-}
-
-/* Segmented Select for Provider/Model */
+/* ================================================================
+   SEGMENTED CONTROLS (provider / model / reasoning / thinking)
+   ================================================================ */
 .wf-seg-row {
   display: flex;
   gap: var(--space-2);
@@ -454,7 +584,7 @@
   color: var(--color-accent-red);
 }
 
-/* Model tier dots */
+/* ---- Model tier dots ---- */
 .wf-seg-option[data-tier="fast"]::after {
   content: '';
   width: 5px;
@@ -485,7 +615,9 @@
   display: inline-block;
 }
 
-/* Effective value indicator */
+/* ================================================================
+   EFFECTIVE VALUE INDICATOR
+   ================================================================ */
 .wf-effective-row {
   display: flex;
   align-items: center;
@@ -512,27 +644,106 @@
   font-style: italic;
 }
 
-/* Field hint text */
-.wf-field-hint {
+/* ================================================================
+   JSON PREVIEW
+   ================================================================ */
+.wf-json-details {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.wf-json-details summary {
   font-size: var(--font-size-ui-xs);
   color: var(--color-text-dim);
-  font-style: italic;
+  cursor: pointer;
+  padding: var(--space-1) 0;
 }
 
-/* Responsive */
-@media (max-width: 1200px) {
-  .wf-container {
-    grid-template-columns: 240px 1fr 280px;
-  }
+.wf-json-details summary:hover {
+  color: var(--color-text-muted);
 }
 
+.wf-json-pre {
+  margin-top: var(--space-3);
+  padding: var(--space-5);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  max-height: 280px;
+  font-size: var(--font-size-ui-xs);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* ================================================================
+   STATUS MESSAGES
+   ================================================================ */
+.wf-error {
+  font-size: var(--font-size-ui-xs);
+  color: var(--color-accent-red);
+  padding: var(--space-3) var(--space-5);
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-3);
+}
+
+.wf-loading {
+  font-size: var(--font-size-ui-sm);
+  color: var(--color-text-dim);
+  padding: var(--space-5);
+  text-align: center;
+}
+
+/* ================================================================
+   RESPONSIVE — stack layout below 900px
+   ================================================================ */
 @media (max-width: 900px) {
   .wf-container {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
+    height: auto;
+    min-height: calc(100vh - 120px);
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
   }
 
-  .wf-graph-panel {
+  .wf-graph-canvas {
+    position: relative;
+    inset: auto;
     min-height: 400px;
+  }
+
+  .wf-sidebar {
+    position: relative;
+    top: auto;
+    left: auto;
+    bottom: auto;
+    width: 100% !important;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .wf-sidebar.collapsed {
+    width: 100% !important;
+    max-height: 48px;
+  }
+
+  .wf-inspector {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    transform: none;
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .wf-inspector.open {
+    transform: none;
   }
 }

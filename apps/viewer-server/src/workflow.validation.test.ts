@@ -55,20 +55,36 @@ describe('default workflow validation', () => {
     expect(failTransition?.when).toBe('status.preCheckFailed == true');
   });
 
-  it('design_review transitions to pre_implementation_check (not directly to implement_task)', async () => {
+  it('design_review transitions to task_decomposition (not directly to implement_task)', async () => {
     const workflowPath = fileURLToPath(new URL('../../../workflows/default.yaml', import.meta.url));
     const workflow = await loadWorkflowFromFile(workflowPath);
 
     const designReview = workflow.phases.design_review;
 
-    // Verify there is a transition to pre_implementation_check
-    const toPreCheck = designReview.transitions.find((t) => t.to === 'pre_implementation_check');
-    expect(toPreCheck).toBeDefined();
-    expect(toPreCheck?.when).toBe('status.designApproved == true');
+    // Verify there is a transition to task_decomposition
+    const toTaskDecomp = designReview.transitions.find((t) => t.to === 'task_decomposition');
+    expect(toTaskDecomp).toBeDefined();
+    expect(toTaskDecomp?.when).toBe('status.designApproved == true');
 
     // Verify there is NO direct transition to implement_task
     const toImplement = designReview.transitions.find((t) => t.to === 'implement_task');
     expect(toImplement).toBeUndefined();
+  });
+
+  it('task_decomposition phase exists and transitions to pre_implementation_check', async () => {
+    const workflowPath = fileURLToPath(new URL('../../../workflows/default.yaml', import.meta.url));
+    const workflow = await loadWorkflowFromFile(workflowPath);
+
+    // Verify task_decomposition phase exists
+    expect(workflow.phases).toHaveProperty('task_decomposition');
+
+    const taskDecomp = workflow.phases.task_decomposition;
+    expect(taskDecomp.type).toBe('execute');
+    expect(taskDecomp.prompt).toBe('task.decompose.md');
+
+    // Verify it auto-transitions to pre_implementation_check
+    const toPreCheck = taskDecomp.transitions.find((t) => t.to === 'pre_implementation_check');
+    expect(toPreCheck).toBeDefined();
   });
 
   it('workflow forms valid pre-check transition graph', async () => {
@@ -76,17 +92,22 @@ describe('default workflow validation', () => {
     const workflow = await loadWorkflowFromFile(workflowPath);
 
     // Verify the complete transition graph for the pre-check flow:
-    // design_review -> pre_implementation_check -> implement_task (on pass)
-    // design_review -> pre_implementation_check -> design_edit (on fail)
+    // design_review -> task_decomposition -> pre_implementation_check -> implement_task (on pass)
+    // design_review -> task_decomposition -> pre_implementation_check -> design_edit (on fail)
 
     const designReview = workflow.phases.design_review;
+    const taskDecomp = workflow.phases.task_decomposition;
     const preCheck = workflow.phases.pre_implementation_check;
 
-    // design_review transitions to pre_implementation_check when designApproved
-    const reviewToPreCheck = designReview.transitions.find(
-      (t) => t.to === 'pre_implementation_check' && t.when === 'status.designApproved == true',
+    // design_review transitions to task_decomposition when designApproved
+    const reviewToTaskDecomp = designReview.transitions.find(
+      (t) => t.to === 'task_decomposition' && t.when === 'status.designApproved == true',
     );
-    expect(reviewToPreCheck).toBeDefined();
+    expect(reviewToTaskDecomp).toBeDefined();
+
+    // task_decomposition auto-transitions to pre_implementation_check
+    const taskDecompToPreCheck = taskDecomp.transitions.find((t) => t.to === 'pre_implementation_check');
+    expect(taskDecompToPreCheck).toBeDefined();
 
     // pre_implementation_check has exactly two transitions (pass and fail)
     expect(preCheck.transitions).toHaveLength(2);

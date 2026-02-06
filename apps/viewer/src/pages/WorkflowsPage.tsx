@@ -55,6 +55,7 @@ export function WorkflowsPage() {
   const [newPhaseId, setNewPhaseId] = useState('');
   const [addTransitionDialog, setAddTransitionDialog] = useState<AddTransitionDialogState>({ open: false });
   const [newTransitionTo, setNewTransitionTo] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
     if (!issueWorkflow) return;
@@ -308,89 +309,96 @@ export function WorkflowsPage() {
 
   return (
     <div className="wf-container">
-      {/* Workflow List Panel */}
-      <section className="wf-panel wf-list-panel" aria-label="workflow list">
-        <div className="wf-panel-header">
-          <h2 className="wf-panel-title">Workflows</h2>
-          <button className="wf-btn" onClick={() => void workflowsQuery.refetch()}>
-            Refresh
+      {/* Full-bleed graph canvas -- always fills the container */}
+      <div className="wf-graph-canvas">
+        <WorkflowGraph
+          workflow={draftWorkflow ?? selectedRawWorkflow}
+          currentPhaseId={currentIssuePhase}
+          selection={selection}
+          onSelectionChange={setSelection}
+        />
+      </div>
+
+      {/* Collapsible sidebar overlay (left side) */}
+      <aside className={`wf-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}>
+        <div className="wf-sidebar-header">
+          <button
+            className="wf-sidebar-toggle"
+            onClick={() => setSidebarOpen((v) => !v)}
+            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          >
+            {sidebarOpen ? '\u2190' : '\u2630'}
           </button>
-        </div>
-
-        <div className="wf-issue-ref">
-          {stream.state?.issue_ref ? `Issue: ${stream.state.issue_ref}` : 'No issue selected'}
-        </div>
-
-        <div className="wf-create-section">
-          <div className="wf-create-section-title">Create workflow</div>
-          <div className="wf-create-form">
-            <input
-              className="wf-input"
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              placeholder="name"
-            />
-            <button className="wf-btn wf-btn-primary" onClick={onCreate} disabled={createMutation.isPending}>
-              Create
+          {sidebarOpen && <h2 className="wf-sidebar-title">Workflows</h2>}
+          {sidebarOpen && (
+            <button className="wf-btn" onClick={() => void workflowsQuery.refetch()}>
+              Refresh
             </button>
-          </div>
-          <label className="wf-checkbox-label" style={{ marginTop: 8 }}>
-            <input
-              type="checkbox"
-              checked={createFromSelected}
-              onChange={(e) => setCreateFromSelected(e.target.checked)}
-            />
-            Clone from selected
-          </label>
-          {createMutation.isError ? (
-            <div className="wf-error">
-              {createMutation.error instanceof Error ? createMutation.error.message : String(createMutation.error)}
+          )}
+        </div>
+        {sidebarOpen && (
+          <>
+            <div className="wf-issue-ref">
+              {stream.state?.issue_ref ? `Issue: ${stream.state.issue_ref}` : 'No issue selected'}
             </div>
-          ) : null}
-        </div>
 
-        {workflowsQuery.isLoading ? <div className="wf-loading">Loading...</div> : null}
-        {workflowsQuery.isError ? (
-          <div className="wf-error">
-            {workflowsQuery.error instanceof Error ? workflowsQuery.error.message : String(workflowsQuery.error)}
-          </div>
-        ) : null}
+            {workflowsQuery.isLoading ? <div className="wf-loading">Loading...</div> : null}
+            {workflowsQuery.isError ? (
+              <div className="wf-error">
+                {workflowsQuery.error instanceof Error ? workflowsQuery.error.message : String(workflowsQuery.error)}
+              </div>
+            ) : null}
 
-        <div className="wf-workflow-list">
-          {workflows.map((w) => (
-            <button
-              key={w.name}
-              className={`wf-workflow-item ${w.name === selectedName ? 'selected' : ''}`}
-              onClick={() => onSelectWorkflow(w.name)}
-            >
-              <span>{w.name}</span>
-              {issueWorkflow && w.name === issueWorkflow ? (
-                <span className="wf-workflow-active-badge">active</span>
+            <div className="wf-workflow-list">
+              {workflows.map((w) => (
+                <button
+                  key={w.name}
+                  className={`wf-workflow-item ${w.name === selectedName ? 'selected' : ''}`}
+                  onClick={() => onSelectWorkflow(w.name)}
+                >
+                  <span>{w.name}</span>
+                  {issueWorkflow && w.name === issueWorkflow ? (
+                    <span className="wf-workflow-active-badge">active</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+
+            <div className="wf-create-section">
+              <div className="wf-create-section-title">Create workflow</div>
+              <div className="wf-create-form">
+                <input
+                  className="wf-input"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="name"
+                />
+                <button className="wf-btn wf-btn-primary" onClick={onCreate} disabled={createMutation.isPending}>
+                  Create
+                </button>
+              </div>
+              <label className="wf-checkbox-label" style={{ marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={createFromSelected}
+                  onChange={(e) => setCreateFromSelected(e.target.checked)}
+                />
+                Clone from selected
+              </label>
+              {createMutation.isError ? (
+                <div className="wf-error">
+                  {createMutation.error instanceof Error ? createMutation.error.message : String(createMutation.error)}
+                </div>
               ) : null}
-            </button>
-          ))}
-        </div>
-      </section>
+            </div>
+          </>
+        )}
+      </aside>
 
-      {/* Graph Panel */}
-      <section className="wf-panel wf-graph-panel" aria-label="workflow graph">
-        <div className="wf-panel-header">
-          <h2 className="wf-panel-title">Graph</h2>
-        </div>
-        <div className="wf-graph-container">
-          <WorkflowGraph
-            workflow={draftWorkflow ?? selectedRawWorkflow}
-            currentPhaseId={currentIssuePhase}
-            selection={selection}
-            onSelectionChange={setSelection}
-          />
-        </div>
-      </section>
-
-      {/* Inspector Panel */}
-      <section className="wf-panel wf-inspector-panel" aria-label="workflow inspector">
-        <div className="wf-panel-header">
-          <h2 className="wf-panel-title">Inspector</h2>
+      {/* Slide-out inspector (right side) -- shown when selection exists or workflow loaded */}
+      <aside className={`wf-inspector ${selection || draftWorkflow ? 'open' : ''}`}>
+        <div className="wf-inspector-header">
+          <h2 className="wf-inspector-title">Inspector</h2>
           <div className="wf-inspector-actions">
             <button
               className="wf-btn"
@@ -405,6 +413,9 @@ export function WorkflowsPage() {
               disabled={!isDirty || saveMutation.isPending}
             >
               Save
+            </button>
+            <button className="wf-inspector-close" onClick={() => setSelection(null)} title="Close inspector">
+              ×
             </button>
           </div>
         </div>
@@ -421,25 +432,6 @@ export function WorkflowsPage() {
                   : '(none)'}
             </strong>
           </div>
-        </div>
-
-        <div className="wf-set-active-section">
-          <button
-            className="wf-btn wf-btn-primary"
-            onClick={onSetActive}
-            disabled={!selectedName || !stream.state?.issue_ref || selectIssueWorkflowMutation.isPending}
-            title={!stream.state?.issue_ref ? 'Select an issue first' : undefined}
-          >
-            Set active
-          </button>
-          <label className="wf-checkbox-label">
-            <input
-              type="checkbox"
-              checked={resetPhaseOnSelect}
-              onChange={(e) => setResetPhaseOnSelect(e.target.checked)}
-            />
-            Reset phase
-          </label>
         </div>
 
         {selectIssueWorkflowMutation.isError ? (
@@ -463,210 +455,657 @@ export function WorkflowsPage() {
           </div>
         ) : null}
 
-        {draftWorkflow ? (
-          <>
-            {/* Workflow Settings */}
-            <div className="wf-section">
-              <div className="wf-section-header">
-                <span className="wf-section-title">Workflow</span>
-              </div>
-              <div className="wf-form-grid">
-                <div className="wf-field">
-                  <span className="wf-field-label">start</span>
-                  <input
-                    className="wf-input"
-                    value={workflowSection && typeof workflowSection.start === 'string' ? workflowSection.start : ''}
-                    onChange={(e) => setWorkflowField('start', e.target.value)}
-                  />
-                </div>
-                <div className="wf-field">
-                  <span className="wf-field-label">default_provider</span>
-                  <div className="wf-seg-row">
-                    {PROVIDERS.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        className={`wf-seg-option ${workflowSection?.default_provider === p ? 'selected' : ''}`}
-                        onClick={() => {
-                          setWorkflowField('default_provider', p);
-                          // Clear model if switching providers (model may not be valid for new provider)
-                          if (workflowSection?.default_provider !== p) {
-                            setWorkflowField('default_model', undefined);
-                            // Clear model-dependent fields when switching providers (avoids hidden invalid state)
-                            setWorkflowField('default_reasoning_effort', undefined);
-                            setWorkflowField('default_thinking_budget', undefined);
-                          }
-                        }}
-                        title={PROVIDER_CONFIG[p].hint}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                    {typeof workflowSection?.default_provider === 'string' && (
-                      <button
-                        type="button"
-                        className="wf-seg-clear"
-                        onClick={() => {
-                          setWorkflowField('default_provider', undefined);
-                          setWorkflowField('default_model', undefined);
-                          setWorkflowField('default_reasoning_effort', undefined);
-                          setWorkflowField('default_thinking_budget', undefined);
-                        }}
-                        title="Clear"
-                      >
-                        ×
-                      </button>
-                    )}
+        {draftWorkflow && (
+          <div className="wf-inspector-body">
+            {/* Card 1: Workflow Defaults -- collapsible */}
+            <details className="wf-card" open={!selection}>
+              <summary className="wf-card-header">Workflow Defaults</summary>
+              <div className="wf-card-body">
+                <div className="wf-form-grid">
+                  <div className="wf-field">
+                    <span className="wf-field-label">start</span>
+                    <input
+                      className="wf-input"
+                      value={workflowSection && typeof workflowSection.start === 'string' ? workflowSection.start : ''}
+                      onChange={(e) => setWorkflowField('start', e.target.value)}
+                    />
                   </div>
-                </div>
-                <div className="wf-field">
-                  <span className="wf-field-label">default_model</span>
-                  {(() => {
-                    const effectiveProvider = typeof workflowSection?.default_provider === 'string'
-                      ? workflowSection.default_provider
-                      : undefined;
-                    const models = getModelsForProvider(effectiveProvider);
-                    if (!effectiveProvider) {
-                      return <span className="wf-field-hint">Select a provider first</span>;
-                    }
-                    return (
-                      <div className="wf-seg-row">
-                        {models.map((m) => {
-                          const info = getModelInfo(effectiveProvider, m);
-                          return (
-                            <button
-                              key={m}
-                              type="button"
-                              className={`wf-seg-option ${workflowSection?.default_model === m ? 'selected' : ''}`}
-                              onClick={() => {
-                                setWorkflowField('default_model', m);
-
-                                // Clear invalid model-dependent selections when switching models
-                                if (!info?.reasoningEfforts) {
-                                  setWorkflowField('default_reasoning_effort', undefined);
-                                } else if (typeof workflowSection?.default_reasoning_effort === 'string') {
-                                  const ok = info.reasoningEfforts.some((r) => r.id === workflowSection.default_reasoning_effort);
-                                  if (!ok) setWorkflowField('default_reasoning_effort', undefined);
-                                }
-
-                                if (!info?.thinkingBudgets) {
-                                  setWorkflowField('default_thinking_budget', undefined);
-                                } else if (typeof workflowSection?.default_thinking_budget === 'string') {
-                                  const ok = info.thinkingBudgets.some((t) => t.id === workflowSection.default_thinking_budget);
-                                  if (!ok) setWorkflowField('default_thinking_budget', undefined);
-                                }
-                              }}
-                              title={info?.hint}
-                              data-tier={info?.tier}
-                            >
-                              {info?.label ?? m}
-                            </button>
-                          );
-                        })}
-                        {typeof workflowSection?.default_model === 'string' && (
-                          <button
-                            type="button"
-                            className="wf-seg-clear"
-                            onClick={() => {
+                  <div className="wf-field">
+                    <span className="wf-field-label">default_provider</span>
+                    <div className="wf-seg-row">
+                      {PROVIDERS.map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          className={`wf-seg-option ${workflowSection?.default_provider === p ? 'selected' : ''}`}
+                          onClick={() => {
+                            setWorkflowField('default_provider', p);
+                            // Clear model if switching providers (model may not be valid for new provider)
+                            if (workflowSection?.default_provider !== p) {
                               setWorkflowField('default_model', undefined);
+                              // Clear model-dependent fields when switching providers (avoids hidden invalid state)
                               setWorkflowField('default_reasoning_effort', undefined);
                               setWorkflowField('default_thinking_budget', undefined);
-                            }}
-                            title="Clear"
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-                {/* Reasoning/Thinking Mode - shown when model supports it */}
-                {(() => {
-                  const effectiveProvider = typeof workflowSection?.default_provider === 'string'
-                    ? workflowSection.default_provider
-                    : undefined;
-                  const effectiveModel = typeof workflowSection?.default_model === 'string'
-                    ? workflowSection.default_model
-                    : undefined;
-                  const modelInfo = effectiveProvider && effectiveModel
-                    ? getModelInfo(effectiveProvider, effectiveModel)
-                    : undefined;
-
-                  // Codex reasoning efforts
-                  if (modelInfo?.reasoningEfforts) {
-                    return (
-                      <div className="wf-field">
-                        <span className="wf-field-label">reasoning_effort</span>
+                            }
+                          }}
+                          title={PROVIDER_CONFIG[p].hint}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      {typeof workflowSection?.default_provider === 'string' && (
+                        <button
+                          type="button"
+                          className="wf-seg-clear"
+                          onClick={() => {
+                            setWorkflowField('default_provider', undefined);
+                            setWorkflowField('default_model', undefined);
+                            setWorkflowField('default_reasoning_effort', undefined);
+                            setWorkflowField('default_thinking_budget', undefined);
+                          }}
+                          title="Clear"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="wf-field">
+                    <span className="wf-field-label">default_model</span>
+                    {(() => {
+                      const effectiveProvider = typeof workflowSection?.default_provider === 'string'
+                        ? workflowSection.default_provider
+                        : undefined;
+                      const models = getModelsForProvider(effectiveProvider);
+                      if (!effectiveProvider) {
+                        return <span className="wf-field-hint">Select a provider first</span>;
+                      }
+                      return (
                         <div className="wf-seg-row">
-                          {modelInfo.reasoningEfforts.map((r) => (
-                            <button
-                              key={r.id}
-                              type="button"
-                              className={`wf-seg-option ${workflowSection?.default_reasoning_effort === r.id ? 'selected' : ''}`}
-                              onClick={() => setWorkflowField('default_reasoning_effort', r.id)}
-                              title={r.hint}
-                            >
-                              {r.label}
-                            </button>
-                          ))}
-                          {typeof workflowSection?.default_reasoning_effort === 'string' && (
+                          {models.map((m) => {
+                            const info = getModelInfo(effectiveProvider, m);
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                className={`wf-seg-option ${workflowSection?.default_model === m ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setWorkflowField('default_model', m);
+
+                                  // Clear invalid model-dependent selections when switching models
+                                  if (!info?.reasoningEfforts) {
+                                    setWorkflowField('default_reasoning_effort', undefined);
+                                  } else if (typeof workflowSection?.default_reasoning_effort === 'string') {
+                                    const ok = info.reasoningEfforts.some((r) => r.id === workflowSection.default_reasoning_effort);
+                                    if (!ok) setWorkflowField('default_reasoning_effort', undefined);
+                                  }
+
+                                  if (!info?.thinkingBudgets) {
+                                    setWorkflowField('default_thinking_budget', undefined);
+                                  } else if (typeof workflowSection?.default_thinking_budget === 'string') {
+                                    const ok = info.thinkingBudgets.some((t) => t.id === workflowSection.default_thinking_budget);
+                                    if (!ok) setWorkflowField('default_thinking_budget', undefined);
+                                  }
+                                }}
+                                title={info?.hint}
+                                data-tier={info?.tier}
+                              >
+                                {info?.label ?? m}
+                              </button>
+                            );
+                          })}
+                          {typeof workflowSection?.default_model === 'string' && (
                             <button
                               type="button"
                               className="wf-seg-clear"
-                              onClick={() => setWorkflowField('default_reasoning_effort', undefined)}
-                              title="Clear (use default)"
-                            >
-                              ×
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  // Claude thinking budgets
-                  if (modelInfo?.thinkingBudgets) {
-                    return (
-                      <div className="wf-field">
-                        <span className="wf-field-label">thinking_budget</span>
-                        <div className="wf-seg-row">
-                          {modelInfo.thinkingBudgets.map((t) => (
-                            <button
-                              key={t.id}
-                              type="button"
-                              className={`wf-seg-option ${workflowSection?.default_thinking_budget === t.id ? 'selected' : ''}`}
-                              onClick={() => setWorkflowField('default_thinking_budget', t.id)}
-                              title={t.hint}
-                            >
-                              {t.label}
-                            </button>
-                          ))}
-                          {typeof workflowSection?.default_thinking_budget === 'string' && (
-                            <button
-                              type="button"
-                              className="wf-seg-clear"
-                              onClick={() => setWorkflowField('default_thinking_budget', undefined)}
+                              onClick={() => {
+                                setWorkflowField('default_model', undefined);
+                                setWorkflowField('default_reasoning_effort', undefined);
+                                setWorkflowField('default_thinking_budget', undefined);
+                              }}
                               title="Clear"
                             >
                               ×
                             </button>
                           )}
                         </div>
+                      );
+                    })()}
+                  </div>
+                  {/* Reasoning/Thinking Mode - shown when model supports it */}
+                  {(() => {
+                    const effectiveProvider = typeof workflowSection?.default_provider === 'string'
+                      ? workflowSection.default_provider
+                      : undefined;
+                    const effectiveModel = typeof workflowSection?.default_model === 'string'
+                      ? workflowSection.default_model
+                      : undefined;
+                    const modelInfo = effectiveProvider && effectiveModel
+                      ? getModelInfo(effectiveProvider, effectiveModel)
+                      : undefined;
+
+                    // Codex reasoning efforts
+                    if (modelInfo?.reasoningEfforts) {
+                      return (
+                        <div className="wf-field">
+                          <span className="wf-field-label">reasoning_effort</span>
+                          <div className="wf-seg-row">
+                            {modelInfo.reasoningEfforts.map((r) => (
+                              <button
+                                key={r.id}
+                                type="button"
+                                className={`wf-seg-option ${workflowSection?.default_reasoning_effort === r.id ? 'selected' : ''}`}
+                                onClick={() => setWorkflowField('default_reasoning_effort', r.id)}
+                                title={r.hint}
+                              >
+                                {r.label}
+                              </button>
+                            ))}
+                            {typeof workflowSection?.default_reasoning_effort === 'string' && (
+                              <button
+                                type="button"
+                                className="wf-seg-clear"
+                                onClick={() => setWorkflowField('default_reasoning_effort', undefined)}
+                                title="Clear (use default)"
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Claude thinking budgets
+                    if (modelInfo?.thinkingBudgets) {
+                      return (
+                        <div className="wf-field">
+                          <span className="wf-field-label">thinking_budget</span>
+                          <div className="wf-seg-row">
+                            {modelInfo.thinkingBudgets.map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                className={`wf-seg-option ${workflowSection?.default_thinking_budget === t.id ? 'selected' : ''}`}
+                                onClick={() => setWorkflowField('default_thinking_budget', t.id)}
+                                title={t.hint}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                            {typeof workflowSection?.default_thinking_budget === 'string' && (
+                              <button
+                                type="button"
+                                className="wf-seg-clear"
+                                onClick={() => setWorkflowField('default_thinking_budget', undefined)}
+                                title="Clear"
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return null;
+                  })()}
+                </div>
+              </div>
+            </details>
+
+            {/* Card 2: Phase Editor -- shown when node selected */}
+            {selection?.kind === 'node' && (
+              <details className="wf-card" open>
+                <summary className="wf-card-header">
+                  Phase: {selection.id}
+                  <button
+                    className="wf-btn-danger"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (confirm(`Remove phase "${selection.id}"?`)) {
+                        removePhase(selection.id);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                </summary>
+                <div className="wf-card-body">
+                  <div className="wf-form-grid">
+                    <div className="wf-field">
+                      <span className="wf-field-label">prompt</span>
+                      <input
+                        className="wf-input"
+                        value={selectedPhase && typeof selectedPhase.prompt === 'string' ? selectedPhase.prompt : ''}
+                        onChange={(e) => setPhaseField(selection.id, 'prompt', e.target.value)}
+                      />
+                    </div>
+                    <div className="wf-field">
+                      <span className="wf-field-label">type</span>
+                      <input
+                        className="wf-input"
+                        value={selectedPhase && typeof selectedPhase.type === 'string' ? selectedPhase.type : ''}
+                        onChange={(e) => setPhaseField(selection.id, 'type', e.target.value)}
+                      />
+                    </div>
+                    <div className="wf-field">
+                      <span className="wf-field-label">provider</span>
+                      <div className="wf-seg-row">
+                        {PROVIDERS.map((p) => {
+                          const isSelected = selectedPhase?.provider === p;
+                          const isEffective = !selectedPhase?.provider && workflowSection?.default_provider === p;
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
+                              onClick={() => {
+                                const prevEffectiveProvider = typeof selectedPhase?.provider === 'string'
+                                  ? selectedPhase.provider
+                                  : typeof workflowSection?.default_provider === 'string'
+                                    ? workflowSection.default_provider
+                                    : undefined;
+                                setPhaseField(selection.id, 'provider', p);
+                                // Clear model if switching providers (model may not be valid for new provider)
+                                if (prevEffectiveProvider !== p) {
+                                  setPhaseField(selection.id, 'model', undefined);
+                                  // Clear model-dependent fields when switching providers (avoids hidden invalid state)
+                                  setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                  setPhaseField(selection.id, 'thinking_budget', undefined);
+                                }
+                              }}
+                              title={PROVIDER_CONFIG[p].hint}
+                            >
+                              {p}
+                            </button>
+                          );
+                        })}
+                        {typeof selectedPhase?.provider === 'string' && (
+                          <button
+                            type="button"
+                            className="wf-seg-clear"
+                            onClick={() => setPhaseField(selection.id, 'provider', undefined)}
+                            title="Use workflow default"
+                          >
+                            ×
+                          </button>
+                        )}
                       </div>
-                    );
-                  }
+                      {!selectedPhase?.provider && typeof workflowSection?.default_provider === 'string' && (
+                        <div className="wf-effective-row">
+                          <span className="wf-effective-label">Using:</span>
+                          <span className="wf-effective-inherited">{String(workflowSection.default_provider)} (workflow default)</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="wf-field">
+                      <span className="wf-field-label">model</span>
+                      {(() => {
+                        // Effective provider: phase override or workflow default
+                        const effectiveProvider = typeof selectedPhase?.provider === 'string'
+                          ? selectedPhase.provider
+                          : typeof workflowSection?.default_provider === 'string'
+                            ? workflowSection.default_provider
+                            : undefined;
+                        const models = getModelsForProvider(effectiveProvider);
+                        if (!effectiveProvider) {
+                          return <span className="wf-field-hint">Select a provider first</span>;
+                        }
+                        return (
+                          <>
+                            <div className="wf-seg-row">
+                              {models.map((m) => {
+                                const info = getModelInfo(effectiveProvider, m);
+                                const isSelected = selectedPhase?.model === m;
+                                const isEffective = !selectedPhase?.model && workflowSection?.default_model === m;
+                                return (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
+                                    onClick={() => {
+                                      setPhaseField(selection.id, 'model', m);
 
-                  return null;
-                })()}
-              </div>
-            </div>
+                                      // Clear invalid model-dependent selections when switching models
+                                      if (!info?.reasoningEfforts) {
+                                        setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                      } else if (typeof selectedPhase?.reasoning_effort === 'string') {
+                                        const ok = info.reasoningEfforts.some((r) => r.id === selectedPhase.reasoning_effort);
+                                        if (!ok) setPhaseField(selection.id, 'reasoning_effort', undefined);
+                                      }
 
-            {/* Phases Section */}
-            <div className="wf-section">
-              <div className="wf-section-header">
-                <span className="wf-section-title">Phases</span>
-              </div>
+                                      if (!info?.thinkingBudgets) {
+                                        setPhaseField(selection.id, 'thinking_budget', undefined);
+                                      } else if (typeof selectedPhase?.thinking_budget === 'string') {
+                                        const ok = info.thinkingBudgets.some((t) => t.id === selectedPhase.thinking_budget);
+                                        if (!ok) setPhaseField(selection.id, 'thinking_budget', undefined);
+                                      }
+                                    }}
+                                    title={info?.hint}
+                                    data-tier={info?.tier}
+                                  >
+                                    {info?.label ?? m}
+                                  </button>
+                                );
+                              })}
+                              {typeof selectedPhase?.model === 'string' && (
+                                <button
+                                  type="button"
+                                  className="wf-seg-clear"
+                                  onClick={() => setPhaseField(selection.id, 'model', undefined)}
+                                  title="Use workflow default"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                            {!selectedPhase?.model && typeof workflowSection?.default_model === 'string' && (
+                              <div className="wf-effective-row">
+                                <span className="wf-effective-label">Using:</span>
+                                <span className="wf-effective-inherited">{String(workflowSection.default_model)} (workflow default)</span>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                    {/* Reasoning/Thinking Mode for phase - shown when model supports it */}
+                    {(() => {
+                      // Effective provider and model for this phase
+                      const effectiveProvider = typeof selectedPhase?.provider === 'string'
+                        ? selectedPhase.provider
+                        : typeof workflowSection?.default_provider === 'string'
+                          ? workflowSection.default_provider
+                          : undefined;
+                      const effectiveModel = typeof selectedPhase?.model === 'string'
+                        ? selectedPhase.model
+                        : typeof workflowSection?.default_model === 'string'
+                          ? workflowSection.default_model
+                          : undefined;
+                      const modelInfo = effectiveProvider && effectiveModel
+                        ? getModelInfo(effectiveProvider, effectiveModel)
+                        : undefined;
+
+                      // Codex reasoning efforts
+                      if (modelInfo?.reasoningEfforts) {
+                        const isInherited = !selectedPhase?.reasoning_effort && typeof workflowSection?.default_reasoning_effort === 'string';
+                        return (
+                          <div className="wf-field">
+                            <span className="wf-field-label">reasoning_effort</span>
+                            <div className="wf-seg-row">
+                              {modelInfo.reasoningEfforts.map((r) => {
+                                const isSelected = selectedPhase?.reasoning_effort === r.id;
+                                const isEffective = !selectedPhase?.reasoning_effort && workflowSection?.default_reasoning_effort === r.id;
+                                return (
+                                  <button
+                                    key={r.id}
+                                    type="button"
+                                    className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
+                                    onClick={() => setPhaseField(selection.id, 'reasoning_effort', r.id)}
+                                    title={r.hint}
+                                  >
+                                    {r.label}
+                                  </button>
+                                );
+                              })}
+                              {typeof selectedPhase?.reasoning_effort === 'string' && (
+                                <button
+                                  type="button"
+                                  className="wf-seg-clear"
+                                  onClick={() => setPhaseField(selection.id, 'reasoning_effort', undefined)}
+                                  title="Use workflow default"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                            {isInherited && (
+                              <div className="wf-effective-row">
+                                <span className="wf-effective-label">Using:</span>
+                                <span className="wf-effective-inherited">{String(workflowSection.default_reasoning_effort)} (workflow default)</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // Claude thinking budgets
+                      if (modelInfo?.thinkingBudgets) {
+                        const isInherited = !selectedPhase?.thinking_budget && typeof workflowSection?.default_thinking_budget === 'string';
+                        return (
+                          <div className="wf-field">
+                            <span className="wf-field-label">thinking_budget</span>
+                            <div className="wf-seg-row">
+                              {modelInfo.thinkingBudgets.map((t) => {
+                                const isSelected = selectedPhase?.thinking_budget === t.id;
+                                const isEffective = !selectedPhase?.thinking_budget && workflowSection?.default_thinking_budget === t.id;
+                                return (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
+                                    onClick={() => setPhaseField(selection.id, 'thinking_budget', t.id)}
+                                    title={t.hint}
+                                  >
+                                    {t.label}
+                                  </button>
+                                );
+                              })}
+                              {typeof selectedPhase?.thinking_budget === 'string' && (
+                                <button
+                                  type="button"
+                                  className="wf-seg-clear"
+                                  onClick={() => setPhaseField(selection.id, 'thinking_budget', undefined)}
+                                  title="Use workflow default"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+                            {isInherited && (
+                              <div className="wf-effective-row">
+                                <span className="wf-effective-label">Using:</span>
+                                <span className="wf-effective-inherited">{String(workflowSection.default_thinking_budget)} (workflow default)</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      return null;
+                    })()}
+                    <div className="wf-field">
+                      <span className="wf-field-label">description</span>
+                      <textarea
+                        className="wf-textarea"
+                        value={
+                          selectedPhase && typeof selectedPhase.description === 'string' ? selectedPhase.description : ''
+                        }
+                        onChange={(e) => setPhaseField(selection.id, 'description', e.target.value)}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="wf-field">
+                      <span className="wf-field-label">allowed_writes (one per line)</span>
+                      <textarea
+                        className="wf-textarea"
+                        value={
+                          selectedPhase && Array.isArray(selectedPhase.allowed_writes)
+                            ? (selectedPhase.allowed_writes as unknown[]).filter((v) => typeof v === 'string').join('\n')
+                            : ''
+                        }
+                        onChange={(e) => {
+                          const next = e.target.value
+                            .split('\n')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          setPhaseField(selection.id, 'allowed_writes', next.length ? next : undefined);
+                        }}
+                        rows={3}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Transitions from this phase */}
+                  <div style={{ marginTop: 12 }}>
+                    <div className="wf-section-header">
+                      <span className="wf-section-title">Transitions from {selection.id}</span>
+                    </div>
+                    {addTransitionDialog.open && addTransitionDialog.from === selection.id ? (
+                      <div className="wf-inline-form" style={{ marginBottom: 8 }}>
+                        <select
+                          className="wf-select"
+                          value={newTransitionTo}
+                          onChange={(e) => setNewTransitionTo(e.target.value)}
+                        >
+                          <option value="">Select target phase...</option>
+                          {phaseIds
+                            .filter((id) => id !== selection.id)
+                            .filter((id) => {
+                              const phase = phasesSection?.[selection.id];
+                              if (!isRecord(phase)) return true;
+                              const transitions = phase.transitions;
+                              if (!Array.isArray(transitions)) return true;
+                              return !transitions.some((t) => isRecord(t) && t.to === id);
+                            })
+                            .map((id) => (
+                              <option key={id} value={id}>
+                                {id}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          className="wf-btn wf-btn-primary"
+                          onClick={() => {
+                            addTransition(selection.id, newTransitionTo);
+                            setAddTransitionDialog({ open: false });
+                            setNewTransitionTo('');
+                          }}
+                          disabled={!newTransitionTo}
+                        >
+                          Add
+                        </button>
+                        <button
+                          className="wf-btn"
+                          onClick={() => {
+                            setAddTransitionDialog({ open: false });
+                            setNewTransitionTo('');
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className="wf-btn"
+                        onClick={() => {
+                          setNewTransitionTo('');
+                          setAddTransitionDialog({ open: true, from: selection.id });
+                        }}
+                        style={{ marginBottom: 8 }}
+                      >
+                        + Add Transition
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </details>
+            )}
+
+            {/* Card 3: Transition Editor -- shown when edge selected */}
+            {selection?.kind === 'edge' && (
+              <details className="wf-card" open>
+                <summary className="wf-card-header">
+                  Transition: {selection.from} &rarr; {selection.to}
+                  <button
+                    className="wf-btn-danger"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (confirm(`Remove transition "${selection.from} -> ${selection.to}"?`)) {
+                        removeTransition(selection.from, selection.to);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                </summary>
+                <div className="wf-card-body">
+                  <div className="wf-form-grid">
+                    <div className="wf-field">
+                      <span className="wf-field-label">to</span>
+                      <select
+                        className="wf-select"
+                        value={selection.to}
+                        onChange={(e) => {
+                          const oldTo = selection.to;
+                          const newTo = e.target.value;
+                          if (oldTo === newTo) return;
+                          updateDraft((draft) => {
+                            const phases = isRecord(draft.phases) ? draft.phases : {};
+                            const phase = isRecord(phases[selection.from]) ? (phases[selection.from] as Record<string, unknown>) : null;
+                            if (!phase) return;
+                            const transitions = phase.transitions;
+                            if (!Array.isArray(transitions)) return;
+                            const idx = transitions.findIndex((t) => isRecord(t) && t.to === oldTo);
+                            if (idx < 0) return;
+                            const updated = { ...(transitions[idx] as Record<string, unknown>), to: newTo };
+                            const nextTransitions = transitions.slice();
+                            nextTransitions[idx] = updated;
+                            phase.transitions = nextTransitions;
+                          });
+                          setSelection({ kind: 'edge', from: selection.from, to: newTo });
+                        }}
+                      >
+                        {phaseIds.map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="wf-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedTransition?.auto === true}
+                        onChange={(e) => setTransitionField(selection.from, selection.to, 'auto', e.target.checked)}
+                      />
+                      auto
+                    </label>
+                    <div className="wf-field">
+                      <span className="wf-field-label">when</span>
+                      <input
+                        className="wf-input"
+                        value={selectedTransition && typeof selectedTransition.when === 'string' ? selectedTransition.when : ''}
+                        onChange={(e) => setTransitionField(selection.from, selection.to, 'when', e.target.value)}
+                        placeholder="(optional)"
+                      />
+                    </div>
+                    <div className="wf-field">
+                      <span className="wf-field-label">priority</span>
+                      <input
+                        className="wf-input"
+                        value={
+                          selectedTransition && typeof selectedTransition.priority === 'number'
+                            ? String(selectedTransition.priority)
+                            : ''
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.trim();
+                          if (!raw) setTransitionField(selection.from, selection.to, 'priority', undefined);
+                          else setTransitionField(selection.from, selection.to, 'priority', Number(raw));
+                        }}
+                        placeholder="(optional)"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </details>
+            )}
+
+            {/* Phases section -- Add Phase button */}
+            <div className="wf-card">
+              <div className="wf-card-header">Phases</div>
               {!addPhaseDialog.open ? (
                 <button
                   className="wf-btn"
@@ -703,461 +1142,34 @@ export function WorkflowsPage() {
               )}
             </div>
 
-            {/* Selected Phase Editor */}
-            {selection?.kind === 'node' ? (
-              <div className="wf-section">
-                <div className="wf-section-header">
-                  <span className="wf-section-title">Phase: {selection.id}</span>
-                  <button
-                    className="wf-btn-danger"
-                    onClick={() => {
-                      if (confirm(`Remove phase "${selection.id}"?`)) {
-                        removePhase(selection.id);
-                      }
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="wf-form-grid">
-                  <div className="wf-field">
-                    <span className="wf-field-label">prompt</span>
-                    <input
-                      className="wf-input"
-                      value={selectedPhase && typeof selectedPhase.prompt === 'string' ? selectedPhase.prompt : ''}
-                      onChange={(e) => setPhaseField(selection.id, 'prompt', e.target.value)}
-                    />
-                  </div>
-                  <div className="wf-field">
-                    <span className="wf-field-label">type</span>
-                    <input
-                      className="wf-input"
-                      value={selectedPhase && typeof selectedPhase.type === 'string' ? selectedPhase.type : ''}
-                      onChange={(e) => setPhaseField(selection.id, 'type', e.target.value)}
-                    />
-                  </div>
-                  <div className="wf-field">
-                    <span className="wf-field-label">provider</span>
-                    <div className="wf-seg-row">
-                      {PROVIDERS.map((p) => {
-                        const isSelected = selectedPhase?.provider === p;
-                        const isEffective = !selectedPhase?.provider && workflowSection?.default_provider === p;
-                        return (
-                          <button
-                            key={p}
-                            type="button"
-                            className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
-                            onClick={() => {
-                              const prevEffectiveProvider = typeof selectedPhase?.provider === 'string'
-                                ? selectedPhase.provider
-                                : typeof workflowSection?.default_provider === 'string'
-                                  ? workflowSection.default_provider
-                                  : undefined;
-                              setPhaseField(selection.id, 'provider', p);
-                              // Clear model if switching providers (model may not be valid for new provider)
-                              if (prevEffectiveProvider !== p) {
-                                setPhaseField(selection.id, 'model', undefined);
-                                // Clear model-dependent fields when switching providers (avoids hidden invalid state)
-                                setPhaseField(selection.id, 'reasoning_effort', undefined);
-                                setPhaseField(selection.id, 'thinking_budget', undefined);
-                              }
-                            }}
-                            title={PROVIDER_CONFIG[p].hint}
-                          >
-                            {p}
-                          </button>
-                        );
-                      })}
-                      {typeof selectedPhase?.provider === 'string' && (
-                        <button
-                          type="button"
-                          className="wf-seg-clear"
-                          onClick={() => setPhaseField(selection.id, 'provider', undefined)}
-                          title="Use workflow default"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                    {!selectedPhase?.provider && typeof workflowSection?.default_provider === 'string' && (
-                      <div className="wf-effective-row">
-                        <span className="wf-effective-label">Using:</span>
-                        <span className="wf-effective-inherited">{String(workflowSection.default_provider)} (workflow default)</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="wf-field">
-                    <span className="wf-field-label">model</span>
-                    {(() => {
-                      // Effective provider: phase override or workflow default
-                      const effectiveProvider = typeof selectedPhase?.provider === 'string'
-                        ? selectedPhase.provider
-                        : typeof workflowSection?.default_provider === 'string'
-                          ? workflowSection.default_provider
-                          : undefined;
-                      const models = getModelsForProvider(effectiveProvider);
-                      if (!effectiveProvider) {
-                        return <span className="wf-field-hint">Select a provider first</span>;
-                      }
-                      return (
-                        <>
-                          <div className="wf-seg-row">
-                            {models.map((m) => {
-                              const info = getModelInfo(effectiveProvider, m);
-                              const isSelected = selectedPhase?.model === m;
-                              const isEffective = !selectedPhase?.model && workflowSection?.default_model === m;
-                              return (
-                                <button
-                                  key={m}
-                                  type="button"
-                                  className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
-                                  onClick={() => {
-                                    setPhaseField(selection.id, 'model', m);
-
-                                    // Clear invalid model-dependent selections when switching models
-                                    if (!info?.reasoningEfforts) {
-                                      setPhaseField(selection.id, 'reasoning_effort', undefined);
-                                    } else if (typeof selectedPhase?.reasoning_effort === 'string') {
-                                      const ok = info.reasoningEfforts.some((r) => r.id === selectedPhase.reasoning_effort);
-                                      if (!ok) setPhaseField(selection.id, 'reasoning_effort', undefined);
-                                    }
-
-                                    if (!info?.thinkingBudgets) {
-                                      setPhaseField(selection.id, 'thinking_budget', undefined);
-                                    } else if (typeof selectedPhase?.thinking_budget === 'string') {
-                                      const ok = info.thinkingBudgets.some((t) => t.id === selectedPhase.thinking_budget);
-                                      if (!ok) setPhaseField(selection.id, 'thinking_budget', undefined);
-                                    }
-                                  }}
-                                  title={info?.hint}
-                                  data-tier={info?.tier}
-                                >
-                                  {info?.label ?? m}
-                                </button>
-                              );
-                            })}
-                            {typeof selectedPhase?.model === 'string' && (
-                              <button
-                                type="button"
-                                className="wf-seg-clear"
-                                onClick={() => setPhaseField(selection.id, 'model', undefined)}
-                                title="Use workflow default"
-                              >
-                                ×
-                              </button>
-                            )}
-                          </div>
-                          {!selectedPhase?.model && typeof workflowSection?.default_model === 'string' && (
-                            <div className="wf-effective-row">
-                              <span className="wf-effective-label">Using:</span>
-                              <span className="wf-effective-inherited">{String(workflowSection.default_model)} (workflow default)</span>
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </div>
-                  {/* Reasoning/Thinking Mode for phase - shown when model supports it */}
-                  {(() => {
-                    // Effective provider and model for this phase
-                    const effectiveProvider = typeof selectedPhase?.provider === 'string'
-                      ? selectedPhase.provider
-                      : typeof workflowSection?.default_provider === 'string'
-                        ? workflowSection.default_provider
-                        : undefined;
-                    const effectiveModel = typeof selectedPhase?.model === 'string'
-                      ? selectedPhase.model
-                      : typeof workflowSection?.default_model === 'string'
-                        ? workflowSection.default_model
-                        : undefined;
-                    const modelInfo = effectiveProvider && effectiveModel
-                      ? getModelInfo(effectiveProvider, effectiveModel)
-                      : undefined;
-
-                    // Codex reasoning efforts
-                    if (modelInfo?.reasoningEfforts) {
-                      const isInherited = !selectedPhase?.reasoning_effort && typeof workflowSection?.default_reasoning_effort === 'string';
-                      return (
-                        <div className="wf-field">
-                          <span className="wf-field-label">reasoning_effort</span>
-                          <div className="wf-seg-row">
-                            {modelInfo.reasoningEfforts.map((r) => {
-                              const isSelected = selectedPhase?.reasoning_effort === r.id;
-                              const isEffective = !selectedPhase?.reasoning_effort && workflowSection?.default_reasoning_effort === r.id;
-                              return (
-                                <button
-                                  key={r.id}
-                                  type="button"
-                                  className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
-                                  onClick={() => setPhaseField(selection.id, 'reasoning_effort', r.id)}
-                                  title={r.hint}
-                                >
-                                  {r.label}
-                                </button>
-                              );
-                            })}
-                            {typeof selectedPhase?.reasoning_effort === 'string' && (
-                              <button
-                                type="button"
-                                className="wf-seg-clear"
-                                onClick={() => setPhaseField(selection.id, 'reasoning_effort', undefined)}
-                                title="Use workflow default"
-                              >
-                                ×
-                              </button>
-                            )}
-                          </div>
-                          {isInherited && (
-                            <div className="wf-effective-row">
-                              <span className="wf-effective-label">Using:</span>
-                              <span className="wf-effective-inherited">{String(workflowSection.default_reasoning_effort)} (workflow default)</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Claude thinking budgets
-                    if (modelInfo?.thinkingBudgets) {
-                      const isInherited = !selectedPhase?.thinking_budget && typeof workflowSection?.default_thinking_budget === 'string';
-                      return (
-                        <div className="wf-field">
-                          <span className="wf-field-label">thinking_budget</span>
-                          <div className="wf-seg-row">
-                            {modelInfo.thinkingBudgets.map((t) => {
-                              const isSelected = selectedPhase?.thinking_budget === t.id;
-                              const isEffective = !selectedPhase?.thinking_budget && workflowSection?.default_thinking_budget === t.id;
-                              return (
-                                <button
-                                  key={t.id}
-                                  type="button"
-                                  className={`wf-seg-option ${isSelected ? 'selected' : ''} ${isEffective ? 'effective' : ''}`}
-                                  onClick={() => setPhaseField(selection.id, 'thinking_budget', t.id)}
-                                  title={t.hint}
-                                >
-                                  {t.label}
-                                </button>
-                              );
-                            })}
-                            {typeof selectedPhase?.thinking_budget === 'string' && (
-                              <button
-                                type="button"
-                                className="wf-seg-clear"
-                                onClick={() => setPhaseField(selection.id, 'thinking_budget', undefined)}
-                                title="Use workflow default"
-                              >
-                                ×
-                              </button>
-                            )}
-                          </div>
-                          {isInherited && (
-                            <div className="wf-effective-row">
-                              <span className="wf-effective-label">Using:</span>
-                              <span className="wf-effective-inherited">{String(workflowSection.default_thinking_budget)} (workflow default)</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    return null;
-                  })()}
-                  <div className="wf-field">
-                    <span className="wf-field-label">description</span>
-                    <textarea
-                      className="wf-textarea"
-                      value={
-                        selectedPhase && typeof selectedPhase.description === 'string' ? selectedPhase.description : ''
-                      }
-                      onChange={(e) => setPhaseField(selection.id, 'description', e.target.value)}
-                      rows={3}
-                    />
-                  </div>
-                  <div className="wf-field">
-                    <span className="wf-field-label">allowed_writes (one per line)</span>
-                    <textarea
-                      className="wf-textarea"
-                      value={
-                        selectedPhase && Array.isArray(selectedPhase.allowed_writes)
-                          ? (selectedPhase.allowed_writes as unknown[]).filter((v) => typeof v === 'string').join('\n')
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const next = e.target.value
-                          .split('\n')
-                          .map((s) => s.trim())
-                          .filter(Boolean);
-                        setPhaseField(selection.id, 'allowed_writes', next.length ? next : undefined);
-                      }}
-                      rows={3}
-                    />
-                  </div>
-                </div>
-
-                {/* Transitions from this phase */}
-                <div style={{ marginTop: 12 }}>
-                  <div className="wf-section-header">
-                    <span className="wf-section-title">Transitions from {selection.id}</span>
-                  </div>
-                  {addTransitionDialog.open && addTransitionDialog.from === selection.id ? (
-                    <div className="wf-inline-form" style={{ marginBottom: 8 }}>
-                      <select
-                        className="wf-select"
-                        value={newTransitionTo}
-                        onChange={(e) => setNewTransitionTo(e.target.value)}
-                      >
-                        <option value="">Select target phase...</option>
-                        {phaseIds
-                          .filter((id) => id !== selection.id)
-                          .filter((id) => {
-                            const phase = phasesSection?.[selection.id];
-                            if (!isRecord(phase)) return true;
-                            const transitions = phase.transitions;
-                            if (!Array.isArray(transitions)) return true;
-                            return !transitions.some((t) => isRecord(t) && t.to === id);
-                          })
-                          .map((id) => (
-                            <option key={id} value={id}>
-                              {id}
-                            </option>
-                          ))}
-                      </select>
-                      <button
-                        className="wf-btn wf-btn-primary"
-                        onClick={() => {
-                          addTransition(selection.id, newTransitionTo);
-                          setAddTransitionDialog({ open: false });
-                          setNewTransitionTo('');
-                        }}
-                        disabled={!newTransitionTo}
-                      >
-                        Add
-                      </button>
-                      <button
-                        className="wf-btn"
-                        onClick={() => {
-                          setAddTransitionDialog({ open: false });
-                          setNewTransitionTo('');
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      className="wf-btn"
-                      onClick={() => {
-                        setNewTransitionTo('');
-                        setAddTransitionDialog({ open: true, from: selection.id });
-                      }}
-                      style={{ marginBottom: 8 }}
-                    >
-                      + Add Transition
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : null}
-
-            {/* Selected Transition Editor */}
-            {selection?.kind === 'edge' ? (
-              <div className="wf-section">
-                <div className="wf-section-header">
-                  <span className="wf-section-title">
-                    Transition: {selection.from} -&gt; {selection.to}
-                  </span>
-                  <button
-                    className="wf-btn-danger"
-                    onClick={() => {
-                      if (confirm(`Remove transition "${selection.from} -> ${selection.to}"?`)) {
-                        removeTransition(selection.from, selection.to);
-                      }
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="wf-form-grid">
-                  <div className="wf-field">
-                    <span className="wf-field-label">to</span>
-                    <select
-                      className="wf-select"
-                      value={selection.to}
-                      onChange={(e) => {
-                        const oldTo = selection.to;
-                        const newTo = e.target.value;
-                        if (oldTo === newTo) return;
-                        updateDraft((draft) => {
-                          const phases = isRecord(draft.phases) ? draft.phases : {};
-                          const phase = isRecord(phases[selection.from]) ? (phases[selection.from] as Record<string, unknown>) : null;
-                          if (!phase) return;
-                          const transitions = phase.transitions;
-                          if (!Array.isArray(transitions)) return;
-                          const idx = transitions.findIndex((t) => isRecord(t) && t.to === oldTo);
-                          if (idx < 0) return;
-                          const updated = { ...(transitions[idx] as Record<string, unknown>), to: newTo };
-                          const nextTransitions = transitions.slice();
-                          nextTransitions[idx] = updated;
-                          phase.transitions = nextTransitions;
-                        });
-                        setSelection({ kind: 'edge', from: selection.from, to: newTo });
-                      }}
-                    >
-                      {phaseIds.map((id) => (
-                        <option key={id} value={id}>
-                          {id}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <label className="wf-checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={selectedTransition?.auto === true}
-                      onChange={(e) => setTransitionField(selection.from, selection.to, 'auto', e.target.checked)}
-                    />
-                    auto
-                  </label>
-                  <div className="wf-field">
-                    <span className="wf-field-label">when</span>
-                    <input
-                      className="wf-input"
-                      value={selectedTransition && typeof selectedTransition.when === 'string' ? selectedTransition.when : ''}
-                      onChange={(e) => setTransitionField(selection.from, selection.to, 'when', e.target.value)}
-                      placeholder="(optional)"
-                    />
-                  </div>
-                  <div className="wf-field">
-                    <span className="wf-field-label">priority</span>
-                    <input
-                      className="wf-input"
-                      value={
-                        selectedTransition && typeof selectedTransition.priority === 'number'
-                          ? String(selectedTransition.priority)
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const raw = e.target.value.trim();
-                        if (!raw) setTransitionField(selection.from, selection.to, 'priority', undefined);
-                        else setTransitionField(selection.from, selection.to, 'priority', Number(raw));
-                      }}
-                      placeholder="(optional)"
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : null}
+            {/* Set Active section */}
+            <div className="wf-set-active-section">
+              <button
+                className="wf-btn wf-btn-primary"
+                onClick={onSetActive}
+                disabled={!selectedName || !stream.state?.issue_ref || selectIssueWorkflowMutation.isPending}
+                title={!stream.state?.issue_ref ? 'Select an issue first' : undefined}
+              >
+                Set active
+              </button>
+              <label className="wf-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={resetPhaseOnSelect}
+                  onChange={(e) => setResetPhaseOnSelect(e.target.checked)}
+                />
+                Reset phase
+              </label>
+            </div>
 
             {/* JSON Preview */}
             <details className="wf-json-details">
               <summary>Draft JSON</summary>
-              <pre className="wf-json-pre">
-                {JSON.stringify(draftWorkflow, null, 2)}
-              </pre>
+              <pre className="wf-json-pre">{JSON.stringify(draftWorkflow, null, 2)}</pre>
             </details>
-          </>
-        ) : null}
-      </section>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

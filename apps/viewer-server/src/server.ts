@@ -34,6 +34,8 @@ import {
   type SonarSyncStatus,
 } from './sonarTokenTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
+import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
+import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
@@ -476,13 +478,42 @@ export async function buildServer(config: ViewerServerConfig) {
   const logTailer = new LogTailer();
   const viewerLogTailer = new LogTailer();
   const sdkTailer = new SdkOutputTailer();
+  const workerTailerManager = new WorkerTailerManager();
 
   let currentStateDir: string | null = null;
+  let cachedIssueJsonStateDir: string | null = null;
+  let cachedIssueJsonMtimeMs = 0;
+  let cachedIssueJson: Record<string, unknown> | null = null;
+  let warnedMissingWorkerArtifactsRunId = false;
+
+  async function readIssueJsonCached(stateDir: string): Promise<Record<string, unknown> | null> {
+    const issuePath = path.join(stateDir, 'issue.json');
+    const stat = await fs.stat(issuePath).catch(() => null);
+    if (!stat || !stat.isFile()) {
+      cachedIssueJsonStateDir = stateDir;
+      cachedIssueJsonMtimeMs = 0;
+      cachedIssueJson = null;
+      return null;
+    }
+
+    if (cachedIssueJsonStateDir === stateDir && stat.mtimeMs === cachedIssueJsonMtimeMs) {
+      return cachedIssueJson;
+    }
+
+    cachedIssueJsonStateDir = stateDir;
+    cachedIssueJsonMtimeMs = stat.mtimeMs;
+    cachedIssueJson = await readIssueJson(stateDir);
+    return cachedIssueJson;
+  }
 
   async function refreshFileTargets(): Promise<void> {
     const stateDir = runManager.getIssue().stateDir;
     if (stateDir !== currentStateDir) {
       currentStateDir = stateDir;
+      cachedIssueJsonStateDir = null;
+      cachedIssueJsonMtimeMs = 0;
+      cachedIssueJson = null;
+      warnedMissingWorkerArtifactsRunId = false;
       logTailer.reset(stateDir ? path.join(stateDir, 'last-run.log') : null);
       viewerLogTailer.reset(stateDir ? path.join(stateDir, 'viewer-run.log') : null);
       sdkTailer.reset(stateDir ? path.join(stateDir, 'sdk-output.json') : null);
@@ -618,6 +649,37 @@ export async function buildServer(config: ViewerServerConfig) {
           hub.broadcast('sdk-complete', { status: diff.success === false ? 'error' : 'success', summary: diff.stats ?? {} });
         }
       }
+
+      // Reconcile worker tailers with active workers and poll for events
+      const runStatus = runManager.getStatus();
+      const activeWorkers = runStatus.workers ?? [];
+      const issueJsonForWorkers =
+        activeWorkers.length > 0 ? await readIssueJsonCached(currentStateDir) : null;
+      const workerArtifactsRunId = resolveWorkerArtifactsRunId({ run: runStatus, issueJson: issueJsonForWorkers });
+      if (activeWorkers.length > 0 && !workerArtifactsRunId && !warnedMissingWorkerArtifactsRunId) {
+        warnedMissingWorkerArtifactsRunId = true;
+        console.error(
+          `[pollTick] Unable to resolve worker artifacts runId (run.run_id=${runStatus.run_id ?? 'null'}). ` +
+            `Expected issue.json.status.parallel.runId during parallel execution.`,
+        );
+      }
+      if (activeWorkers.length > 0) {
+        console.error(`[pollTick] Reconciling ${activeWorkers.length} workers: ${activeWorkers.map(w => w.taskId).join(', ')}`);
+      }
+      workerTailerManager.reconcile(activeWorkers, (taskId) => {
+        if (!currentStateDir || !workerArtifactsRunId) return null;
+        return path.join(currentStateDir, '.runs', workerArtifactsRunId, 'workers', taskId);
+      });
+      const workerResults = await workerTailerManager.poll();
+      if (workerResults.workerLogs.length > 0 || workerResults.workerSdkEvents.length > 0) {
+        console.error(`[pollTick] Worker results: ${workerResults.workerLogs.length} log batches, ${workerResults.workerSdkEvents.length} SDK events`);
+      }
+      for (const wl of workerResults.workerLogs) {
+        hub.broadcast('worker-logs', { workerId: wl.taskId, lines: wl.lines });
+      }
+      for (const ws of workerResults.workerSdkEvents) {
+        hub.broadcast(ws.event, { ...ws.data as Record<string, unknown>, workerId: ws.taskId });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -637,6 +699,7 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.addHook('onClose', async () => {
     clearInterval(poller);
+    workerTailerManager.clear();
     await runManager.stop({ force: false }).catch(() => void 0);
   });
 
@@ -2059,6 +2122,13 @@ export async function buildServer(config: ViewerServerConfig) {
     hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
     const sdk = await readSdkOutput(currentStateDir);
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    const workerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
+    for (const ws of workerSnapshots) {
+      hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });
+      if (ws.sdkSnapshot) {
+        emitSdkSnapshot((event, data) => hub.sendTo(id, event, { ...data as Record<string, unknown>, workerId: ws.taskId }), ws.sdkSnapshot);
+      }
+    }
   });
 
   app.get('/api/ws', { websocket: true }, async (socket, req) => {
@@ -2082,6 +2152,13 @@ export async function buildServer(config: ViewerServerConfig) {
     hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
     const sdk = await readSdkOutput(currentStateDir);
     if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    const wsWorkerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
+    for (const ws of wsWorkerSnapshots) {
+      hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });
+      if (ws.sdkSnapshot) {
+        emitSdkSnapshot((event, data) => hub.sendTo(id, event, { ...data as Record<string, unknown>, workerId: ws.taskId }), ws.sdkSnapshot);
+      }
+    }
   });
 
   // Test helpers for direct mutex control (used only in tests)

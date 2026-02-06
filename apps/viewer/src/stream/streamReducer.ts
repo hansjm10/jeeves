@@ -63,6 +63,24 @@ export function streamReducer(
       const next = [...state.sdkEvents, { event: action.event, data: action.data }];
       return { ...state, sdkEvents: capArray(next, MAX_SDK_EVENTS) };
     }
+    case 'worker-logs': {
+      const { workerId, lines, reset } = action.data;
+      const prev = state.workerLogs[workerId] ?? [];
+      const next = reset ? lines : [...prev, ...lines];
+      return {
+        ...state,
+        workerLogs: { ...state.workerLogs, [workerId]: capArray(next, MAX_LOG_LINES) },
+      };
+    }
+    case 'worker-sdk': {
+      const wid = action.workerId;
+      const prev = state.workerSdkEvents[wid] ?? [];
+      const next = [...prev, { event: action.event, data: action.data }];
+      return {
+        ...state,
+        workerSdkEvents: { ...state.workerSdkEvents, [wid]: capArray(next, MAX_SDK_EVENTS) },
+      };
+    }
     case 'sonar-token-status': {
       // Store the latest sonar-token-status event for direct access by consumers
       // This does NOT add to sdkEvents (no noise)

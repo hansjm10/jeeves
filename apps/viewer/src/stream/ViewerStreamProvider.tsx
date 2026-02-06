@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useReducer, useRef } from 'react'
 
 import { wsUrlFromBaseUrl } from '../api/paths.js';
 import type { IssueStateSnapshot, LogEvent, RunStatus, SonarTokenStatusEvent } from '../api/types.js';
+import type { WorkerLogEvent } from './streamTypes.js';
 import { sonarTokenQueryKey } from '../features/sonarToken/queries.js';
 import type { ExtendedStreamState } from './streamReducer.js';
 import { streamReducer } from './streamReducer.js';
@@ -20,6 +21,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     logs: [],
     viewerLogs: [],
     sdkEvents: [],
+    workerLogs: {},
+    workerSdkEvents: {},
     runOverride: null,
     effectiveRun: null,
     sonarTokenStatus: null,
@@ -57,9 +60,20 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
             dispatch({ type: 'run', data: parsed.data as { run: RunStatus } });
           else if (event === 'logs') dispatch({ type: 'logs', data: parsed.data as LogEvent });
           else if (event === 'viewer-logs') dispatch({ type: 'viewer-logs', data: parsed.data as LogEvent });
+          else if (event === 'worker-logs')
+            dispatch({ type: 'worker-logs', data: parsed.data as WorkerLogEvent });
           else if (event === 'sonar-token-status')
             dispatch({ type: 'sonar-token-status', data: parsed.data as SonarTokenStatusEvent });
-          else dispatch({ type: 'sdk', event, data: parsed.data });
+          else {
+            // SDK events: check for workerId to route to worker-specific state
+            const dataObj = parsed.data as Record<string, unknown> | null;
+            const workerId = dataObj && typeof dataObj.workerId === 'string' ? dataObj.workerId : null;
+            if (workerId) {
+              dispatch({ type: 'worker-sdk', event, data: parsed.data, workerId });
+            } else {
+              dispatch({ type: 'sdk', event, data: parsed.data });
+            }
+          }
         } catch {
           dispatch({
             type: 'viewer-logs',

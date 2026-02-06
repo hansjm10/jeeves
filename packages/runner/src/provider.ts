@@ -7,6 +7,7 @@ export type McpServerConfig = Readonly<{
 export type ProviderRunOptions = Readonly<{
   cwd: string;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  permissionMode?: string;
 }>;
 
 export type UsageData = Readonly<{

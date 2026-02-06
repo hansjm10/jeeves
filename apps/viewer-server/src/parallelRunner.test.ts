@@ -4017,11 +4017,11 @@ The task is eligible for retry in the next wave.`,
         },
       };
 
-      // Verify: WorkflowEngine transitions to implement_task for retry
+      // Verify: WorkflowEngine transitions to plan_task for retry (planning before re-implementation)
       const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
 
-      // Per workflows/default.yaml, task_spec_check with taskFailed should go to implement_task
-      expect(nextPhase).toBe('implement_task');
+      // Per workflows/default.yaml, task_spec_check with taskFailed should go to plan_task
+      expect(nextPhase).toBe('plan_task');
     });
 
     it('WorkflowEngine transitions task_spec_check -> implement_task when hasMoreTasks=true after timeout', async () => {
@@ -4042,7 +4042,7 @@ The task is eligible for retry in the next wave.`,
       };
 
       const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
-      expect(nextPhase).toBe('implement_task');
+      expect(nextPhase).toBe('plan_task');
     });
 
     it('after implement_task timeout, status flags allow transition to task_spec_check to fail', async () => {
@@ -4206,12 +4206,12 @@ The task is eligible for retry in the next wave.`,
       const readyTasks = scheduleReadyTasks(tasksJson, 2);
       expect(readyTasks.length).toBe(2);
 
-      // Verify AC2.5: WorkflowEngine can transition back to implement_task
+      // Verify AC2.5: WorkflowEngine can transition back to plan_task (planning phase before implement)
       const workflowsDir = path.join(process.cwd(), 'workflows');
       const workflow = await loadWorkflowByName('default', { workflowsDir });
       const engine = new WorkflowEngine(workflow);
       const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
-      expect(nextPhase).toBe('implement_task');
+      expect(nextPhase).toBe('plan_task');
     });
 
     it('inactivity timeout during implement_task produces same resumable state as iteration timeout', async () => {

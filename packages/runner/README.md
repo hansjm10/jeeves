@@ -54,5 +54,6 @@ The `claude` provider uses the Claude Agent TypeScript SDK with:
 
 - `permissionMode: 'bypassPermissions'`
 - `allowDangerouslySkipPermissions: true`
+- A process-safety guard that blocks broad Bash kill commands by default (`pkill`, `killall`, `fuser -k`, and related patterns) to avoid terminating Jeeves itself
 
-This is an intentional default for now (trusted local automation) and is not configurable yet.
+This is an intentional default for now (trusted local automation). To intentionally bypass the Bash kill-command guard for a run, set `JEEVES_ALLOW_DANGEROUS_PROCESS_KILL=true`.

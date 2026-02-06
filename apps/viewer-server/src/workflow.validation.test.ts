@@ -35,8 +35,8 @@ describe('default workflow validation', () => {
 
     const preCheck = workflow.phases.pre_implementation_check;
 
-    // Find the transition to implement_task
-    const passTransition = preCheck.transitions.find((t) => t.to === 'implement_task');
+    // Find the transition to plan_task (planning phase before implement)
+    const passTransition = preCheck.transitions.find((t) => t.to === 'plan_task');
 
     expect(passTransition).toBeDefined();
     expect(passTransition?.when).toBe('status.preCheckPassed == true');
@@ -112,8 +112,8 @@ describe('default workflow validation', () => {
     // pre_implementation_check has exactly two transitions (pass and fail)
     expect(preCheck.transitions).toHaveLength(2);
 
-    // Verify pass transition
-    const passTransition = preCheck.transitions.find((t) => t.to === 'implement_task');
+    // Verify pass transition (now routes to plan_task before implement)
+    const passTransition = preCheck.transitions.find((t) => t.to === 'plan_task');
     expect(passTransition).toBeDefined();
     expect(passTransition?.when).toBe('status.preCheckPassed == true');
 

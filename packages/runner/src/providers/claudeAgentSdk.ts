@@ -3,9 +3,11 @@ import type { AgentProvider, ProviderEvent, ProviderRunOptions, UsageData } from
 // NOTE: Keep all SDK imports in this file so the rest of the runner is provider-agnostic.
 import {
   query,
+  type CanUseTool,
   type HookCallbackMatcher,
   type HookInput,
   type Options,
+  type PermissionMode,
   type SDKAssistantMessage,
   type SDKMessage,
   type SDKResultMessage,
@@ -102,6 +104,69 @@ function validateModel(modelAlias: string | undefined): void {
   throw new Error(`Invalid model for Claude provider: '${modelAlias}'. Supported aliases: ${Object.keys(CLAUDE_MODEL_ALIASES).join(', ')}`);
 }
 
+type DangerousBashPattern = Readonly<{
+  label: string;
+  pattern: RegExp;
+}>;
+
+const DANGEROUS_BASH_COMMAND_PATTERNS: readonly DangerousBashPattern[] = [
+  { label: 'pkill', pattern: /(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?pkill(?:\s|$)/i },
+  { label: 'killall', pattern: /(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?killall(?:\s|$)/i },
+  { label: 'fuser -k', pattern: /(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?fuser\s+-k(?:\s|$)/i },
+  {
+    label: 'kill $(lsof ...)',
+    pattern: /(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?kill\b[^\n]*\$\([^)]*lsof[^)]*\)/i,
+  },
+  { label: 'kill -1', pattern: /(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?kill(?:\s+-[A-Z0-9]+)?\s+-1(?:\s|$)/i },
+];
+
+const DANGEROUS_KILL_OVERRIDE_ENV = 'JEEVES_ALLOW_DANGEROUS_PROCESS_KILL';
+
+type ResolvedPermissionMode = Readonly<{
+  requestedPermissionMode: string;
+  sdkPermissionMode: PermissionMode;
+  allowDangerouslySkipPermissions: boolean;
+}>;
+
+export function resolveClaudePermissionMode(
+  optionsPermissionMode: string | undefined,
+  envPermissionMode: string | undefined,
+): ResolvedPermissionMode {
+  const requestedPermissionMode = optionsPermissionMode ?? envPermissionMode ?? 'bypassPermissions';
+
+  // Keep workflow-level "plan" semantics while granting the same permissions as normal Claude runs.
+  if (requestedPermissionMode === 'plan') {
+    return {
+      requestedPermissionMode,
+      sdkPermissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+    };
+  }
+
+  const sdkPermissionMode = requestedPermissionMode as PermissionMode;
+  return {
+    requestedPermissionMode,
+    sdkPermissionMode,
+    allowDangerouslySkipPermissions: sdkPermissionMode === 'bypassPermissions',
+  };
+}
+
+export function getDangerousBashCommandBlockReason(
+  toolName: string,
+  input: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (env[DANGEROUS_KILL_OVERRIDE_ENV] === 'true') return null;
+  if (toolName.trim().toLowerCase() !== 'bash') return null;
+  const command = typeof input.command === 'string' ? input.command : '';
+  if (!command.trim()) return null;
+
+  const matched = DANGEROUS_BASH_COMMAND_PATTERNS.find((entry) => entry.pattern.test(command));
+  if (!matched) return null;
+
+  return `Blocked potentially destructive Bash command (${matched.label}). Avoid broad process-kill commands in Jeeves runs because they can terminate viewer/runner processes. Use explicit PIDs for processes you started in this shell, or run on alternate ports. Set ${DANGEROUS_KILL_OVERRIDE_ENV}=true to override.`;
+}
+
 export class ClaudeAgentProvider implements AgentProvider {
   readonly name = 'claude-agent-sdk';
 
@@ -111,8 +176,19 @@ export class ClaudeAgentProvider implements AgentProvider {
     validateModel(envModel);
     const resolvedModel = resolveClaudeModel(envModel);
 
+    // Get permission mode: options > env var > default
+    const envPermMode = process.env.JEEVES_PERMISSION_MODE;
+    const permissionMode = resolveClaudePermissionMode(options.permissionMode, envPermMode);
+
     const pendingEvents: ProviderEvent[] = [];
     const toolStartMsById = new Map<string, number>();
+    const canUseTool: CanUseTool = async (toolName, input, permissionOptions) => {
+      const blockReason = getDangerousBashCommandBlockReason(toolName, input, process.env);
+      if (blockReason) {
+        return { behavior: 'deny', message: blockReason, toolUseID: permissionOptions.toolUseID };
+      }
+      return { behavior: 'allow', toolUseID: permissionOptions.toolUseID };
+    };
 
     const hooks: Partial<Record<string, HookCallbackMatcher[]>> = {
       PreToolUse: [
@@ -178,10 +254,9 @@ export class ClaudeAgentProvider implements AgentProvider {
     const sdkOptions: Options = {
       cwd: options.cwd,
       includePartialMessages: false,
-      // Intentional default for now: trusted local automation should run without prompts.
-      // (Not configurable yet; if/when we expose config, we can offer stricter modes.)
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
+      permissionMode: permissionMode.sdkPermissionMode,
+      allowDangerouslySkipPermissions: permissionMode.allowDangerouslySkipPermissions,
+      canUseTool,
       hooks: hooks as Options['hooks'],
       ...(resolvedModel ? { model: resolvedModel } : {}),
       ...(options.mcpServers ? { mcpServers: options.mcpServers as Options['mcpServers'] } : {}),

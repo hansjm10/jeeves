@@ -447,7 +447,7 @@ export class RunManager {
     await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
   }
 
-  private async spawnRunner(args: string[], viewerLogPath: string, options?: { model?: string }): Promise<number> {
+  private async spawnRunner(args: string[], viewerLogPath: string, options?: { model?: string; permissionMode?: string }): Promise<number> {
     const runnerBin = path.join(this.repoRoot, 'packages', 'runner', 'dist', 'bin.js');
     if (!(await pathExists(runnerBin))) {
       throw new Error(`Runner binary not found at ${runnerBin}. Run: pnpm --filter @jeeves/runner build`);
@@ -462,10 +462,16 @@ export class RunManager {
     if (options?.model) {
       await this.appendViewerLog(viewerLogPath, `[RUNNER] model=${options.model}`);
     }
+    if (options?.permissionMode) {
+      await this.appendViewerLog(viewerLogPath, `[RUNNER] permissionMode=${options.permissionMode}`);
+    }
 
     const env: Record<string, string | undefined> = { ...process.env, JEEVES_DATA_DIR: this.dataDir };
     if (options?.model) {
       env.JEEVES_MODEL = options.model;
+    }
+    if (options?.permissionMode) {
+      env.JEEVES_PERMISSION_MODE = options.permissionMode;
     }
     const proc = this.spawnImpl(cmd, fullArgs, {
       cwd: this.repoRoot,
@@ -655,6 +661,7 @@ export class RunManager {
 
         // Compute effective model: phase.model ?? workflow.defaultModel ?? (provider default = undefined)
         const effectiveModel = getEffectiveModel(workflow, currentPhase);
+        const effectivePermissionMode = workflow.phases[currentPhase]?.permissionMode;
 
         // Validate model if specified - fail loudly for invalid models (no silent fallback)
         if (effectiveModel !== undefined && !isValidModel(effectiveModel)) {
@@ -816,7 +823,7 @@ export class RunManager {
               this.issueRef!,
             ],
             viewerLogPath,
-            { model: effectiveModel },
+            { model: effectiveModel, permissionMode: effectivePermissionMode },
           );
 
           exitCode = await (async () => {
@@ -921,7 +928,7 @@ export class RunManager {
             }
 
             await writeIssueJson(this.stateDir!, updatedIssue);
-            if (nextPhase === 'implement_task') {
+            if (nextPhase === 'implement_task' || nextPhase === 'plan_task') {
               await expandTasksFilesAllowedForTests(this.stateDir!);
             }
             this.broadcast('state', await this.getStateSnapshot());

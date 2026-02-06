@@ -38,7 +38,7 @@ phases:
     prompt: verify.completeness.md
     description: Verify complete implementation against design
     transitions:
-      - to: implement_task
+      - to: plan_task
         when: status.missingWork == true
       - to: prepare_pr
         when: status.implementationComplete == true
@@ -148,6 +148,17 @@ phases:
         priority: 1
     model: opus
     thinking_budget: max
+  plan_task:
+    type: execute
+    provider: claude
+    prompt: task.plan.md
+    description: Plan implementation approach (read-only exploration)
+    permission_mode: plan
+    transitions:
+      - to: implement_task
+        auto: true
+    model: opus
+    thinking_budget: max
   pre_implementation_check:
     type: evaluate
     provider: codex
@@ -156,7 +167,7 @@ phases:
     transitions:
       - to: design_edit
         when: status.preCheckFailed == true
-      - to: implement_task
+      - to: plan_task
         when: status.preCheckPassed == true
     model: gpt-5.3-codex
     reasoning_effort: xhigh
@@ -182,10 +193,10 @@ phases:
       - to: fix_ci
         when: status.pushFailed == true
         priority: 2
-      - to: implement_task
+      - to: plan_task
         when: status.taskFailed == true
         priority: 3
-      - to: implement_task
+      - to: plan_task
         when: status.taskPassed == true and status.hasMoreTasks == true
         priority: 4
       - to: completeness_verification

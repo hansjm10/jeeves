@@ -373,4 +373,78 @@ describe('workflowLoader', () => {
       }),
     ).toThrow(/default_model/i);
   });
+
+  it('round-trips per-phase permission_mode', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'permission-mode-test',
+        version: 1,
+        start: 'plan',
+      },
+      phases: {
+        plan: {
+          type: 'execute',
+          provider: 'claude',
+          model: 'opus',
+          permission_mode: 'plan',
+          prompt: 'Plan',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    expect(workflow.phases.plan.permissionMode).toBe('plan');
+
+    const raw = toRawWorkflowJson(workflow);
+    const phases = raw.phases as Record<string, Record<string, unknown>>;
+    expect(phases.plan.permission_mode).toBe('plan');
+
+    const yaml = toWorkflowYaml(workflow);
+    const parsed = parseWorkflowYaml(yaml);
+    expect(parsed).toEqual(workflow);
+  });
+
+  it('omits permission_mode when not set', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'no-perm-mode',
+        version: 1,
+        start: 'start',
+      },
+      phases: {
+        start: {
+          type: 'execute',
+          prompt: 'Start',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    expect(workflow.phases.start.permissionMode).toBeUndefined();
+
+    const raw = toRawWorkflowJson(workflow);
+    const phases = raw.phases as Record<string, Record<string, unknown>>;
+    expect('permission_mode' in phases.start).toBe(false);
+  });
+
+  it('rejects permission_mode plan with non-claude provider', () => {
+    expect(() =>
+      parseWorkflowObject({
+        workflow: { name: 'bad', version: 1, start: 'start' },
+        phases: {
+          start: {
+            type: 'execute',
+            provider: 'codex',
+            model: 'gpt-5.2',
+            permission_mode: 'plan',
+            prompt: 'Start',
+            transitions: [{ to: 'complete' }],
+          },
+          complete: { type: 'terminal' },
+        },
+      }),
+    ).toThrow(/permission_mode 'plan' requires effective provider 'claude'/i);
+  });
 });

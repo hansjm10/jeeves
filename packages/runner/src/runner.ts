@@ -9,6 +9,8 @@ import type { AgentProvider, McpServerConfig } from './provider.js';
 import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted } from './progress.js';
 import { SdkOutputWriterV1 } from './outputWriter.js';
 
+const PREPENDED_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
   promptPath: string;
@@ -18,7 +20,155 @@ export type RunPhaseParams = Readonly<{
   cwd: string;
   phaseName: string;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  permissionMode?: string;
 }>;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function tryParseJsonRecord(input: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTaskPlanPath(filePath: string): string {
+  return filePath.trim().replace(/\\/g, '/').toLowerCase();
+}
+
+function isTaskPlanPath(filePath: string): boolean {
+  const normalized = normalizeTaskPlanPath(filePath);
+  return normalized.endsWith('task-plan.md') || normalized.endsWith('task_plan.md');
+}
+
+function extractTaskPlanWriteFromEnvelope(envelope: Record<string, unknown>): string | null {
+  const role = typeof envelope.role === 'string' ? envelope.role.trim().toLowerCase() : null;
+  const content = envelope.content;
+  if (role !== 'assistant' || !Array.isArray(content)) return null;
+
+  let latestPlanWrite: string | null = null;
+  for (const block of content) {
+    if (!isPlainRecord(block)) continue;
+    if (block.type !== 'tool_use') continue;
+    const toolName = typeof block.name === 'string' ? block.name.trim().toLowerCase() : '';
+    if (toolName !== 'write') continue;
+    const input = isPlainRecord(block.input) ? block.input : null;
+    if (!input) continue;
+    const filePath = typeof input.file_path === 'string' ? input.file_path : null;
+    const writeContent = typeof input.content === 'string' ? input.content : null;
+    if (!filePath || !writeContent || !isTaskPlanPath(filePath)) continue;
+    latestPlanWrite = writeContent;
+  }
+  return latestPlanWrite;
+}
+
+function isStructuredAssistantEnvelope(envelope: Record<string, unknown>): boolean {
+  const role = typeof envelope.role === 'string' ? envelope.role.trim().toLowerCase() : null;
+  return role === 'assistant' && Array.isArray(envelope.content);
+}
+
+function extractAssistantTextFromEnvelope(envelope: Record<string, unknown>): string | null {
+  if (!isStructuredAssistantEnvelope(envelope)) return null;
+  const content = envelope.content as unknown[];
+  const textParts: string[] = [];
+
+  for (const block of content) {
+    if (!isPlainRecord(block)) continue;
+    if (block.type !== 'text') continue;
+    if (typeof block.text !== 'string') continue;
+    textParts.push(block.text);
+  }
+
+  const joined = textParts.join('').trim();
+  return joined || null;
+}
+
+function extractAssistantChunk(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+
+  const envelope = tryParseJsonRecord(trimmed);
+  if (!envelope) return trimmed;
+
+  const textFromEnvelope = extractAssistantTextFromEnvelope(envelope);
+  if (textFromEnvelope) return textFromEnvelope;
+
+  // Ignore structured SDK envelopes that contain tool-only assistant blocks.
+  if (isStructuredAssistantEnvelope(envelope)) return null;
+
+  // Keep plain assistant JSON output if it is not an SDK wrapper.
+  return trimmed;
+}
+
+export function extractTaskPlanFromSdkOutput(raw: string): string {
+  const parsed = JSON.parse(raw) as { messages?: unknown };
+  const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+
+  let latestTaskPlanWrite: string | null = null;
+  const assistantChunks: string[] = [];
+
+  for (const message of messages) {
+    if (!isPlainRecord(message)) continue;
+    if (message.type !== 'assistant') continue;
+    if (typeof message.content !== 'string') continue;
+
+    const envelope = tryParseJsonRecord(message.content.trim());
+    if (envelope) {
+      const planWrite = extractTaskPlanWriteFromEnvelope(envelope);
+      if (planWrite && planWrite.trim()) latestTaskPlanWrite = planWrite;
+    }
+
+    const chunk = extractAssistantChunk(message.content);
+    if (chunk) assistantChunks.push(chunk);
+  }
+
+  if (latestTaskPlanWrite && latestTaskPlanWrite.trim()) return latestTaskPlanWrite;
+  return assistantChunks.join('\n\n').trim();
+}
+
+async function buildPromptWithPrependedInstructions(
+  phasePrompt: string,
+  cwd: string,
+): Promise<Readonly<{ prompt: string; prependedFiles: readonly string[] }>> {
+  const sections: string[] = [];
+  const prependedFiles: string[] = [];
+
+  for (const fileName of PREPENDED_INSTRUCTION_FILES) {
+    const filePath = path.join(cwd, fileName);
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, 'utf-8');
+    } catch {
+      continue;
+    }
+    const trimmed = content.trim();
+    if (!trimmed) continue;
+    sections.push(`### ${fileName}\n\n${trimmed}`);
+    prependedFiles.push(fileName);
+  }
+
+  if (sections.length === 0) {
+    return { prompt: phasePrompt, prependedFiles };
+  }
+
+  const preface = [
+    '<workspace_instructions>',
+    'The following repository instruction files are prepended for this run.',
+    sections.join('\n\n'),
+    '</workspace_instructions>',
+  ].join('\n\n');
+
+  return {
+    prompt: `${preface}\n\n${phasePrompt}`,
+    prependedFiles,
+  };
+}
 
 export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: boolean }> {
   await ensureJeevesExcludedFromGitStatus(params.cwd).catch(() => void 0);
@@ -29,7 +179,8 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await markStarted(params.progressPath);
   await markPhase(params.progressPath, params.phaseName);
 
-  const prompt = await fs.readFile(params.promptPath, 'utf-8');
+  const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
+  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(phasePrompt, params.cwd);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -43,10 +194,13 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     await logLine(`[RUNNER] provider=${params.provider.name}`);
     await logLine(`[RUNNER] phase=${params.phaseName}`);
     await logLine(`[RUNNER] prompt=${params.promptPath}`);
+    if (prependedFiles.length > 0) {
+      await logLine(`[RUNNER] prepended_instructions=${prependedFiles.join(',')}`);
+    }
 
     const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd);
 
-    for await (const evt of params.provider.run(prompt, { cwd: params.cwd, ...(mcpServers ? { mcpServers } : {}) })) {
+    for await (const evt of params.provider.run(prompt, { cwd: params.cwd, ...(mcpServers ? { mcpServers } : {}), ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}) })) {
       writer.addProviderEvent(evt);
 
       if (evt.type === 'assistant' || evt.type === 'user' || evt.type === 'result') {
@@ -169,6 +323,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
   }
 
   const promptPath = await resolvePromptPath(phase, params.promptsDir, engine);
+  const phaseConfig = workflow.phases[phase];
   const result = await runPhaseOnce({
     provider: params.provider,
     promptPath,
@@ -178,6 +333,22 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     cwd: params.cwd,
     phaseName: phase,
     mcpServers: params.mcpServers,
+    permissionMode: phaseConfig?.permissionMode,
   });
+
+  // After plan-mode phases, extract assistant output and persist as task-plan.md
+  if (result.success && phaseConfig?.permissionMode === 'plan') {
+    try {
+      const raw = await fs.readFile(outputPath, 'utf-8');
+      const planText = extractTaskPlanFromSdkOutput(raw);
+      if (planText.trim()) {
+        const planPath = path.join(params.stateDir, 'task-plan.md');
+        await fs.writeFile(planPath, planText, 'utf-8');
+      }
+    } catch {
+      // Plan extraction is best-effort; don't fail the phase
+    }
+  }
+
   return { phase, success: result.success };
 }

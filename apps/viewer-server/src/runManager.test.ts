@@ -601,7 +601,7 @@ describe('RunManager', () => {
     await waitFor(() => rm.getStatus().running === false);
 
     const updatedIssue = await readIssueJson(stateDir);
-    expect(updatedIssue?.phase).toBe('implement_task');
+    expect(updatedIssue?.phase).toBe('plan_task');
 
     const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
     const tasksJson = JSON.parse(tasksRaw) as { tasks: { filesAllowed: string[] }[] };
@@ -2875,11 +2875,11 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await waitFor(() => rm.getStatus().running === false, 15000);
 
     // Verify: After merge conflict, phase should NOT be task_spec_check
-    // (it should have transitioned to implement_task to allow retry)
+    // (it should have transitioned to plan_task to allow retry via the planning phase)
     const issueAfter = await readIssueJson(stateDir);
 
-    // The critical assertion: phase should be implement_task, not task_spec_check
-    expect(issueAfter?.phase).toBe('implement_task');
+    // The critical assertion: phase should be plan_task, not task_spec_check
+    expect(issueAfter?.phase).toBe('plan_task');
 
     // Verify: status.parallel should be cleared
     expect((issueAfter?.status as Record<string, unknown>)?.parallel).toBeUndefined();

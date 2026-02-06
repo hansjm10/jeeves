@@ -66,6 +66,7 @@ export type Phase = Readonly<{
   model?: string;
   reasoningEffort?: CodexReasoningEffortId;
   thinkingBudget?: ClaudeThinkingBudgetId;
+  permissionMode?: string;
 }>;
 
 export type Workflow = Readonly<{

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProviderRunOptions, McpServerConfig } from '../provider.js';
-import { ClaudeAgentProvider } from './claudeAgentSdk.js';
+import {
+  ClaudeAgentProvider,
+  getDangerousBashCommandBlockReason,
+  resolveClaudePermissionMode,
+} from './claudeAgentSdk.js';
 
 describe('ClaudeAgentProvider', () => {
   describe('mcpServers wiring', () => {
@@ -120,6 +124,96 @@ describe('ClaudeAgentProvider', () => {
       };
 
       expect(sdkOptions).not.toHaveProperty('mcpServers');
+    });
+  });
+
+  describe('permission mode resolution', () => {
+    it('defaults to bypassPermissions when mode is not provided', () => {
+      const resolved = resolveClaudePermissionMode(undefined, undefined);
+
+      expect(resolved.requestedPermissionMode).toBe('bypassPermissions');
+      expect(resolved.sdkPermissionMode).toBe('bypassPermissions');
+      expect(resolved.allowDangerouslySkipPermissions).toBe(true);
+    });
+
+    it('maps plan mode to bypassPermissions for Claude SDK', () => {
+      const resolved = resolveClaudePermissionMode('plan', undefined);
+
+      expect(resolved.requestedPermissionMode).toBe('plan');
+      expect(resolved.sdkPermissionMode).toBe('bypassPermissions');
+      expect(resolved.allowDangerouslySkipPermissions).toBe(true);
+    });
+
+    it('honors explicit non-bypass permission modes', () => {
+      const resolved = resolveClaudePermissionMode('default', undefined);
+
+      expect(resolved.requestedPermissionMode).toBe('default');
+      expect(resolved.sdkPermissionMode).toBe('default');
+      expect(resolved.allowDangerouslySkipPermissions).toBe(false);
+    });
+
+    it('uses env permission mode when options mode is unset', () => {
+      const resolved = resolveClaudePermissionMode(undefined, 'plan');
+
+      expect(resolved.requestedPermissionMode).toBe('plan');
+      expect(resolved.sdkPermissionMode).toBe('bypassPermissions');
+      expect(resolved.allowDangerouslySkipPermissions).toBe(true);
+    });
+  });
+
+  describe('dangerous bash command guard', () => {
+    it('blocks broad kill commands for Bash tool', () => {
+      const reason = getDangerousBashCommandBlockReason(
+        'Bash',
+        { command: 'pkill -f "node.*viewer-server"' },
+        {},
+      );
+
+      expect(reason).toContain('Blocked potentially destructive Bash command');
+      expect(reason).toContain('pkill');
+    });
+
+    it('blocks fuser -k and killall command forms', () => {
+      const fuserReason = getDangerousBashCommandBlockReason(
+        'Bash',
+        { command: 'fuser -k 8081/tcp' },
+        {},
+      );
+      const killallReason = getDangerousBashCommandBlockReason(
+        'Bash',
+        { command: 'sudo killall node' },
+        {},
+      );
+
+      expect(fuserReason).toContain('fuser -k');
+      expect(killallReason).toContain('killall');
+    });
+
+    it('allows safe commands and non-Bash tools', () => {
+      expect(
+        getDangerousBashCommandBlockReason(
+          'Bash',
+          { command: 'pnpm test --filter runner' },
+          {},
+        ),
+      ).toBeNull();
+      expect(
+        getDangerousBashCommandBlockReason(
+          'Read',
+          { command: 'pkill -f node' },
+          {},
+        ),
+      ).toBeNull();
+    });
+
+    it('allows blocked commands when override env var is true', () => {
+      const reason = getDangerousBashCommandBlockReason(
+        'Bash',
+        { command: 'pkill -f node' },
+        { JEEVES_ALLOW_DANGEROUS_PROCESS_KILL: 'true' },
+      );
+
+      expect(reason).toBeNull();
     });
   });
 });

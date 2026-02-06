@@ -89,6 +89,7 @@ const rawPhaseSchema = z
     model: z.unknown().optional(),
     reasoning_effort: z.unknown().optional(),
     thinking_budget: z.unknown().optional(),
+    permission_mode: z.string().optional(),
   })
   .passthrough();
 
@@ -144,6 +145,7 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
       model: typeof phaseRaw.model === 'string' ? phaseRaw.model : undefined,
       reasoningEffort,
       thinkingBudget,
+      permissionMode: phaseRaw.permission_mode,
     };
   }
 
@@ -276,6 +278,15 @@ function validateWorkflow(workflow: Workflow): void {
       }
       validateThinkingBudgetSupport(model, `Phase '${phaseName}' thinking_budget`);
     }
+
+    if (phase.permissionMode === 'plan') {
+      const provider = phase.provider ?? workflow.defaultProvider;
+      if (provider && provider !== 'claude') {
+        throw new WorkflowValidationError(
+          `Phase '${phaseName}' permission_mode 'plan' requires effective provider 'claude' (got '${provider}')`,
+        );
+      }
+    }
   }
 }
 
@@ -339,6 +350,7 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
     if (phase.model) phaseJson.model = phase.model;
     if (phase.reasoningEffort) phaseJson.reasoning_effort = phase.reasoningEffort;
     if (phase.thinkingBudget) phaseJson.thinking_budget = phase.thinkingBudget;
+    if (phase.permissionMode) phaseJson.permission_mode = phase.permissionMode;
     if (phase.outputFile) phaseJson.output_file = phase.outputFile;
     if (phase.statusMapping) phaseJson.status_mapping = phase.statusMapping;
 
@@ -405,6 +417,7 @@ export function toWorkflowYaml(workflow: Workflow): string {
     if (phase.model) phaseJson.model = phase.model;
     if (phase.reasoningEffort) phaseJson.reasoning_effort = phase.reasoningEffort;
     if (phase.thinkingBudget) phaseJson.thinking_budget = phase.thinkingBudget;
+    if (phase.permissionMode) phaseJson.permission_mode = phase.permissionMode;
 
     phasesJson[phaseName] = phaseJson;
   }

@@ -35,7 +35,14 @@ filesAllowed
 
 These define the entire scope of your work.
 
-3. Handle retry state (if present)
+3. Read implementation plan (if present)
+
+If `.jeeves/task-plan.md` exists, read it carefully.
+This plan was created by a prior exploration phase that analyzed the codebase in read-only mode.
+Follow the plan's approach unless you discover issues during implementation that require deviation.
+If you deviate from the plan, note why in your progress log entry.
+
+4. Handle retry state (if present)
 
 If .jeeves/task-feedback.md exists:
 
@@ -53,7 +60,7 @@ Rule:
 
 If any feedback item is not addressed → the task will fail again
 
-4. Pre-flight working tree check (MANDATORY)
+5. Pre-flight working tree check (MANDATORY)
 
 Before writing any code, run:
 
@@ -90,7 +97,7 @@ If you had to modify the worktree to resolve unexpected files (stash/clean/resto
 
 If you cannot safely clean/stash the unexpected files → STOP and record the blocker in `.jeeves/progress.txt`.
 
-5. Implement the task (scope is binding)
+6. Implement the task (scope is binding)
 
 Implementation rules:
 
@@ -124,7 +131,7 @@ Record the blocker in .jeeves/progress.txt
 
 Do NOT proceed further
 
-6. Self-verify against acceptance criteria (MANDATORY)
+7. Self-verify against acceptance criteria (MANDATORY)
 
 Before committing:
 
@@ -142,7 +149,15 @@ If you cannot verify a criterion → STOP
 
 Do not assume the spec check will “figure it out”
 
-7. Update task state (implementation only)
+Local dev server safety:
+
+Do NOT run broad process-kill commands (for example `pkill`, `killall`, `fuser -k`, or similar patterns) to free ports.
+
+If a dev port is busy (for example 8080/8081), run verification servers on alternate ports instead of killing host processes.
+
+Only terminate processes you explicitly started in the current shell and can identify by exact PID.
+
+8. Update task state (implementation only)
 
 Update .jeeves/tasks.json:
 
@@ -158,7 +173,7 @@ Set taskPassed, taskFailed, or allTasksComplete
 
 Those are owned by task_spec_check.
 
-8. Commit changes
+9. Commit changes
 
 Commit using Conventional Commits
 
@@ -178,7 +193,7 @@ Write error details to .jeeves/ci-error.txt
 End the phase immediately
 (fix_ci will handle recovery)
 
-9. Push changes
+10. Push changes
 
 Run:
 
@@ -193,7 +208,7 @@ Write error details to .jeeves/ci-error.txt
 
 End the phase immediately
 
-10. Log implementation progress
+11. Log implementation progress
 
 Append a progress entry to .jeeves/progress.txt.
 

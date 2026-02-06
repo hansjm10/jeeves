@@ -21,6 +21,10 @@ export type IssueState = Readonly<{
   workflow: string;
   designDocPath?: string;
   notes: string;
+  /** Provider-aware status metadata (azure, sonar, ingest, prCreated, etc.). */
+  status?: Readonly<Record<string, unknown>>;
+  /** PR metadata (provider-agnostic: number, url, provider, external_id, etc.). */
+  pullRequest?: Readonly<Record<string, unknown>>;
 }>;
 
 export type IssueStateSummary = Readonly<{
@@ -94,6 +98,18 @@ function normalizeIssueState(data: z.output<typeof issueStateJsonSchema>): Issue
   const issue = { ...data.issue };
   if (issue.repo === undefined) issue.repo = fullRepo;
 
+  // Pass through provider-aware metadata if present
+  const statusRaw = data.status;
+  const pullRequestRaw = data.pullRequest;
+  const status =
+    statusRaw && typeof statusRaw === 'object' && !Array.isArray(statusRaw)
+      ? (statusRaw as Record<string, unknown>)
+      : undefined;
+  const pullRequest =
+    pullRequestRaw && typeof pullRequestRaw === 'object' && !Array.isArray(pullRequestRaw)
+      ? (pullRequestRaw as Record<string, unknown>)
+      : undefined;
+
   return {
     schemaVersion: 1,
     owner,
@@ -104,6 +120,8 @@ function normalizeIssueState(data: z.output<typeof issueStateJsonSchema>): Issue
     workflow: data.workflow ?? 'default',
     designDocPath: data.designDocPath ?? data.designDoc,
     notes: data.notes ?? '',
+    ...(status !== undefined ? { status } : {}),
+    ...(pullRequest !== undefined ? { pullRequest } : {}),
   };
 }
 

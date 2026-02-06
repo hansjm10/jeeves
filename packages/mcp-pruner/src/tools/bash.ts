@@ -81,8 +81,21 @@ export async function handleBash(
               return;
             }
 
-            // No numeric exit code means a spawn-level failure (e.g. ENOENT,
-            // EACCES on the shell binary itself, or the child was killed).
+            // Signal-terminated processes (e.g. SIGTERM, SIGKILL) have a
+            // non-numeric code (null/undefined) but include a signal property.
+            // These are command completions (the process ran), not spawn
+            // failures, so format them as normal output with a null exit code.
+            if (
+              typeof error.code !== "string" ||
+              "signal" in error
+            ) {
+              resolve(formatOutput(stdout ?? "", stderr ?? "", null));
+              return;
+            }
+
+            // String error.code (e.g. "ENOENT", "EACCES") indicates a true
+            // spawn-level failure where the shell binary itself could not be
+            // started.
             reject(error);
             return;
           }

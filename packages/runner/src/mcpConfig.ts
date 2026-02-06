@@ -23,7 +23,15 @@ export type McpServersConfig = Readonly<Record<string, McpServerConfig>>;
 function resolvePrunerEntrypoint(env: Record<string, string | undefined>): string | undefined {
   const explicit = env['JEEVES_MCP_PRUNER_PATH'];
   if (explicit) {
-    return explicit;
+    try {
+      fs.accessSync(explicit, fs.constants.R_OK);
+      return explicit;
+    } catch {
+      console.error(
+        `[mcp-config] JEEVES_MCP_PRUNER_PATH="${explicit}" is not readable; ignoring.`,
+      );
+      return undefined;
+    }
   }
 
   // Try require.resolve (works when @jeeves/mcp-pruner is resolvable)

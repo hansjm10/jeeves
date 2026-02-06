@@ -147,6 +147,34 @@ describe('bash tool', () => {
     });
   });
 
+  describe('signal-terminated commands', () => {
+    it('formats signal-terminated process as normal output with null exit code', async () => {
+      // Send SIGTERM to the shell process itself. The shell should be killed
+      // by the signal, and the output should be formatted as a command
+      // completion (not a spawn error).
+      const result = await handleBash(
+        { command: 'kill -TERM $$' },
+        process.cwd(),
+        disabledPruner(),
+      );
+
+      const text = result.content[0].text;
+      // Should show exit code (null for signal) rather than "Error executing command:"
+      expect(text).toContain('[exit code:');
+      expect(text).not.toContain('Error executing command:');
+    });
+
+    it('does not set isError for signal-terminated commands', async () => {
+      const result = await handleBash(
+        { command: 'kill -TERM $$' },
+        process.cwd(),
+        disabledPruner(),
+      );
+
+      expect((result as Record<string, unknown>)['isError']).toBeUndefined();
+    });
+  });
+
   describe('working directory', () => {
     it('executes command in the specified cwd', async () => {
       const result = await handleBash(

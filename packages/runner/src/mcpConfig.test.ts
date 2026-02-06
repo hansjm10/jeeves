@@ -1,6 +1,10 @@
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { buildMcpServersConfig } from './mcpConfig.js';
+
+/** Absolute path to this test file — always readable. */
+const THIS_FILE = fileURLToPath(import.meta.url);
 
 describe('buildMcpServersConfig', () => {
   describe('enable/disable behavior', () => {
@@ -33,7 +37,7 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/workspace',
       );
@@ -47,7 +51,7 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/workspace',
       );
@@ -58,18 +62,18 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/workspace',
       );
-      expect(result!.pruner.args).toEqual(['/path/to/mcp-pruner.js']);
+      expect(result!.pruner.args).toEqual([THIS_FILE]);
     });
 
     it('sets env.MCP_PRUNER_CWD to the provided cwd', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/my/workspace',
       );
@@ -82,7 +86,7 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/workspace',
       );
@@ -93,7 +97,7 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
           JEEVES_PRUNER_URL: 'http://custom:5000/prune',
         },
         '/workspace',
@@ -105,7 +109,7 @@ describe('buildMcpServersConfig', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/path/to/mcp-pruner.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
           JEEVES_PRUNER_URL: '',
         },
         '/workspace',
@@ -115,15 +119,32 @@ describe('buildMcpServersConfig', () => {
   });
 
   describe('entrypoint resolution', () => {
-    it('uses JEEVES_MCP_PRUNER_PATH when set', () => {
+    it('uses JEEVES_MCP_PRUNER_PATH when set and readable', () => {
       const result = buildMcpServersConfig(
         {
           JEEVES_PRUNER_ENABLED: 'true',
-          JEEVES_MCP_PRUNER_PATH: '/explicit/path/index.js',
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
         },
         '/workspace',
       );
-      expect(result!.pruner.args).toEqual(['/explicit/path/index.js']);
+      expect(result!.pruner.args).toEqual([THIS_FILE]);
+    });
+
+    it('ignores unreadable JEEVES_MCP_PRUNER_PATH and falls back', () => {
+      const badPath = '/nonexistent/path/that/does/not/exist/index.js';
+      const result = buildMcpServersConfig(
+        {
+          JEEVES_PRUNER_ENABLED: 'true',
+          JEEVES_MCP_PRUNER_PATH: badPath,
+        },
+        '/workspace',
+      );
+      // The unreadable explicit path must NOT appear in args.
+      // Depending on whether require.resolve or workspace fallback succeeds,
+      // result may or may not be defined — but the bad path is never used.
+      if (result) {
+        expect(result.pruner.args).not.toEqual([badPath]);
+      }
     });
 
     it('falls back to require.resolve when JEEVES_MCP_PRUNER_PATH is not set', () => {

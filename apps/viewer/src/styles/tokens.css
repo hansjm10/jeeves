@@ -59,4 +59,7 @@
 
   /* ========== Focus ========== */
   --focus-ring-color: rgba(88, 166, 255, 0.35);
+
+  /* ========== Transitions ========== */
+  --duration-sidebar-hide: 180ms;
 }

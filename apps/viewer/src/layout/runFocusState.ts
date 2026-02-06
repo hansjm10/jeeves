@@ -297,6 +297,18 @@ export interface HydrationInput {
   running: boolean;
   /** The persisted (or in-memory) run override. */
   override: RunOverride;
+  /**
+   * Whether the caller is in a disconnected state (no snapshot available yet).
+   * When true, `previousState` is used to preserve the last known UI state.
+   */
+  disconnected?: boolean;
+  /**
+   * The last known focus state before disconnect, used to preserve UI state
+   * during transient stream disconnects (EC3). When `disconnected` is true and
+   * `previousState` is provided, this value is returned instead of deriving
+   * from run/override snapshot data.
+   */
+  previousState?: FocusState;
 }
 
 /**
@@ -307,14 +319,23 @@ export interface HydrationInput {
  * - If running and override "open" → W3 (visible)
  * - If not running → W0 (idle visible)
  *
- * EC3 (reconnect): same logic applied from snapshot. The caller is
- * responsible for preserving the last known state during disconnect
- * and only calling this once the reconnect snapshot is available.
+ * EC3 (reconnect): During transient stream disconnect, preserve last known
+ * state until reconnect snapshot is available. When `disconnected` is true
+ * and a `previousState` is provided, that state is preserved. Once a
+ * reconnect snapshot arrives (`disconnected` is false or omitted), derive
+ * from snapshot data normally.
  *
- * @param input - The hydration input with current run state and override.
+ * @param input - The hydration input with current run state, override, and
+ *   optional disconnect/previous-state signals.
  * @returns The derived initial focus state (no animation needed).
  */
 export function deriveFocusState(input: HydrationInput): FocusState {
+  // EC3: During disconnect, preserve last known state if available.
+  if (input.disconnected && input.previousState !== undefined) {
+    return input.previousState;
+  }
+
+  // EC2 / EC3-reconnect-snapshot: Derive from current run state + override.
   if (input.running) {
     return input.override === 'open' ? 'W3' : 'W2';
   }

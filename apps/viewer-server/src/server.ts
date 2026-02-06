@@ -37,6 +37,7 @@ import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
+import { cleanupStaleArtifacts } from './providerOperationJournal.js';
 import type { CreateGitHubIssueAdapter } from './types.js';
 
 function isLocalAddress(addr: string | undefined | null): boolean {
@@ -619,6 +620,17 @@ export async function buildServer(config: ViewerServerConfig) {
       // (e.g., disk full, permission errors on writeIssueJson)
       console.error(
         'Startup sonar token reconcile failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    // Startup recovery: clean stale provider operation artifacts (lock, journal, temp files).
+    // Non-fatal: failures are logged without blocking server startup.
+    try {
+      await cleanupStaleArtifacts(startupIssue.stateDir);
+    } catch (err) {
+      console.error(
+        'Startup provider operation recovery failed (non-fatal):',
         err instanceof Error ? err.message : String(err),
       );
     }

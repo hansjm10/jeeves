@@ -143,11 +143,14 @@ export function AppShell() {
 
     if (!wasConnected && connected && stream.state) {
       // Reconnected with a snapshot — derive state from the snapshot
-      // to avoid flicker through visible-idle
+      // and previous focus state to avoid flicker through visible-idle.
+      // When the run ended while disconnected, previousState allows
+      // reconciliation to W4 (hidden prior) or W0 (visible prior).
       const override = readRunOverride();
       const derived = deriveFocusState({
         running: stream.state.run.running,
         override,
+        previousState: focusStateRef.current,
       });
       applyTransition(derived, null);
     }

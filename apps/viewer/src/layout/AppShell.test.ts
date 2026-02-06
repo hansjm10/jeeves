@@ -129,10 +129,16 @@ class AppShellFocusSimulator {
 
   /**
    * Simulate reconnect snapshot reconciliation (mirrors the useEffect on connected).
+   * Passes previousState (focusStateRef.current) so idle reconnects can
+   * reconcile to W4 or W0 based on prior visibility mode (T11 / EC3).
    */
   onReconnect(running: boolean) {
     const override = readRunOverride();
-    this.focusState = deriveFocusState({ running, override });
+    this.focusState = deriveFocusState({
+      running,
+      override,
+      previousState: this.focusState,
+    });
     this.prevConnected = true;
   }
 
@@ -392,7 +398,7 @@ describe('T4-AC2: reconnect without flicker', () => {
     expect(sim.sidebarVisible).toBe(true);
   });
 
-  it('reconnect after run completed goes to W0 (no flicker through visible-idle)', () => {
+  it('reconnect after run completed from hidden state goes to W4 (T11 reconciliation)', () => {
     const sim = new AppShellFocusSimulator(false);
     sim.onRunStateChange(true);
     sim.onHideTransitionEnd(); // W2
@@ -401,8 +407,9 @@ describe('T4-AC2: reconnect without flicker', () => {
     sim.onDisconnect();
     sim.onReconnect(false); // run ended while disconnected
 
-    expect(sim.focusState).toBe('W0');
-    expect(sim.sidebarVisible).toBe(true);
+    // T11: W2 (hidden) reconciles to W4, NOT W0
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
   });
 
   it('reconnect does not replay run-start animation', () => {
@@ -1124,5 +1131,190 @@ describe('T6-AC3: integrated restart W4 -> W2 without animation replay', () => {
     sim.onRunStateChange(false);
     expect(sim.focusState).toBe('W0');
     expect(sim.sidebarVisible).toBe(true);
+  });
+});
+
+// ============================================================================
+// T11: Reconnect idle-state reconciliation in AppShell
+// ============================================================================
+
+/**
+ * T11 Acceptance Criteria (AppShell integration):
+ * 1. On reconnect with run.running === false, previous hidden states (W1/W2/W4)
+ *    reconcile to W4 and previous visible states (W0/W3) reconcile to W0.
+ * 2. Reconnect preserves last known state during disconnect and applies
+ *    exactly one reconciliation on snapshot without visible-idle flicker.
+ * 3. Tests cover reconnect-while-run-ends scenarios for both hidden and visible
+ *    prior states.
+ */
+
+describe('T11: AppShell reconnect idle-state reconciliation — hidden prior states', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('reconnect with run ended from W2 (running hidden) reconciles to W4', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+    expect(sim.focusState).toBe('W2');
+
+    // Disconnect while in W2 (running hidden)
+    sim.onDisconnect();
+    // Run ends while disconnected — reconnect snapshot has running=false
+    sim.onReconnect(false);
+
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+    expect(sim.sidebarClasses).toContain('sidebar-hidden');
+    expect(sim.layoutClasses).toContain('layout-focused');
+  });
+
+  it('reconnect with run ended from W1 (in-flight hide) reconciles to W4', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W0 -> W1
+    expect(sim.focusState).toBe('W1');
+
+    // Disconnect during in-flight animation
+    sim.onDisconnect();
+    // Run ends while disconnected
+    sim.onReconnect(false);
+
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+  });
+
+  it('reconnect with run ended from W4 (sticky hidden) stays W4', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd();
+    sim.onRunStateChange(false); // W4
+
+    // Disconnect while already in W4
+    sim.onDisconnect();
+    sim.onReconnect(false);
+
+    expect(sim.focusState).toBe('W4');
+    expect(sim.sidebarVisible).toBe(false);
+  });
+
+  it('W4 after reconnect reconciliation can be reopened by user', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+    sim.onDisconnect();
+    sim.onReconnect(false); // W4
+
+    expect(sim.focusState).toBe('W4');
+
+    // User explicitly reopens
+    sim.onUserReopen();
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+  });
+});
+
+describe('T11: AppShell reconnect idle-state reconciliation — visible prior states', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('reconnect with run ended from W3 (override open) reconciles to W0', () => {
+    writeRunOverride('open');
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W0 -> W3
+    expect(sim.focusState).toBe('W3');
+
+    sim.onDisconnect();
+    // Run ends while disconnected — reconnect snapshot has running=false
+    sim.onReconnect(false);
+
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+    expect(sim.sidebarClasses).not.toContain('sidebar-hidden');
+    expect(sim.layoutClasses).not.toContain('layout-focused');
+  });
+
+  it('reconnect with run ended from W0 (idle visible) stays W0', () => {
+    const sim = new AppShellFocusSimulator(false);
+    expect(sim.focusState).toBe('W0');
+
+    sim.onDisconnect();
+    sim.onReconnect(false);
+
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+  });
+});
+
+describe('T11: AppShell reconnect does not flicker through visible-idle', () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+    vi.clearAllMocks();
+  });
+
+  it('reconnect from W2 to idle does NOT pass through W0 (no visible-idle flicker)', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    sim.onDisconnect();
+    // On reconnect with running=false, should go directly to W4 (not W0)
+    sim.onReconnect(false);
+    expect(sim.focusState).toBe('W4');
+    // Sidebar was never visible during this transition
+    expect(sim.sidebarVisible).toBe(false);
+  });
+
+  it('reconnect from W3 to idle results in W0 (sidebar was already visible)', () => {
+    writeRunOverride('open');
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W3
+
+    sim.onDisconnect();
+    sim.onReconnect(false);
+    // W0 is correct here because sidebar was visible — no unexpected hide
+    expect(sim.focusState).toBe('W0');
+    expect(sim.sidebarVisible).toBe(true);
+  });
+
+  it('reconnect with active run still derives correctly (no regression)', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+
+    sim.onDisconnect();
+    sim.onReconnect(true); // run still active
+
+    // Should stay in W2 (not regress to W0 or W4)
+    expect(sim.focusState).toBe('W2');
+    expect(sim.sidebarVisible).toBe(false);
+    expect(sim.animatingHide).toBe(false);
+  });
+
+  it('Header controls are correct after reconnect reconciliation to W4', () => {
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true);
+    sim.onHideTransitionEnd(); // W2
+    sim.onDisconnect();
+    sim.onReconnect(false); // W4
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(true);
+    expect(header.label).toBe('Show Sidebar');
+    expect(header.action).toBe('reopen');
+  });
+
+  it('Header controls are correct after reconnect reconciliation to W0', () => {
+    writeRunOverride('open');
+    const sim = new AppShellFocusSimulator(false);
+    sim.onRunStateChange(true); // W3
+    sim.onDisconnect();
+    sim.onReconnect(false); // W0
+
+    const header = deriveHeaderControl(sim.focusState);
+    expect(header.showFocusControl).toBe(false);
   });
 });

@@ -323,7 +323,12 @@ export interface HydrationInput {
  * state until reconnect snapshot is available. When `disconnected` is true
  * and a `previousState` is provided, that state is preserved. Once a
  * reconnect snapshot arrives (`disconnected` is false or omitted), derive
- * from snapshot data normally.
+ * from snapshot data using reconciliation rules:
+ * - If run is active: enter W2 (auto) or W3 (open) by override.
+ * - If run is idle and `previousState` is available: reconcile based on
+ *   prior visibility — hidden states (W1/W2/W4) → W4, visible states
+ *   (W0/W3) → W0. This handles the case where a run ends while disconnected.
+ * - If run is idle with no `previousState`: W0 (fresh hydration).
  *
  * @param input - The hydration input with current run state, override, and
  *   optional disconnect/previous-state signals.
@@ -339,6 +344,14 @@ export function deriveFocusState(input: HydrationInput): FocusState {
   if (input.running) {
     return input.override === 'open' ? 'W3' : 'W2';
   }
+
+  // EC3 idle reconciliation: if a previousState is available (reconnect
+  // scenario where run ended while disconnected), reconcile based on
+  // whether the prior state was hidden or visible.
+  if (input.previousState !== undefined) {
+    return isSidebarVisible(input.previousState) ? 'W0' : 'W4';
+  }
+
   return 'W0';
 }
 

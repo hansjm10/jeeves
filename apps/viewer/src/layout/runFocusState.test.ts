@@ -570,14 +570,17 @@ describe('deriveFocusState', () => {
       expect(result).toBe('W2');
     });
 
-    it('ignores previousState when not disconnected', () => {
+    it('uses previousState for idle reconciliation when not disconnected (T11)', () => {
+      // T11: When reconnect snapshot arrives (disconnected=false) with
+      // running=false and previousState present, reconcile based on prior
+      // visibility. W2 is hidden → W4.
       const result = deriveFocusState({
         running: false,
         override: 'auto',
         disconnected: false,
         previousState: 'W2',
       });
-      expect(result).toBe('W0');
+      expect(result).toBe('W4');
     });
   });
 
@@ -895,14 +898,24 @@ describe('T3-AC2/EC3: reconnect preservation', () => {
     expect(state).toBe('W2');
   });
 
-  it('reconnect snapshot with running=false goes to W0 (ignoring previousState)', () => {
-    const state = deriveFocusState({
+  it('reconnect snapshot with running=false reconciles based on prior visibility (T11)', () => {
+    // W2 is a hidden state → reconciles to W4 (sticky hidden)
+    const hiddenPrior = deriveFocusState({
       running: false,
       override: 'auto',
       disconnected: false,
       previousState: 'W2',
     });
-    expect(state).toBe('W0');
+    expect(hiddenPrior).toBe('W4');
+
+    // W3 is a visible state → reconciles to W0 (idle visible)
+    const visiblePrior = deriveFocusState({
+      running: false,
+      override: 'auto',
+      disconnected: false,
+      previousState: 'W3',
+    });
+    expect(visiblePrior).toBe('W0');
   });
 
   it('disconnect with no previousState falls back to snapshot derivation', () => {
@@ -1075,5 +1088,214 @@ describe('T3-AC3: sticky hidden post-run persistence', () => {
     });
     expect(disconnectState).toBe('W4');
     expect(isSidebarVisible('W4')).toBe(false);
+  });
+});
+
+// ============================================================================
+// T11: Reconnect idle-state reconciliation tests
+// ============================================================================
+
+/**
+ * T11 Acceptance Criteria:
+ * 1. On reconnect snapshot with run.running === false, previous hidden-focused
+ *    states (W1/W2/W4) reconcile to W4, and previous visible states (W0/W3)
+ *    reconcile to W0.
+ * 2. Reconnect handling preserves last known state during disconnect and applies
+ *    exactly one reconciliation on snapshot without visible-idle flicker.
+ * 3. Automated tests cover reconnect-while-run-ends scenarios for both hidden
+ *    and visible prior states.
+ */
+
+describe('T11: reconnect idle-state reconciliation in deriveFocusState', () => {
+  // --- AC1: Hidden prior states (W1, W2, W4) reconcile to W4 on idle reconnect ---
+
+  describe('AC1: hidden prior states reconcile to W4 on idle reconnect', () => {
+    it('previousState W1 (in-flight hide) reconciles to W4 when run ended', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W1',
+      });
+      expect(result).toBe('W4');
+      expect(isSidebarVisible(result)).toBe(false);
+    });
+
+    it('previousState W2 (running hidden) reconciles to W4 when run ended', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W2',
+      });
+      expect(result).toBe('W4');
+      expect(isSidebarVisible(result)).toBe(false);
+    });
+
+    it('previousState W4 (already sticky hidden) stays W4 on idle reconnect', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W4',
+      });
+      expect(result).toBe('W4');
+      expect(isSidebarVisible(result)).toBe(false);
+    });
+  });
+
+  // --- AC1: Visible prior states (W0, W3) reconcile to W0 on idle reconnect ---
+
+  describe('AC1: visible prior states reconcile to W0 on idle reconnect', () => {
+    it('previousState W0 (idle visible) stays W0 on idle reconnect', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W0',
+      });
+      expect(result).toBe('W0');
+      expect(isSidebarVisible(result)).toBe(true);
+    });
+
+    it('previousState W3 (running override open) reconciles to W0 when run ended', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W3',
+      });
+      expect(result).toBe('W0');
+      expect(isSidebarVisible(result)).toBe(true);
+    });
+
+    it('previousState W3 reconciles to W0 even with override "open"', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'open',
+        previousState: 'W3',
+      });
+      expect(result).toBe('W0');
+      expect(isSidebarVisible(result)).toBe(true);
+    });
+  });
+
+  // --- AC2: Preserves last known state during disconnect, single reconciliation ---
+
+  describe('AC2: disconnect preservation and single reconciliation', () => {
+    it('during disconnect, W2 is preserved (no premature reconciliation)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'auto',
+        disconnected: true,
+        previousState: 'W2',
+      });
+      expect(result).toBe('W2');
+    });
+
+    it('during disconnect, W3 is preserved (no premature reconciliation)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'auto',
+        disconnected: true,
+        previousState: 'W3',
+      });
+      expect(result).toBe('W3');
+    });
+
+    it('reconnect snapshot with running=false and prior W2 reconciles to W4 in single step', () => {
+      // First: during disconnect, state is preserved
+      const duringDisconnect = deriveFocusState({
+        running: true,
+        override: 'auto',
+        disconnected: true,
+        previousState: 'W2',
+      });
+      expect(duringDisconnect).toBe('W2');
+
+      // Then: reconnect snapshot arrives with run idle — single reconciliation to W4
+      const onReconnect = deriveFocusState({
+        running: false,
+        override: 'auto',
+        previousState: 'W2',
+      });
+      expect(onReconnect).toBe('W4');
+      // No intermediate W0 flicker
+      expect(onReconnect).not.toBe('W0');
+    });
+
+    it('reconnect snapshot with running=false and prior W3 reconciles to W0 in single step', () => {
+      // First: during disconnect, state is preserved
+      const duringDisconnect = deriveFocusState({
+        running: true,
+        override: 'open',
+        disconnected: true,
+        previousState: 'W3',
+      });
+      expect(duringDisconnect).toBe('W3');
+
+      // Then: reconnect snapshot arrives with run idle — single reconciliation to W0
+      const onReconnect = deriveFocusState({
+        running: false,
+        override: 'open',
+        previousState: 'W3',
+      });
+      expect(onReconnect).toBe('W0');
+    });
+  });
+
+  // --- Active-run reconnect still uses normal derivation ---
+
+  describe('active-run reconnect still derives from snapshot', () => {
+    it('reconnect with running=true and prior W2 stays W2 (auto override)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'auto',
+        previousState: 'W2',
+      });
+      expect(result).toBe('W2');
+    });
+
+    it('reconnect with running=true and prior W4 derives W2 (auto override)', () => {
+      // Previous state was W4 (idle hidden) but run is now active — derive from snapshot
+      const result = deriveFocusState({
+        running: true,
+        override: 'auto',
+        previousState: 'W4',
+      });
+      expect(result).toBe('W2');
+    });
+
+    it('reconnect with running=true and prior W0 derives W3 (open override)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'open',
+        previousState: 'W0',
+      });
+      expect(result).toBe('W3');
+    });
+  });
+
+  // --- No previousState: fresh hydration behavior unchanged ---
+
+  describe('fresh hydration (no previousState) behavior unchanged', () => {
+    it('running=false without previousState returns W0', () => {
+      const result = deriveFocusState({
+        running: false,
+        override: 'auto',
+      });
+      expect(result).toBe('W0');
+    });
+
+    it('running=true without previousState returns W2 (auto)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'auto',
+      });
+      expect(result).toBe('W2');
+    });
+
+    it('running=true without previousState returns W3 (open)', () => {
+      const result = deriveFocusState({
+        running: true,
+        override: 'open',
+      });
+      expect(result).toBe('W3');
+    });
   });
 });

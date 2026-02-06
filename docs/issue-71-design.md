@@ -29,7 +29,7 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 ---
 
 ## 2. Workflow
-[To be completed in design_workflow phase]
+N/A - This feature does not involve workflow or state machine changes.
 
 ## 3. Interfaces
 [To be completed in design_api phase]

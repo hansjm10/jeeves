@@ -512,11 +512,24 @@ export class RunManager {
 
   private async getStateSnapshot() {
     const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
+    const taskCount = await this.readTaskCount();
     return {
       issue_ref: this.issueRef,
       issue_json: issueJson,
       run: this.status,
+      task_count: taskCount,
     };
+  }
+
+  private async readTaskCount(): Promise<number | null> {
+    if (!this.stateDir) return null;
+    try {
+      const raw = await fs.readFile(path.join(this.stateDir, 'tasks.json'), 'utf-8');
+      const parsed = JSON.parse(raw) as { tasks?: unknown[] };
+      return Array.isArray(parsed.tasks) ? parsed.tasks.length : null;
+    } catch {
+      return null;
+    }
   }
 
   private async checkCompletionPromise(): Promise<boolean> {

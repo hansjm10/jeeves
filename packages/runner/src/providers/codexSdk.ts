@@ -329,6 +329,9 @@ function getCodexModel(): string | undefined {
   return process.env.CODEX_MODEL ?? process.env.OPENAI_MODEL ?? undefined;
 }
 
+// NOTE: Codex CLI's --experimental-json stream does not expose compaction events.
+// Only thread.started, turn.*, item.*, and error events are available.
+// If Codex adds compaction visibility in the future, handle it in mapCodexEventToProviderEvents().
 export class CodexSdkProvider implements AgentProvider {
   readonly name = 'codex';
 

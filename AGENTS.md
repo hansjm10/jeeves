@@ -113,8 +113,8 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 │  Outer Loop (RunManager in apps/viewer-server/...)  │
 │  for i in range(max_iterations):                    │
 │      spawn sdk_runner subprocess (fresh context)    │
-│      if output contains <promise>COMPLETE</promise> │
-│         and phase is terminal:                      │
+│      evaluate workflow transitions                  │
+│      if transitioned to terminal phase:             │
 │          break                                      │
 │      # Handoff via progress.txt (agent writes it)   │
 └─────────────────────────────────────────────────────┘
@@ -125,7 +125,8 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 - The SDK runner stays simple: one run, no retry logic
 - Handoff between iterations happens via **files** (`progress.txt`)
 - Agents read `progress.txt` at the start of each iteration to understand prior work
-- Completion marker is `<promise>COMPLETE</promise>`; the orchestrator only honors it in terminal phase context
+- Phase completion is driven by workflow state transitions; agents end normally after their work
+- The orchestrator retains a legacy safety-net check for `<promise>COMPLETE</promise>` in terminal phases only
 
 **API parameters:**
 - `max_iterations` (default: 10): Total fresh-context iterations allowed

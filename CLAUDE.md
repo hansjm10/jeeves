@@ -103,8 +103,7 @@ Jeeves uses an iteration pattern where each run is a **fresh context window**:
 2. You read `progress.txt` to understand what happened in prior iterations
 3. You work on the current phase
 4. You write your progress to `progress.txt` for the next iteration
-5. If complete, output `<promise>COMPLETE</promise>` (the orchestrator only stops on this signal in terminal phase context)
-6. If not complete, end normally and the next iteration continues
+5. When done, end normally -- the orchestrator handles phase transitions automatically
 
 **This means:**
 - You start fresh each iteration - no memory of prior runs except via files
@@ -112,24 +111,24 @@ Jeeves uses an iteration pattern where each run is a **fresh context window**:
 - The `## Codebase Patterns` section in `progress.txt` is especially important
 - Multiple iterations can work on the same phase if needed
 
-## Completion Signal
+## Phase Completion
 
-When ALL tasks for the current phase are complete:
+When you finish work for the current phase:
 
 1. Ensure all changes are committed and pushed
 2. Update `.jeeves/issue.json` with final status
 3. Append final summary to `.jeeves/progress.txt`
-4. Output exactly: `<promise>COMPLETE</promise>`
+4. End normally -- the orchestrator evaluates workflow transitions and advances to the next phase automatically
 
-Note: This marker is ignored in non-terminal phases; workflow state transitions are the source of truth for completion.
+Do NOT output `<promise>COMPLETE</promise>`. This marker is reserved for internal orchestrator use. Workflow state transitions are the source of truth for phase completion.
 
-**When NOT to output the promise:**
+**If your work is NOT complete:**
 - Tests are failing
 - Implementation is incomplete
 - You hit errors or blockers
 - More work is needed
 
-If incomplete, write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.
+Write your progress to `.jeeves/progress.txt` and end normally. The next iteration will continue from where you left off.
 
 ## Important
 

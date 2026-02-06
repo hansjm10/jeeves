@@ -76,4 +76,6 @@ export type IssueStateSnapshot = Readonly<{
   paths: ViewerPaths;
   issue_json: Record<string, unknown> | null;
   run: RunStatus;
+  /** Total number of tasks in tasks.json (null when no tasks file exists) */
+  task_count?: number | null;
 }>;

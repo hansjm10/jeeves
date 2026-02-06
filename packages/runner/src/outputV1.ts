@@ -1,7 +1,7 @@
 export type SdkOutputV1Message = Readonly<{
   type: 'system' | 'user' | 'assistant' | 'tool_result' | 'result';
   timestamp: string;
-  subtype?: 'init' | 'error' | null;
+  subtype?: 'init' | 'error' | 'compaction' | null;
   content?: string | null;
   tool_use?: Readonly<{ name: string; input: Record<string, unknown>; id: string }> | null;
   tool_use_id?: string | null;

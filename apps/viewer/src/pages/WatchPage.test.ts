@@ -4,6 +4,7 @@ import {
   computeRunContextFields,
   computeRunOutcome,
   extractCurrentPhase,
+  extractCurrentTaskId,
   extractWorkflowName,
   formatCompletionReason,
   formatLastError,
@@ -66,6 +67,43 @@ describe('extractCurrentPhase', () => {
   it('returns phase when it is a string', () => {
     expect(extractCurrentPhase({ phase: 'design_draft' })).toBe('design_draft');
     expect(extractCurrentPhase({ phase: 'implement_task' })).toBe('implement_task');
+  });
+});
+
+describe('extractCurrentTaskId', () => {
+  it('returns null for null issue_json', () => {
+    expect(extractCurrentTaskId(null)).toBeNull();
+  });
+
+  it('returns null for undefined issue_json', () => {
+    expect(extractCurrentTaskId(undefined)).toBeNull();
+  });
+
+  it('returns null when status field is missing', () => {
+    expect(extractCurrentTaskId({})).toBeNull();
+  });
+
+  it('returns null when status is not an object', () => {
+    expect(extractCurrentTaskId({ status: 'string' })).toBeNull();
+    expect(extractCurrentTaskId({ status: 123 })).toBeNull();
+    expect(extractCurrentTaskId({ status: null })).toBeNull();
+    expect(extractCurrentTaskId({ status: [] })).toBeNull();
+  });
+
+  it('returns null when currentTaskId is missing from status', () => {
+    expect(extractCurrentTaskId({ status: {} })).toBeNull();
+    expect(extractCurrentTaskId({ status: { taskPassed: true } })).toBeNull();
+  });
+
+  it('returns null when currentTaskId is not a string', () => {
+    expect(extractCurrentTaskId({ status: { currentTaskId: 123 } })).toBeNull();
+    expect(extractCurrentTaskId({ status: { currentTaskId: null } })).toBeNull();
+    expect(extractCurrentTaskId({ status: { currentTaskId: {} } })).toBeNull();
+  });
+
+  it('returns currentTaskId when it is a string', () => {
+    expect(extractCurrentTaskId({ status: { currentTaskId: 'T1' } })).toBe('T1');
+    expect(extractCurrentTaskId({ status: { currentTaskId: 'T5' } })).toBe('T5');
   });
 });
 
@@ -400,6 +438,66 @@ describe('computeRunContextFields', () => {
       const pidField = getField(fields, 'PID');
       expect(pidField?.visible).toBe(true);
       expect(pidField?.value).toBe('–');
+    });
+  });
+
+  describe('Task field visibility and formatting', () => {
+    it('Task shows taskId only when task_count is not available', () => {
+      const fields = computeRunContextFields({
+        issue_json: { status: { currentTaskId: 'T1' } },
+        run: { running: true },
+      });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(true);
+      expect(taskField?.value).toBe('T1');
+    });
+
+    it('Task shows taskId/total when task_count is available', () => {
+      const fields = computeRunContextFields({
+        issue_json: { status: { currentTaskId: 'T7' } },
+        task_count: 15,
+        run: { running: true },
+      });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(true);
+      expect(taskField?.value).toBe('T7/T15');
+    });
+
+    it('Task is not visible when currentTaskId is absent', () => {
+      const fields = computeRunContextFields({
+        issue_json: { status: {} },
+        task_count: 10,
+        run: { running: true },
+      });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(false);
+    });
+
+    it('Task is not visible when issue_json is null', () => {
+      const fields = computeRunContextFields({ issue_json: null });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(false);
+    });
+
+    it('Task is visible even when not running (shows last task)', () => {
+      const fields = computeRunContextFields({
+        issue_json: { status: { currentTaskId: 'T3' } },
+        task_count: 5,
+        run: { running: false },
+      });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(true);
+      expect(taskField?.value).toBe('T3/T5');
+    });
+
+    it('Task shows taskId only when task_count is null', () => {
+      const fields = computeRunContextFields({
+        issue_json: { status: { currentTaskId: 'T2' } },
+        task_count: null,
+      });
+      const taskField = getField(fields, 'Task');
+      expect(taskField?.visible).toBe(true);
+      expect(taskField?.value).toBe('T2');
     });
   });
 

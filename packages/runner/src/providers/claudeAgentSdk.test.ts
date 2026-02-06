@@ -1,11 +1,15 @@
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import type { ProviderRunOptions, McpServerConfig } from '../provider.js';
+import type { ProviderEvent, ProviderRunOptions, McpServerConfig } from '../provider.js';
 import {
   ClaudeAgentProvider,
   getDangerousBashCommandBlockReason,
+  mapSdkCompactEventToProviderEvent,
   resolveClaudePermissionMode,
 } from './claudeAgentSdk.js';
+
+type SystemProviderEvent = Extract<ProviderEvent, { type: 'system' }>;
 
 describe('ClaudeAgentProvider', () => {
   describe('mcpServers wiring', () => {
@@ -214,6 +218,106 @@ describe('ClaudeAgentProvider', () => {
       );
 
       expect(reason).toBeNull();
+    });
+  });
+
+  describe('compaction event handling', () => {
+    const ts = '2025-01-01T00:00:00.000Z';
+    const fakeUuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' as `${string}-${string}-${string}-${string}-${string}`;
+
+    it('maps compact_boundary with trigger=auto to system:compaction event', () => {
+      const msg: SDKMessage = {
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'auto', pre_tokens: 95000 },
+        uuid: fakeUuid,
+        session_id: 'sess-1',
+      };
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).not.toBeNull();
+      const sys = result as SystemProviderEvent;
+      expect(sys.type).toBe('system');
+      expect(sys.subtype).toBe('compaction');
+      expect(sys.content).toBe('[compact_boundary] trigger=auto pre_tokens=95000');
+      expect(sys.sessionId).toBe('sess-1');
+    });
+
+    it('maps compact_boundary with trigger=manual to system:compaction event', () => {
+      const msg: SDKMessage = {
+        type: 'system',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'manual', pre_tokens: 50000 },
+        uuid: fakeUuid,
+        session_id: 'sess-2',
+      };
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).not.toBeNull();
+      const sys = result as SystemProviderEvent;
+      expect(sys.type).toBe('system');
+      expect(sys.subtype).toBe('compaction');
+      expect(sys.content).toBe('[compact_boundary] trigger=manual pre_tokens=50000');
+      expect(sys.sessionId).toBe('sess-2');
+    });
+
+    it('maps status=compacting to system:compaction event', () => {
+      const msg: SDKMessage = {
+        type: 'system',
+        subtype: 'status',
+        status: 'compacting',
+        uuid: fakeUuid,
+        session_id: 'sess-3',
+      };
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).not.toBeNull();
+      const sys = result as SystemProviderEvent;
+      expect(sys.type).toBe('system');
+      expect(sys.subtype).toBe('compaction');
+      expect(sys.content).toBe('[status] compacting');
+      expect(sys.sessionId).toBe('sess-3');
+    });
+
+    it('returns null for status=null (compaction finished)', () => {
+      const msg: SDKMessage = {
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        uuid: fakeUuid,
+        session_id: 'sess-4',
+      };
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for non-system messages', () => {
+      const msg = {
+        type: 'assistant',
+        message: { content: 'hello' },
+      } as unknown as SDKMessage;
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for unrelated system subtypes', () => {
+      const msg = {
+        type: 'system',
+        subtype: 'init',
+        uuid: fakeUuid,
+        session_id: 'sess-5',
+      } as unknown as SDKMessage;
+
+      const result = mapSdkCompactEventToProviderEvent(msg, ts);
+
+      expect(result).toBeNull();
     });
   });
 });

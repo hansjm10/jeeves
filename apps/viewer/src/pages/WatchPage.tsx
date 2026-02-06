@@ -313,6 +313,18 @@ export function extractCurrentPhase(issueJson: Record<string, unknown> | null | 
 }
 
 /**
+ * Extracts current task ID from issue_json.status.currentTaskId.
+ * Returns the currentTaskId if it's a string, otherwise null.
+ */
+export function extractCurrentTaskId(issueJson: Record<string, unknown> | null | undefined): string | null {
+  if (!issueJson) return null;
+  const status = issueJson.status;
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return null;
+  const taskId = (status as Record<string, unknown>).currentTaskId;
+  return typeof taskId === 'string' ? taskId : null;
+}
+
+/**
  * Formats a run state as a human-readable string.
  * Returns 'Running' if running is true, 'Idle' otherwise.
  */
@@ -422,6 +434,7 @@ export interface RunContextField {
 export interface RunContextInput {
   issue_ref?: string | null;
   issue_json?: Record<string, unknown> | null;
+  task_count?: number | null;
   run?: {
     running?: boolean | null;
     pid?: number | null;
@@ -446,6 +459,8 @@ export function computeRunContextFields(input: RunContextInput): RunContextField
   const issueRef = input.issue_ref ?? null;
   const workflowName = extractWorkflowName(input.issue_json);
   const currentPhase = extractCurrentPhase(input.issue_json);
+  const currentTaskId = extractCurrentTaskId(input.issue_json);
+  const taskCount = input.task_count ?? null;
   const run = input.run ?? null;
 
   const isRunning = run?.running ?? false;
@@ -459,6 +474,11 @@ export function computeRunContextFields(input: RunContextInput): RunContextField
   const currentIteration = run?.current_iteration ?? 0;
   const maxIterations = run?.max_iterations ?? 0;
 
+  // Format task display: "T7/T15" when count is available, just "T7" otherwise
+  const taskDisplay = currentTaskId
+    ? taskCount != null ? `${currentTaskId}/T${taskCount}` : currentTaskId
+    : '';
+
   const fields: RunContextField[] = [
     // State is always visible
     { label: 'State', value: runState, visible: true },
@@ -468,6 +488,8 @@ export function computeRunContextFields(input: RunContextInput): RunContextField
     { label: 'Workflow', value: workflowName ?? '(none)', visible: true },
     // Phase is always visible
     { label: 'Phase', value: currentPhase ?? '(none)', visible: true },
+    // Task is shown when currentTaskId is present (sequential task tracking)
+    { label: 'Task', value: taskDisplay, visible: !!currentTaskId },
     // PID is shown when running or when PID is present
     { label: 'PID', value: pidDisplay, visible: isRunning || run?.pid != null },
     // Iteration is shown only when running
@@ -504,9 +526,11 @@ function RunContextStrip() {
   const { pushToast } = useToast();
 
   const issueRef = stream.state?.issue_ref ?? null;
-  // Derive workflow/phase from stream state for live updates
+  // Derive workflow/phase/task from stream state for live updates
   const workflowName = extractWorkflowName(stream.state?.issue_json);
   const currentPhase = extractCurrentPhase(stream.state?.issue_json);
+  const currentTaskId = extractCurrentTaskId(stream.state?.issue_json);
+  const taskCount = stream.state?.task_count ?? null;
   const run = stream.state?.run ?? null;
 
   // Run status fields
@@ -556,6 +580,15 @@ function RunContextStrip() {
         <span style={styles.contextLabel}>Phase</span>
         <span style={styles.contextValue} className="mono">{currentPhase ?? '(none)'}</span>
       </div>
+      {/* Show current task when currentTaskId is present */}
+      {currentTaskId && (
+        <div style={styles.contextItem} className="watch-context-item">
+          <span style={styles.contextLabel}>Task</span>
+          <span style={styles.contextValue} className="mono">
+            {taskCount != null ? `${currentTaskId}/T${taskCount}` : currentTaskId}
+          </span>
+        </div>
+      )}
       {/* Show PID when running or when PID is present */}
       {(isRunning || run?.pid != null) && (
         <div style={styles.contextItem} className="watch-context-item">

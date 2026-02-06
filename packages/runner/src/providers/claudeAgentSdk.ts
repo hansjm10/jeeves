@@ -9,8 +9,10 @@ import {
   type Options,
   type PermissionMode,
   type SDKAssistantMessage,
+  type SDKCompactBoundaryMessage,
   type SDKMessage,
   type SDKResultMessage,
+  type SDKStatusMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -165,6 +167,43 @@ export function getDangerousBashCommandBlockReason(
   if (!matched) return null;
 
   return `Blocked potentially destructive Bash command (${matched.label}). Avoid broad process-kill commands in Jeeves runs because they can terminate viewer/runner processes. Use explicit PIDs for processes you started in this shell, or run on alternate ports. Set ${DANGEROUS_KILL_OVERRIDE_ENV}=true to override.`;
+}
+
+export function mapSdkCompactEventToProviderEvent(
+  msg: SDKMessage,
+  timestamp: string,
+): ProviderEvent | null {
+  if (msg.type !== 'system') return null;
+
+  const sysMsg = msg as { type: 'system'; subtype?: string; [key: string]: unknown };
+
+  if (sysMsg.subtype === 'compact_boundary') {
+    const compact = msg as SDKCompactBoundaryMessage;
+    return {
+      type: 'system',
+      subtype: 'compaction',
+      content: `[compact_boundary] trigger=${compact.compact_metadata.trigger} pre_tokens=${compact.compact_metadata.pre_tokens}`,
+      timestamp,
+      sessionId: compact.session_id,
+    };
+  }
+
+  if (sysMsg.subtype === 'status') {
+    const statusMsg = msg as SDKStatusMessage;
+    if (statusMsg.status === 'compacting') {
+      return {
+        type: 'system',
+        subtype: 'compaction',
+        content: '[status] compacting',
+        timestamp,
+        sessionId: statusMsg.session_id,
+      };
+    }
+    // status=null (compaction finished) falls through to generic handler
+    return null;
+  }
+
+  return null;
 }
 
 export class ClaudeAgentProvider implements AgentProvider {
@@ -329,6 +368,12 @@ export class ClaudeAgentProvider implements AgentProvider {
           ? `[auth_status] error: ${msg.error}`
           : `[auth_status] authenticating=${msg.isAuthenticating}`;
         yield { type: 'system', content, timestamp: ts, sessionId: msg.session_id };
+        continue;
+      }
+
+      const compactEvent = mapSdkCompactEventToProviderEvent(msg, ts);
+      if (compactEvent) {
+        yield compactEvent;
         continue;
       }
 

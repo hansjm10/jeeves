@@ -22,7 +22,7 @@ export type UsageData = Readonly<{
 export type ProviderEvent =
   | Readonly<{
       type: 'system';
-      subtype?: 'init' | 'error';
+      subtype?: 'init' | 'error' | 'compaction';
       content: string;
       timestamp?: string;
       sessionId?: string | null;

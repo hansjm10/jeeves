@@ -66,7 +66,7 @@ The runner supports the "Ralph Wiggum" iteration pattern:
 1. Each iteration is a fresh subprocess with new context
 2. Handoff between iterations via `progress.txt`
 3. Agents read progress at start, write updates during run
-4. Completion signaled via `<promise>COMPLETE</promise>` in output
+4. Completion driven by workflow state transitions (orchestrator evaluates issue.json after each iteration)
 
 ## Development
 

@@ -558,7 +558,213 @@ UI state changes on success:
 18. **UI state changes**: explicit cache/selection/run state updates listed under UI section.
 
 ## 4. Data
-[To be completed in design_data phase]
+
+This feature adds issue-scoped Azure DevOps credential storage, provider-aware issue/work-item metadata, provider-aware PR metadata, and restart-safe operation journal artifacts.
+
+### Schema Changes
+| Location | Field | Type | Required | Default | Constraints |
+|----------|-------|------|----------|---------|-------------|
+| `.jeeves/issue.json` | `status.azureDevops` | `{ sync_status?: AzureDevopsSyncStatus; last_attempt_at?: string \| null; last_success_at?: string \| null; last_error?: string \| null; organization?: string \| null; project?: string \| null; pat_last_updated_at?: string \| null; }` | no | `{}` | if present, must be a JSON object |
+| `.jeeves/issue.json` | `status.azureDevops.sync_status` | `"in_sync" \| "deferred_worktree_absent" \| "failed_exclude" \| "failed_env_write" \| "failed_env_delete" \| "failed_secret_read" \| "never_attempted"` | no | `"never_attempted"` | enum only |
+| `.jeeves/issue.json` | `status.azureDevops.last_attempt_at` | `string \| null` | no | `null` | ISO-8601 UTC (`Date.toISOString()`) |
+| `.jeeves/issue.json` | `status.azureDevops.last_success_at` | `string \| null` | no | `null` | ISO-8601 UTC; when present, `<= last_attempt_at` |
+| `.jeeves/issue.json` | `status.azureDevops.last_error` | `string \| null` | no | `null` | sanitized; max 2048 chars; must not contain PAT; no `\0`, `\n`, `\r` |
+| `.jeeves/issue.json` | `status.azureDevops.organization` | `string \| null` | no | `null` | canonical URL form `https://dev.azure.com/<orgSlug>`; total length `3..200` |
+| `.jeeves/issue.json` | `status.azureDevops.project` | `string \| null` | no | `null` | trimmed length `1..128`; no control chars |
+| `.jeeves/issue.json` | `status.azureDevops.pat_last_updated_at` | `string \| null` | no | `null` | ISO-8601 UTC; copied from secret `updated_at` |
+| `.jeeves/.secrets/azure-devops.json` | `schemaVersion` | `1` | yes | `1` | literal `1` |
+| `.jeeves/.secrets/azure-devops.json` | `organization` | `string` | yes | n/a | canonical URL `https://dev.azure.com/<orgSlug>`; total length `3..200` |
+| `.jeeves/.secrets/azure-devops.json` | `project` | `string` | yes | n/a | trimmed length `1..128`; no control chars |
+| `.jeeves/.secrets/azure-devops.json` | `pat` | `string` | yes | n/a | trimmed length `1..1024`; no `\0`, `\n`, `\r` |
+| `.jeeves/.secrets/azure-devops.json` | `updated_at` | `string` | yes | n/a | ISO-8601 UTC |
+| `.jeeves/issue.json` | `issue.source` | `{ provider?: "github" \| "azure_devops"; kind?: "issue" \| "work_item"; id?: string; url?: string \| null; title?: string; mode?: "create" \| "init_existing"; hierarchy?: { parent?: { id: string; title: string; url: string } \| null; children?: Array<{ id: string; title: string; url: string }>; fetched_at?: string \| null; }; }` | no | `{}` (read fallback from legacy `issue.number`, `issue.url`, `issue.title`) | if present, must be a JSON object |
+| `.jeeves/issue.json` | `issue.source.provider` | `"github" \| "azure_devops"` | no | `"github"` | enum only |
+| `.jeeves/issue.json` | `issue.source.kind` | `"issue" \| "work_item"` | no | `"issue"` | enum only |
+| `.jeeves/issue.json` | `issue.source.id` | `string` | no | `String(issue.number)` when available | positive-integer string pattern `^[1-9][0-9]{0,18}$` |
+| `.jeeves/issue.json` | `issue.source.url` | `string \| null` | no | `issue.url ?? null` | absolute `https://` URL, max 2048 chars |
+| `.jeeves/issue.json` | `issue.source.title` | `string` | no | `issue.title ?? ""` | trimmed length `0..256` |
+| `.jeeves/issue.json` | `issue.source.mode` | `"create" \| "init_existing"` | no | `"init_existing"` | enum only |
+| `.jeeves/issue.json` | `issue.source.hierarchy.parent` | `{ id: string; title: string; url: string } \| null` | no | `null` | non-null object requires `id` numeric string + `url` absolute `https://` |
+| `.jeeves/issue.json` | `issue.source.hierarchy.children` | `Array<{ id: string; title: string; url: string }>` | no | `[]` | each item `id` numeric string + `url` absolute `https://`; max 500 items |
+| `.jeeves/issue.json` | `issue.source.hierarchy.fetched_at` | `string \| null` | no | `null` | ISO-8601 UTC |
+| `.jeeves/issue.json` | `status.issueIngest` | `{ provider?: "github" \| "azure_devops"; mode?: "create" \| "init_existing"; outcome?: "success" \| "partial" \| "error"; remote_id?: string \| null; remote_url?: string \| null; warnings?: string[]; auto_select_ok?: boolean \| null; auto_run_ok?: boolean \| null; occurred_at?: string \| null; }` | no | `{}` | if present, must be a JSON object |
+| `.jeeves/issue.json` | `status.issueIngest.provider` | `"github" \| "azure_devops"` | no | `null` (field absent) | enum only |
+| `.jeeves/issue.json` | `status.issueIngest.mode` | `"create" \| "init_existing"` | no | `null` (field absent) | enum only |
+| `.jeeves/issue.json` | `status.issueIngest.outcome` | `"success" \| "partial" \| "error"` | no | `null` (field absent) | enum only |
+| `.jeeves/issue.json` | `status.issueIngest.remote_id` | `string \| null` | no | `null` | positive-integer string pattern `^[1-9][0-9]{0,18}$` |
+| `.jeeves/issue.json` | `status.issueIngest.remote_url` | `string \| null` | no | `null` | absolute `https://` URL, max 2048 chars |
+| `.jeeves/issue.json` | `status.issueIngest.warnings` | `string[]` | no | `[]` | each warning max 512 chars; max 50 warnings |
+| `.jeeves/issue.json` | `status.issueIngest.auto_select_ok` | `boolean \| null` | no | `null` | boolean semantics only |
+| `.jeeves/issue.json` | `status.issueIngest.auto_run_ok` | `boolean \| null` | no | `null` | boolean semantics only |
+| `.jeeves/issue.json` | `status.issueIngest.occurred_at` | `string \| null` | no | `null` | ISO-8601 UTC |
+| `.jeeves/issue.json` | `pullRequest.provider` | `"github" \| "azure_devops"` | no | `"github"` when `pullRequest.number/url` already exist | enum only |
+| `.jeeves/issue.json` | `pullRequest.external_id` | `string` | no | `String(pullRequest.number)` when available | positive-integer string pattern `^[1-9][0-9]{0,18}$` |
+| `.jeeves/issue.json` | `pullRequest.source_branch` | `string` | no | `branch` | trimmed length `1..255`; must satisfy git branch-name rules |
+| `.jeeves/issue.json` | `pullRequest.target_branch` | `string` | no | `"main"` | trimmed length `1..255`; must satisfy git branch-name rules |
+| `.jeeves/issue.json` | `pullRequest.updated_at` | `string \| null` | no | `null` | ISO-8601 UTC |
+| `.jeeves/issue.json` | `status.prCreated` (modified semantics) | `boolean` | no | `false` | now provider-agnostic; true only after `pullRequest` metadata persistence |
+| `.jeeves/issue.json` | `issue.number` (modified semantics) | `number` | yes | existing value | positive integer; for Azure-backed issues this stores work item ID |
+| `.jeeves/issue.json` | `issue.url` (modified semantics) | `string \| undefined` | no | existing value | absolute remote item URL when set |
+| `.jeeves/issue.json` | `issue.title` (modified semantics) | `string \| undefined` | no | existing value | trimmed length `1..256` when set |
+| `.jeeves/.ops/provider-operation.json` | `schemaVersion` | `1` | yes | `1` | literal `1` |
+| `.jeeves/.ops/provider-operation.json` | `operation_id` | `string` | yes | n/a | UUID-like ID (`^[a-zA-Z0-9._:-]{8,128}$`) |
+| `.jeeves/.ops/provider-operation.json` | `kind` | `"credentials" \| "ingest" \| "pr_prepare"` | yes | n/a | enum only |
+| `.jeeves/.ops/provider-operation.json` | `state` | `string` | yes | n/a | state name pattern `^(cred|ingest|pr)\\.[a-z_]+$` |
+| `.jeeves/.ops/provider-operation.json` | `issue_ref` | `string` | yes | n/a | format `<owner>/<repo>#<number>` |
+| `.jeeves/.ops/provider-operation.json` | `provider` | `"github" \| "azure_devops" \| null` | no | `null` | enum/null |
+| `.jeeves/.ops/provider-operation.json` | `started_at` | `string` | yes | n/a | ISO-8601 UTC |
+| `.jeeves/.ops/provider-operation.json` | `updated_at` | `string` | yes | n/a | ISO-8601 UTC |
+| `.jeeves/.ops/provider-operation.json` | `completed_at` | `string \| null` | no | `null` | ISO-8601 UTC when terminal |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.remote_id` | `string \| null` | no | `null` | positive-integer string pattern |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.remote_url` | `string \| null` | no | `null` | absolute `https://` URL |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.pr_id` | `string \| null` | no | `null` | positive-integer string pattern |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.issue_state_persisted` | `boolean` | no | `false` | boolean semantics only |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.init_completed` | `boolean` | no | `false` | boolean semantics only |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.auto_selected` | `boolean` | no | `false` | boolean semantics only |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.auto_run_started` | `boolean` | no | `false` | boolean semantics only |
+| `.jeeves/.ops/provider-operation.json` | `checkpoint.warnings` | `string[]` | no | `[]` | each warning max 512 chars; max 50 warnings |
+| `.jeeves/.ops/provider-operation.lock` | `schemaVersion` | `1` | yes | `1` | literal `1` |
+| `.jeeves/.ops/provider-operation.lock` | `operation_id` | `string` | yes | n/a | must match current journal `operation_id` |
+| `.jeeves/.ops/provider-operation.lock` | `issue_ref` | `string` | yes | n/a | format `<owner>/<repo>#<number>` |
+| `.jeeves/.ops/provider-operation.lock` | `acquired_at` | `string` | yes | n/a | ISO-8601 UTC |
+| `.jeeves/.ops/provider-operation.lock` | `expires_at` | `string` | yes | n/a | ISO-8601 UTC; must be `>= acquired_at` |
+| `.jeeves/.ops/provider-operation.lock` | `pid` | `number` | yes | n/a | integer `>= 1` |
+
+**Secret storage invariant**:
+- `pat` MUST never be stored in `.jeeves/issue.json`, SSE/WS payloads, or logs.
+- `pat` exists only in `.jeeves/.secrets/azure-devops.json` (and short-lived temp files during atomic write).
+
+### Field Definitions
+**`status.azureDevops.*`**
+- Purpose: Store non-secret Azure credential sync state and non-secret org/project context for selected issue.
+- Set by: `/api/issue/azure-devops` PUT/PATCH/DELETE/reconcile and startup/issue-select auto-reconcile.
+- Read by: `GET /api/issue/azure-devops`, `azure-devops-status` event emission, provider ingress validation.
+- Relationships:
+  - `organization`/`project` mirror secret-file values (non-secret copy) and must stay in sync after successful secret writes.
+  - `pat_last_updated_at` references `.jeeves/.secrets/azure-devops.json.updated_at`.
+- Ordering dependencies: secret write/delete must complete before these status fields are updated.
+
+**`.jeeves/.secrets/azure-devops.json`**
+- Purpose: Issue-scoped persistence of Azure organization/project/PAT used by `az` commands and worktree env materialization.
+- Set by: `/api/issue/azure-devops` PUT/PATCH (write), DELETE (remove).
+- Read by: Azure ingest and PR provider adapters; status endpoint; reconcile logic.
+- Relationships:
+  - Primary source for credential truth; `status.azureDevops.*` is derived/summary metadata.
+  - Deleting this file means no configured PAT (`has_pat=false` on read).
+- Ordering dependencies: written atomically before any worktree-side `.env.jeeves` mutation.
+
+**`issue.source.*` and `issue.number/url/title` (modified semantics)**
+- Purpose: Provider-agnostic canonical reference to the remote source artifact (GitHub issue or Azure work item) plus optional hierarchy context.
+- Set by: `/api/issues/create` and `/api/issues/init-from-existing` after remote create/resolve/hierarchy fetch.
+- Read by: prompt context generation, provider-aware `prepare_pr`, viewer issue details.
+- Relationships:
+  - `issue.source.id` must correspond to remote source ID and match `issue.number` (numeric parse) for compatibility.
+  - `issue.source.hierarchy.parent/children` reference remote work items; they are snapshots (not live foreign keys).
+  - If remote parent/child items are deleted later, local snapshot remains until next ingest/re-sync.
+- Ordering dependencies: remote create/resolve must succeed before writing `issue.source.*`; hierarchy fields are written only after hierarchy fetch attempt.
+
+**`status.issueIngest.*`**
+- Purpose: Persist last ingest attempt summary for deterministic UI/state replay and post-crash diagnostics.
+- Set by: `ingest.recording_status` in both create/init-existing flows.
+- Read by: create-issue UI state, status stream/cache hydration, support diagnostics.
+- Relationships:
+  - `remote_id`/`remote_url` must match `issue.source.id`/`issue.source.url` for the same completed ingest operation.
+- Ordering dependencies: set after `issue.source.*` persistence attempt so partial outcomes can be represented safely.
+
+**`pullRequest.*` extensions and `status.prCreated` (modified semantics)**
+- Purpose: Keep provider-agnostic PR metadata while preserving existing workflow gating on `status.prCreated`.
+- Set by: provider-aware `prepare_pr` flow after existing-PR lookup or create.
+- Read by: workflow transition guard (`status.prCreated`), prompts, viewer links.
+- Relationships:
+  - `pullRequest.provider` must match the backend used in the same operation.
+  - `pullRequest.external_id` maps to GitHub PR number or Azure PR ID string.
+  - If remote PR is closed/deleted externally, local metadata remains until next `prepare_pr` refresh.
+- Ordering dependencies: PR lookup/create must complete before writing `pullRequest.*`; `status.prCreated=true` is written only in the same commit as PR metadata.
+
+**`.jeeves/.ops/provider-operation.json` + `.jeeves/.ops/provider-operation.lock`**
+- Purpose: Restart-safe operation checkpoints for credential, ingest, and PR operations.
+- Set by: entry to `cred.validating` / `ingest.validating` / `pr.loading_context`; updated each transition checkpoint; finalized in terminal state.
+- Read by: startup recovery path before accepting new provider mutations.
+- Relationships:
+  - `lock.operation_id` must equal journal `operation_id`.
+  - `checkpoint.remote_id`/`pr_id` reference remote artifacts for idempotent resume.
+- Ordering dependencies:
+  - Acquire lock file first.
+  - Create/update journal second.
+  - Perform side effects.
+  - Mark `completed_at` and then remove lock.
+
+### Data Gates (Explicit Answers)
+1. Exact field names/paths are listed exhaustively in `Schema Changes`.
+2. Exact types are listed for every field in `Schema Changes` (no `any`/untyped objects).
+3. Required vs optional is explicit in the `Required` column.
+4. Default when absent is explicit in the `Default` column for every optional field.
+5. Constraints are explicit in the `Constraints` column.
+6. Reference relationships:
+   - `issue.source.*` references remote issue/work-item IDs and URLs.
+   - `pullRequest.*` references remote PR IDs/URLs.
+   - operation journal checkpoint fields reference remote IDs/URLs and local state persistence checkpoints.
+7. Referenced-data deletion behavior:
+   - If remote issue/work-item/PR is deleted externally, local metadata is retained as last-known snapshot and refreshed on next provider operation.
+   - If issue state directory is deleted, secret/journal/lock artifacts are deleted with it.
+8. Ordering dependencies:
+   - lock acquire -> journal write -> remote/local mutation -> status persistence -> journal `completed_at` -> lock removal.
+   - secret persistence precedes worktree `.env.jeeves` writes.
+   - remote resolve/create precedes `issue.source.*` and `pullRequest.*` writes.
+9. Breaking change? No hard breaking schema change; changes are additive plus semantic broadening of existing fields (`issue.number/url/title`, `status.prCreated`).
+10. Existing records without fields:
+   - treated with defaults listed above (e.g., missing `status.azureDevops.sync_status` => `"never_attempted"`).
+   - legacy PR records (`pullRequest.number/url` only) derive `pullRequest.provider="github"` and `pullRequest.external_id=String(number)`.
+11. Migration script needed? No offline one-time script is required; lazy defaults and on-write normalization are sufficient.
+12. Rollback:
+   - stop writing new fields/files;
+   - ignore/remove `status.azureDevops.*`, `issue.source.*`, `status.issueIngest.*`, `pullRequest` extensions;
+   - delete `.jeeves/.secrets/azure-devops.json`, `.jeeves/.ops/provider-operation.json`, and `.jeeves/.ops/provider-operation.lock`.
+13. Derived fields:
+   - API response fields `configured`, `has_pat`, and `worktree_present` are derived at read time from secret existence/worktree state.
+   - `pat_env_var_name` is constant (`AZURE_DEVOPS_EXT_PAT`) and not persisted.
+14. Computation timing:
+   - derived status fields above compute on read;
+   - sync/journal/ingest/PR metadata compute on write at operation checkpoints.
+15. Source-data change handling:
+   - remote hierarchy/PR/source snapshots can become stale; next ingest or PR-prep refresh overwrites them.
+   - secret file changes immediately affect derived `has_pat/configured` on next read.
+16. Artifacts created are listed in `Artifacts`.
+17. Storage location for each artifact is listed in `Artifacts`.
+18. Create/update/delete timing for each artifact is listed in `Artifacts`.
+19. Success/failure/crash outcomes are defined in `Artifact Lifecycle`.
+
+### Migrations
+| Change | Existing Data | Migration | Rollback |
+|--------|---------------|-----------|----------|
+| Add Azure non-secret status fields under `status.azureDevops.*` | Fields absent | Treat absent as defaults; first successful credential/reconcile operation writes canonical values | Remove these fields and fall back to defaults |
+| Add Azure credential secret file `.jeeves/.secrets/azure-devops.json` | File absent | No-op until first PUT/PATCH with PAT; then atomic create with restrictive perms (`0600` where supported) | Delete file and ignore PAT-dependent flows |
+| Add provider source metadata `issue.source.*` | Field absent | Fallback to legacy `issue.number/url/title` at read; on first ingest write canonical `issue.source.*` | Remove `issue.source.*`; continue using legacy fields |
+| Add ingest summary `status.issueIngest.*` | Field absent | No-op until first provider ingest operation completes/partially completes/errors | Remove field |
+| Extend `pullRequest` with provider-aware fields | Legacy objects may only have `number/url` | On read derive `provider="github"` and `external_id=String(number)` when missing | Remove extensions; keep `number/url` only |
+| Add restart artifacts `.jeeves/.ops/provider-operation.json` and `.jeeves/.ops/provider-operation.lock` | Files absent | Create on first provider mutation; remove lock at terminal states | Stop creating files and delete residual files |
+
+### Artifacts
+| Artifact | Location | Created | Updated | Deleted |
+|----------|----------|---------|---------|---------|
+| Azure credential secret | `.jeeves/.secrets/azure-devops.json` | successful PUT/PATCH with PAT | successful PUT/PATCH with PAT | successful DELETE or issue-state removal |
+| Azure secret temp file | `.jeeves/.secrets/azure-devops.json.<pid>.<ts>.tmp` | during atomic secret write | per write attempt | after successful rename; cleanup on delete/startup recovery |
+| Azure status metadata | `.jeeves/issue.json` (`status.azureDevops.*`) | first credential/reconcile write | each credential/reconcile attempt | issue-state removal only |
+| Provider source metadata | `.jeeves/issue.json` (`issue.source.*`, plus compatible `issue.number/url/title`) | first create/init-existing success or partial-with-remote | each subsequent create/init-existing persistence | issue-state removal only |
+| Ingest summary metadata | `.jeeves/issue.json` (`status.issueIngest.*`) | first ingest terminal state | each ingest terminal state | issue-state removal only |
+| Provider PR metadata | `.jeeves/issue.json` (`pullRequest.*`, `status.prCreated`) | first successful provider PR persist | each subsequent PR reuse/create persist | issue-state removal only |
+| Operation journal | `.jeeves/.ops/provider-operation.json` | entry to credentials/ingest/pr_prepare op | every state checkpoint | explicit cleanup after terminal write or issue-state removal |
+| Operation lock | `.jeeves/.ops/provider-operation.lock` | before journal open | refreshed while operation active | terminal success/failure; stale-lock cleanup on recovery |
+| Worktree env file | `<worktreeRoot>/.env.jeeves` | first successful reconcile with PAT/worktree | each reconcile while worktree present | PAT delete with worktree present or worktree removal |
+| Worktree env temp | `<worktreeRoot>/.env.jeeves.tmp` | during atomic env write | per reconcile attempt | after rename; cleanup on startup/reconcile |
+| Git exclude entries | `<worktreeRoot>/.git/info/exclude` | first reconcile with worktree | idempotent append/dedupe | never explicitly removed |
+
+### Artifact Lifecycle
+| Scenario | Artifact Behavior |
+|----------|-------------------|
+| Success | Secret file converges to desired organization/project/PAT; `status.azureDevops.*` records success timestamps and `sync_status=in_sync`; `issue.source.*` and `status.issueIngest.*` match remote result; `pullRequest.*` and `status.prCreated=true` persist together; journal `completed_at` written; lock removed. |
+| Failure | If lock or journal creation fails, abort before remote mutation. If remote mutation fails before remote IDs, mark journal failed and keep prior `issue.json` metadata. If remote mutation succeeds but local persistence/init/select/auto-run fails, keep remote ID in journal + `status.issueIngest.outcome="partial"`, preserve retry context, and remove lock. Secret/read/reconcile failures update `status.azureDevops.last_error` with sanitized message. |
+| Crash recovery | On startup, detect stale lock (`expires_at`), incomplete journal (`completed_at=null`), or temp files; remove stale lock/temp files; reload remote state by checkpoint IDs; resume from journal `state` (`cred.reconciling_worktree`, `ingest.persisting_issue_state`/`ingest.recording_status`, or `pr.checking_existing`); ensure idempotent writes before marking journal complete. |
 
 ## 5. Tasks
 [To be completed in design_plan phase]

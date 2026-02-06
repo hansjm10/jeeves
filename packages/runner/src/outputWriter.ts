@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ProviderEvent } from './provider.js';
+import type { ProviderEvent, UsageData } from './provider.js';
 import type { SdkOutputV1, SdkOutputV1Message, SdkOutputV1ToolCall } from './outputV1.js';
 
 function nowIso(): string {
@@ -32,6 +32,7 @@ export class SdkOutputWriterV1 {
   private success = false;
   private error: { message: string; type: string } | null = null;
   private sessionId: string | null = null;
+  private usage: UsageData | null = null;
   private lastWriteAtMs = 0;
 
   constructor(params: { outputPath: string }) {
@@ -45,6 +46,11 @@ export class SdkOutputWriterV1 {
 
   addProviderEvent(event: ProviderEvent): void {
     const timestamp = event.timestamp ?? nowIso();
+
+    if (event.type === 'usage') {
+      this.usage = event.usage;
+      return;
+    }
 
     if (event.type === 'tool_use') {
       const idx = this.toolCalls.length;
@@ -129,6 +135,24 @@ export class SdkOutputWriterV1 {
         message_count: this.messages.length,
         tool_call_count: this.toolCalls.length,
         duration_seconds: durationSeconds,
+        ...(this.usage
+          ? {
+              input_tokens: this.usage.input_tokens,
+              output_tokens: this.usage.output_tokens,
+              ...(this.usage.cache_read_input_tokens !== undefined
+                ? { cache_read_input_tokens: this.usage.cache_read_input_tokens }
+                : {}),
+              ...(this.usage.cache_creation_input_tokens !== undefined
+                ? { cache_creation_input_tokens: this.usage.cache_creation_input_tokens }
+                : {}),
+              ...(this.usage.total_cost_usd !== undefined
+                ? { total_cost_usd: this.usage.total_cost_usd }
+                : {}),
+              ...(this.usage.num_turns !== undefined
+                ? { num_turns: this.usage.num_turns }
+                : {}),
+            }
+          : {}),
       },
       ...(this.error
         ? { error: this.error.message, error_type: this.error.type }

@@ -11,7 +11,7 @@ import { MAX_PARALLEL_TASKS, validateIterations, validateMaxParallelTasks, ITERA
  *
  * The Sidebar component (Sidebar.tsx) implements these behaviors:
  * - Line 60-62: iterationsValidation drives iterationsError which is displayed in errorText div
- * - Line 207: Start button disabled condition includes `iterationsError !== null`
+ * - Start button disabled condition includes `iterationsError !== null` and pending phase mutation
  * - Line 57: useState initializes from localStorage.getItem(ITERATIONS_STORAGE_KEY)
  * - Line 80-95: handleSetIterations updates localStorage based on validation
  */
@@ -50,10 +50,17 @@ function deriveUIState(iterationsInput: string) {
   return { iterationsError, validIterations };
 }
 
-// === Replicate Sidebar.tsx Start button disabled logic (line 207) ===
-// disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || iterationsError !== null}
+// === Replicate Sidebar.tsx Start button disabled logic ===
+// disabled={!activeIssue || runRunning || startRunPending || setIssuePhasePending || iterationsError !== null}
+function isStartButtonDisabled(input: {
+  iterationsError: string | null;
+  setIssuePhasePending?: boolean;
+}): boolean {
+  return Boolean(input.setIssuePhasePending) || input.iterationsError !== null;
+}
+
 function isStartButtonDisabledDueToIterations(iterationsError: string | null): boolean {
-  return iterationsError !== null;
+  return isStartButtonDisabled({ iterationsError });
 }
 
 // === ACCEPTANCE CRITERIA TESTS ===
@@ -171,7 +178,7 @@ describe('validateMaxParallelTasks', () => {
 });
 
 describe('Test: invalid inputs disable Start button in addition to existing disable conditions', () => {
-  // Sidebar.tsx line 207: disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || iterationsError !== null}
+  // Sidebar.tsx: disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || setIssuePhase.isPending || iterationsError !== null}
   // These tests verify that iterationsError !== null causes isStartButtonDisabledDueToIterations to return true
 
   it('input "0" disables Start button (iterationsError !== null)', () => {
@@ -205,7 +212,7 @@ describe('Test: invalid inputs disable Start button in addition to existing disa
   });
 
   it('verifies the disabled condition matches Sidebar.tsx implementation', () => {
-    // This test documents the exact condition from Sidebar.tsx line 207
+    // This test documents the iterations-related branch of the condition.
     const testCases = [
       { input: '0', shouldDisable: true },
       { input: '-1', shouldDisable: true },
@@ -220,6 +227,16 @@ describe('Test: invalid inputs disable Start button in addition to existing disa
       const isDisabled = iterationsError !== null;
       expect(isDisabled).toBe(shouldDisable);
     }
+  });
+
+  it('disables Start while phase mutation is pending even with valid iterations', () => {
+    const { iterationsError } = deriveUIState('5');
+    expect(isStartButtonDisabled({ iterationsError, setIssuePhasePending: true })).toBe(true);
+  });
+
+  it('does not disable Start for valid iterations when phase mutation is idle', () => {
+    const { iterationsError } = deriveUIState('5');
+    expect(isStartButtonDisabled({ iterationsError, setIssuePhasePending: false })).toBe(false);
   });
 });
 

@@ -31,6 +31,12 @@ export type SdkOutputV1 = Readonly<{
     message_count: number;
     tool_call_count: number;
     duration_seconds: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    total_cost_usd?: number | null;
+    num_turns?: number;
   }>;
   error?: string | null;
   error_type?: string | null;

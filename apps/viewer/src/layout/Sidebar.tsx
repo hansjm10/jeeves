@@ -307,7 +307,7 @@ export function Sidebar() {
             <button
               className="btn primary"
               onClick={() => void startRun.mutateAsync({ provider, max_iterations: validIterations }).catch((e) => pushToast(e instanceof Error ? e.message : String(e)))}
-              disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || iterationsError !== null}
+              disabled={!activeIssue || (run?.running ?? false) || startRun.isPending || setIssuePhase.isPending || iterationsError !== null}
             >
               {startRun.isPending ? 'Starting…' : 'Start'}
             </button>

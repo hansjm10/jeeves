@@ -31,6 +31,16 @@ function formatDuration(seconds: number): string {
   return `${mins}m ${secs.toFixed(0)}s`;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatCost(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
 function SessionFooter({ data }: { data: SdkCompleteData }) {
   const summary = data.summary;
   return (
@@ -43,6 +53,9 @@ function SessionFooter({ data }: { data: SdkCompleteData }) {
             {summary.tool_call_count !== undefined && `${summary.tool_call_count} tools`}
             {summary.message_count !== undefined && ` · ${summary.message_count} messages`}
             {summary.duration_seconds !== undefined && ` · ${formatDuration(summary.duration_seconds)}`}
+            {summary.input_tokens !== undefined && ` · ${formatTokens(summary.input_tokens)} in`}
+            {summary.output_tokens !== undefined && ` · ${formatTokens(summary.output_tokens)} out`}
+            {summary.total_cost_usd != null && ` · ${formatCost(summary.total_cost_usd)}`}
           </span>
         )}
       </div>

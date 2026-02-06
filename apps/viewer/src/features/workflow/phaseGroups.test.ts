@@ -22,34 +22,76 @@ describe('groupForPhase', () => {
 });
 
 describe('pickGroupTarget', () => {
-  const workflow: WorkflowResponse = {
+  const defaultLikeWorkflow: WorkflowResponse = {
     ok: true,
     workflow_name: 'default',
-    start_phase: 'design_draft',
-    current_phase: 'design_draft',
+    start_phase: 'design_classify',
+    current_phase: 'implement_task',
     phases: [
-      { id: 'design_draft', name: 'Design Draft', type: 'normal', description: '' },
-      { id: 'implement_code', name: 'Implement Code', type: 'normal', description: '' },
-      { id: 'prepare_pr', name: 'Prepare Pr', type: 'normal', description: '' },
+      { id: 'code_fix', name: 'Code Fix', type: 'execute', description: '' },
+      { id: 'code_review', name: 'Code Review', type: 'evaluate', description: '' },
       { id: 'complete', name: 'Complete', type: 'terminal', description: '' },
+      { id: 'completeness_verification', name: 'Completeness Verification', type: 'evaluate', description: '' },
+      { id: 'design_classify', name: 'Design Classify', type: 'execute', description: '' },
+      { id: 'task_decomposition', name: 'Task Decomposition', type: 'execute', description: '' },
+      { id: 'implement_task', name: 'Implement Task', type: 'execute', description: '' },
+      { id: 'plan_task', name: 'Plan Task', type: 'execute', description: '' },
+      { id: 'pre_implementation_check', name: 'Pre-Implementation Check', type: 'evaluate', description: '' },
+      { id: 'prepare_pr', name: 'Prepare PR', type: 'execute', description: '' },
     ],
-    phase_order: ['design_draft', 'implement_code', 'prepare_pr', 'complete'],
+    phase_order: [
+      'code_fix',
+      'code_review',
+      'complete',
+      'completeness_verification',
+      'design_classify',
+      'task_decomposition',
+      'implement_task',
+      'plan_task',
+      'pre_implementation_check',
+      'prepare_pr',
+    ],
   };
 
-  it('picks first design phase', () => {
-    expect(pickGroupTarget(workflow, 'design')).toBe('design_draft');
+  it('picks design anchor for design group', () => {
+    expect(pickGroupTarget(defaultLikeWorkflow, 'design')).toBe('design_classify');
   });
 
-  it('picks first implement phase', () => {
-    expect(pickGroupTarget(workflow, 'implement')).toBe('implement_code');
+  it('picks plan_task for implement group regardless of phase order', () => {
+    expect(pickGroupTarget(defaultLikeWorkflow, 'implement')).toBe('plan_task');
   });
 
-  it('picks review phase', () => {
-    expect(pickGroupTarget(workflow, 'review')).toBe('prepare_pr');
+  it('picks review anchor for review group', () => {
+    expect(pickGroupTarget(defaultLikeWorkflow, 'review')).toBe('prepare_pr');
   });
 
-  it('picks terminal/complete phase', () => {
-    expect(pickGroupTarget(workflow, 'complete')).toBe('complete');
+  it('picks complete anchor for complete group', () => {
+    expect(pickGroupTarget(defaultLikeWorkflow, 'complete')).toBe('complete');
+  });
+
+  const customWorkflow: WorkflowResponse = {
+    ok: true,
+    workflow_name: 'custom',
+    start_phase: 'alpha',
+    current_phase: 'alpha',
+    phases: [
+      { id: 'alpha', name: 'Alpha', type: 'execute', description: '' },
+      { id: 'beta_review', name: 'Beta Review', type: 'evaluate', description: '' },
+      { id: 'omega', name: 'Omega', type: 'terminal', description: '' },
+    ],
+    phase_order: ['alpha', 'beta_review', 'omega'],
+  };
+
+  it('falls back to start phase for design group when no design_* exists', () => {
+    expect(pickGroupTarget(customWorkflow, 'design')).toBe('alpha');
+  });
+
+  it('falls back to heuristic for implement group on custom workflows', () => {
+    expect(pickGroupTarget(customWorkflow, 'implement')).toBe('alpha');
+  });
+
+  it('falls back to heuristic for review and complete groups on custom workflows', () => {
+    expect(pickGroupTarget(customWorkflow, 'review')).toBe('beta_review');
+    expect(pickGroupTarget(customWorkflow, 'complete')).toBe('omega');
   });
 });
-

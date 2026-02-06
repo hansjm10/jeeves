@@ -582,10 +582,19 @@ type IssueIngestStatusEvent = {
 | `milestone` | string | optional GitHub-only; trim length `1..128` | `400 validation_failed` `field_errors.milestone` |
 | `azure.work_item_type` | enum | required when `provider=azure_devops` and `mode=create`; `User Story|Bug|Task` | `400 validation_failed` `field_errors.azure.work_item_type` |
 | `azure.parent_id` | integer | optional; positive integer | `400 validation_failed` `field_errors.azure.parent_id` |
+| `azure.area_path` | string | optional when `provider=azure_devops`; trim; length `1..256`; must not include control chars | `400 validation_failed` `field_errors.azure.area_path` |
+| `azure.iteration_path` | string | optional when `provider=azure_devops`; trim; length `1..256`; must not include control chars | `400 validation_failed` `field_errors.azure.iteration_path` |
+| `azure.tags[]` | string[] | optional when `provider=azure_devops`; each trim length `1..64`; max 50 tags; tags must not include control chars | `400 validation_failed` `field_errors.azure.tags` |
 | `existing.id` / `existing.url` | number/string | init-from-existing requires exactly one | `400 validation_failed` `field_errors.existing` |
+| `init.branch` | string | optional when `init` present; trim; length `1..255`; must be a valid branch name (reject leading/trailing `/`, `..`, whitespace, and control chars) | `400 validation_failed` `field_errors.init.branch` |
+| `init.workflow` | string | optional when `init` present; trim; length `1..64`; if provided, must resolve to a known workflow id | `400 validation_failed` `field_errors.init.workflow` |
+| `init.phase` | enum | optional when `init` present; if provided, one of `design|implement|review|complete` | `400 validation_failed` `field_errors.init.phase` |
+| `init.design_doc` | string | optional when `init` present; trim; length `1..260`; workspace-relative path ending in `.md`; absolute paths and `..` traversal are rejected | `400 validation_failed` `field_errors.init.design_doc` |
+| `init.force` | boolean | optional when `init` present; default `false` | `400 validation_failed` `field_errors.init.force` |
 | `auto_select` | boolean | optional; only valid when `init` present; default `true` when `init` present | `400 validation_failed` `field_errors.auto_select` |
 | `auto_run` | object | optional; requires `init` and `auto_select=true` | `400 validation_failed` `field_errors.auto_run` |
 | `auto_run.provider` | enum | optional; `claude|codex|fake` | `400 validation_failed` `field_errors.auto_run.provider` |
+| `auto_run.workflow` | string | optional when `auto_run` present; trim; length `1..64`; if provided, must resolve to a known workflow id | `400 validation_failed` `field_errors.auto_run.workflow` |
 | `auto_run.max_iterations` | integer | optional; `1..100` | `400 validation_failed` `field_errors.auto_run.max_iterations` |
 | `auto_run.inactivity_timeout_sec` | integer | optional; `10..7200` | `400 validation_failed` `field_errors.auto_run.inactivity_timeout_sec` |
 | `auto_run.iteration_timeout_sec` | integer | optional; `30..14400` | `400 validation_failed` `field_errors.auto_run.iteration_timeout_sec` |
@@ -906,7 +915,7 @@ T10 -> depends on T6, T9
 | T6 | Provider-Aware Ingest Endpoints | Implement `/api/issues/create` and `/api/issues/init-from-existing` plus legacy route compatibility shim behavior. | `apps/viewer-server/src/server.ts`, `apps/viewer-server/src/types.ts`, `apps/viewer-server/src/issueJson.ts`, `apps/viewer-server/src/server.test.ts` | Provider-aware endpoints produce `IngestResponse` (`success|partial`) and legacy route preserves existing envelope semantics. |
 | T7 | Provider Metadata Persistence | Implement helpers/defaults for `issue.source.*`, `status.issueIngest.*`, and provider-aware `pullRequest.*` persistence. | `apps/viewer-server/src/providerIssueState.ts`, `apps/viewer-server/src/providerIssueState.test.ts`, `packages/core/src/issueState.ts`, `packages/core/src/issueState.test.ts` | Provider metadata persists with additive defaults and legacy records remain readable without offline migration. |
 | T8 | Viewer Contracts and Stream Wiring | Add viewer-side contract types and stream reducers for new Azure and ingest events. | `apps/viewer/src/api/types.ts`, `apps/viewer/src/api/azureDevopsTypes.ts`, `apps/viewer/src/stream/streamTypes.ts`, `apps/viewer/src/stream/streamReducer.ts`, `apps/viewer/src/stream/ViewerStreamProvider.tsx`, `apps/viewer/src/stream/streamReducer.test.ts` | Streamed `azure-devops-status` and `issue-ingest-status` updates are reflected in viewer state/cache without SDK-event regression. |
-| T9 | Viewer Azure + Provider Create UI | Implement Azure settings UI and provider-aware Create Issue / init-from-existing UX. | `apps/viewer/src/features/azureDevops/api.ts`, `apps/viewer/src/features/azureDevops/queries.ts`, `apps/viewer/src/pages/AzureDevopsPage.tsx`, `apps/viewer/src/pages/AzureDevopsPage.css`, `apps/viewer/src/pages/AzureDevopsPage.test.tsx`, `apps/viewer/src/pages/CreateIssuePage.tsx`, `apps/viewer/src/pages/CreateIssuePage.test.ts`, `apps/viewer/src/features/mutations.ts`, `apps/viewer/src/app/router.tsx`, `apps/viewer/src/layout/AppShell.tsx` | Users can configure Azure credentials and run provider-aware create/init flows with clear loading/success/error states. |
+| T9 | Viewer Azure + Provider Create UI | Implement Azure settings UI and provider-aware Create Issue / init-from-existing UX. | `apps/viewer/src/features/azureDevops/api.ts`, `apps/viewer/src/features/azureDevops/queries.ts`, `apps/viewer/src/pages/AzureDevopsPage.tsx`, `apps/viewer/src/pages/AzureDevopsPage.css`, `apps/viewer/src/pages/AzureDevopsPage.test.tsx`, `apps/viewer/src/pages/CreateIssuePage.tsx`, `apps/viewer/src/pages/CreateIssuePage.test.ts`, `apps/viewer/src/features/mutations.ts`, `apps/viewer/src/app/router.tsx`, `apps/viewer/src/layout/AppShell.tsx` | Azure settings and provider-aware create/init submits disable relevant actions while pending, surface inline `validation_failed` field errors, and render success/partial/error outcomes from API payloads/events. |
 | T10 | Provider-Aware PR Prompting and Docs | Update PR-preparation/prompt context wiring and documentation, then run full quality checks. | `prompts/pr.prepare.md`, `prompts/task.plan.md`, `prompts/task.decompose.md`, `docs/viewer-server-api.md`, `apps/viewer-server/CLAUDE.md` | PR prep is provider-aware (`gh`/`az`), hierarchy context is referenced in planning prompts, and workspace quality checks pass. |
 
 ### Task Details
@@ -1039,9 +1048,10 @@ T10 -> depends on T6, T9
   - `apps/viewer/src/app/router.tsx` - route registration for Azure settings.
   - `apps/viewer/src/layout/AppShell.tsx` - navigation entry for Azure settings.
 - Acceptance Criteria:
-  1. Users can configure Azure credentials with inline validation errors and no PAT echo.
-  2. Create Issue supports both `create` and `init-from-existing` provider-aware flows.
-  3. UI displays remote links, hierarchy summaries, warnings, and auto-select/auto-run outcomes.
+  1. During Azure settings PUT/PATCH/DELETE/reconcile requests, the triggering control is disabled and the pending label (`Saving...` or `Syncing...`) is visible until resolution.
+  2. A `400` `validation_failed` response renders field-level messages for the mapped field key (for example `organization`, `project`, `azure.work_item_type`) while preserving user-entered form values; PAT values are never echoed.
+  3. Successful or partial `/api/issues/create` and `/api/issues/init-from-existing` responses render remote link, hierarchy summary when present, warnings list, and auto-select/auto-run status from response booleans.
+  4. Error responses for Azure settings or provider-aware ingest keep form values intact and render a sanitized error banner (no PAT/token substrings).
 - Dependencies: T8
 - Verification: `pnpm test -- apps/viewer/src/pages/CreateIssuePage.test.ts apps/viewer/src/features/mutations.test.ts apps/viewer/src/pages/AzureDevopsPage.test.tsx && pnpm typecheck`
 

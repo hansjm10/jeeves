@@ -842,7 +842,241 @@ This feature adds issue-scoped Azure DevOps credential storage, provider-aware i
 | Crash recovery | On startup, detect stale lock (`expires_at`), incomplete journal (`completed_at=null`), or temp files; remove stale lock/temp files; reload remote state by checkpoint IDs; resume from journal `state` (`cred.reconciling_worktree`, `ingest.persisting_issue_state`/`ingest.recording_status`, or `pr.checking_existing`); ensure idempotent writes before marking journal complete. |
 
 ## 5. Tasks
-[To be completed in design_plan phase]
+
+### Inputs From Sections 1-4 (Traceability)
+- **Goals (Section 1)**:
+  1. Add issue-scoped Azure DevOps credential management without leaking PAT values.
+  2. Add provider-aware Create Issue flow that supports Azure Boards item creation plus optional init/select/auto-run.
+  3. Add init-from-existing for Azure work items (ID or URL) and persist hierarchy context.
+  4. Add provider-aware PR preparation while preserving existing GitHub behavior.
+- **Workflow (Section 2)**:
+  - Implement credential, ingest, and PR state-machine transitions under per-issue serialization.
+  - Implement partial-success terminals (`ingest.done_partial`) and deterministic crash recovery using operation checkpoints.
+- **Interfaces (Section 3)**:
+  - Build/extend 8 HTTP endpoints, 2 stream events, and provider CLI adapter paths for `gh` and `az`.
+  - Preserve `/api/github/issues/create` compatibility envelope while introducing `/api/issues/create` and `/api/issues/init-from-existing`.
+- **Data (Section 4)**:
+  - Add Azure secret/status fields, provider source/ingest/PR metadata, and operation journal/lock artifacts.
+  - Use additive/lazy migration behavior with backward-compatible defaults.
+
+### Planning Gates (Explicit Answers)
+1. **Smallest independently testable unit**: a single pure validator/helper module (for example, Azure request validation or operation-journal checkpoint transition) validated by unit tests.
+2. **Dependencies between tasks**: yes; provider adapters and persistence helpers must exist before provider-aware ingest endpoints can be wired.
+3. **Parallelizable tasks**: yes; secret/reconcile primitives, operation journaling, and provider adapter work can proceed in parallel once contracts are fixed.
+4. **Specific files per task**: explicitly listed in each Task Details section under `Files`.
+5. **Acceptance criteria per task**: explicitly listed in each Task Details section under `Acceptance Criteria`.
+6. **Verification command per task**: explicitly listed in each Task Details section under `Verification`.
+7. **Must be done first**: provider contract/types (T1) and operation-journal locking primitives (T3), because downstream routes and UI need stable contracts + checkpoint semantics.
+8. **Can only be done last**: provider-aware prompt/doc updates plus full-system quality pass (T10) after endpoint/UI behavior is stable.
+9. **Circular dependencies**: none; the graph is a DAG (server primitives -> server routes -> viewer wiring -> prompt/docs).
+10. **Build/config changes needed**: no TypeScript project-reference changes are required; existing workspace build graph is sufficient.
+11. **New dependencies to install**: no new npm dependencies are required; implementation uses existing runtime/tooling plus external CLIs (`gh`, `az`).
+12. **Environment variables or secrets needed**: Azure PAT is issue-scoped in `.jeeves/.secrets/azure-devops.json`; worktree reconciliation materializes `AZURE_DEVOPS_EXT_PAT` in `.env.jeeves`; runtime requires authenticated `gh` and `az` (with Azure DevOps extension available).
+
+### Goal-to-Task Mapping
+| Goal | Mapped Tasks |
+|------|---------------|
+| G1. Azure credential storage + PAT safety | T1, T2, T5 |
+| G2. Provider-aware create issue/work item flow | T4, T6, T8, T9 |
+| G3. Init-from-existing + hierarchy persistence | T4, T6, T7, T9, T10 |
+| G4. Provider-aware PR preparation | T4, T7, T10 |
+
+### Task Dependency Graph
+```
+T1 (no deps)
+T3 (no deps)
+T2 -> depends on T1
+T4 -> depends on T1
+T7 -> depends on T1, T3
+T5 -> depends on T1, T2, T3
+T6 -> depends on T1, T3, T4, T7
+T8 -> depends on T5, T6
+T9 -> depends on T8
+T10 -> depends on T6, T9
+```
+
+### Task Breakdown
+| ID | Title | Summary | Files | Acceptance Criteria |
+|----|-------|---------|-------|---------------------|
+| T1 | Provider Contracts and Validation | Add typed Azure/provider request-response contracts and validation helpers that match Section 3. | `apps/viewer-server/src/azureDevopsTypes.ts`, `apps/viewer-server/src/azureDevopsTypes.test.ts`, `apps/viewer/src/api/azureDevopsTypes.ts`, `apps/viewer/src/api/types.ts` | Contracts match endpoint/event schemas and validation returns deterministic `code` + `field_errors`. |
+| T2 | Azure Secret and Reconcile Primitives | Implement issue-scoped Azure secret persistence and worktree reconcile behavior. | `apps/viewer-server/src/azureDevopsSecret.ts`, `apps/viewer-server/src/azureDevopsSecret.test.ts`, `apps/viewer-server/src/azureDevopsReconcile.ts`, `apps/viewer-server/src/azureDevopsReconcile.test.ts`, `apps/viewer-server/src/gitExclude.ts` | Secret writes are atomic and reconcile returns expected sync statuses without exposing PAT. |
+| T3 | Operation Journal and Locking | Add provider-operation journal/lock primitives and startup stale-artifact recovery hooks. | `apps/viewer-server/src/providerOperationJournal.ts`, `apps/viewer-server/src/providerOperationJournal.test.ts`, `apps/viewer-server/src/server.ts` | Lock/journal lifecycle is crash-safe and resumable checkpoints are persisted exactly once per transition checkpoint. |
+| T4 | Provider CLI Adapters | Add provider adapters for GitHub/Azure create/init/hierarchy and PR query/create operations. | `apps/viewer-server/src/providerIssueAdapter.ts`, `apps/viewer-server/src/providerIssueAdapter.test.ts`, `apps/viewer-server/src/providerPrAdapter.ts`, `apps/viewer-server/src/providerPrAdapter.test.ts`, `apps/viewer-server/src/githubIssueCreate.ts` | Adapter outputs are normalized and errors map to Section 3 status/code contracts. |
+| T5 | Azure Credential Endpoints and Events | Implement `/api/issue/azure-devops*` endpoints plus `azure-devops-status` event emission and auto-reconcile hooks. | `apps/viewer-server/src/server.ts`, `apps/viewer-server/src/init.ts`, `apps/viewer-server/src/server.test.ts` | All Azure credential endpoints honor validation/error matrix, mutex behavior, PAT redaction, and event emission rules. |
+| T6 | Provider-Aware Ingest Endpoints | Implement `/api/issues/create` and `/api/issues/init-from-existing` plus legacy route compatibility shim behavior. | `apps/viewer-server/src/server.ts`, `apps/viewer-server/src/types.ts`, `apps/viewer-server/src/issueJson.ts`, `apps/viewer-server/src/server.test.ts` | Provider-aware endpoints produce `IngestResponse` (`success|partial`) and legacy route preserves existing envelope semantics. |
+| T7 | Provider Metadata Persistence | Implement helpers/defaults for `issue.source.*`, `status.issueIngest.*`, and provider-aware `pullRequest.*` persistence. | `apps/viewer-server/src/providerIssueState.ts`, `apps/viewer-server/src/providerIssueState.test.ts`, `packages/core/src/issueState.ts`, `packages/core/src/issueState.test.ts` | Provider metadata persists with additive defaults and legacy records remain readable without offline migration. |
+| T8 | Viewer Contracts and Stream Wiring | Add viewer-side contract types and stream reducers for new Azure and ingest events. | `apps/viewer/src/api/types.ts`, `apps/viewer/src/api/azureDevopsTypes.ts`, `apps/viewer/src/stream/streamTypes.ts`, `apps/viewer/src/stream/streamReducer.ts`, `apps/viewer/src/stream/ViewerStreamProvider.tsx`, `apps/viewer/src/stream/streamReducer.test.ts` | Streamed `azure-devops-status` and `issue-ingest-status` updates are reflected in viewer state/cache without SDK-event regression. |
+| T9 | Viewer Azure + Provider Create UI | Implement Azure settings UI and provider-aware Create Issue / init-from-existing UX. | `apps/viewer/src/features/azureDevops/api.ts`, `apps/viewer/src/features/azureDevops/queries.ts`, `apps/viewer/src/pages/AzureDevopsPage.tsx`, `apps/viewer/src/pages/AzureDevopsPage.css`, `apps/viewer/src/pages/AzureDevopsPage.test.tsx`, `apps/viewer/src/pages/CreateIssuePage.tsx`, `apps/viewer/src/pages/CreateIssuePage.test.ts`, `apps/viewer/src/features/mutations.ts`, `apps/viewer/src/app/router.tsx`, `apps/viewer/src/layout/AppShell.tsx` | Users can configure Azure credentials and run provider-aware create/init flows with clear loading/success/error states. |
+| T10 | Provider-Aware PR Prompting and Docs | Update PR-preparation/prompt context wiring and documentation, then run full quality checks. | `prompts/pr.prepare.md`, `prompts/task.plan.md`, `prompts/task.decompose.md`, `docs/viewer-server-api.md`, `apps/viewer-server/CLAUDE.md` | PR prep is provider-aware (`gh`/`az`), hierarchy context is referenced in planning prompts, and workspace quality checks pass. |
+
+### Task Details
+
+**T1: Provider Contracts and Validation**
+- Summary: Introduce shared Azure/provider contract and validation definitions so backend and viewer agree on exact request/response/event shapes.
+- Files:
+  - `apps/viewer-server/src/azureDevopsTypes.ts` - Azure status/mutate/ingest contract types, validator functions, and sanitized error helpers.
+  - `apps/viewer-server/src/azureDevopsTypes.test.ts` - validation/error-sanitization tests for all Section 3 rule branches.
+  - `apps/viewer/src/api/azureDevopsTypes.ts` - viewer type mirror for Azure credential and ingest/event contracts.
+  - `apps/viewer/src/api/types.ts` - re-export/union updates for new event and request types.
+- Acceptance Criteria:
+  1. Validation rules in Section 3 (`organization`, `project`, `pat`, provider enums, existing ID/URL rules) are implemented with deterministic field-level errors.
+  2. Types cover all new endpoint payloads and events (`azure-devops-status`, `issue-ingest-status`) with no `any`.
+  3. Sanitized error helpers strip forbidden characters and never include PAT text.
+- Dependencies: None
+- Verification: `pnpm test -- apps/viewer-server/src/azureDevopsTypes.test.ts`
+
+**T2: Azure Secret and Reconcile Primitives**
+- Summary: Implement atomic Azure credential secret storage and worktree reconcile behavior modeled after the Sonar token lifecycle.
+- Files:
+  - `apps/viewer-server/src/azureDevopsSecret.ts` - read/write/delete helpers for `.jeeves/.secrets/azure-devops.json`.
+  - `apps/viewer-server/src/azureDevopsSecret.test.ts` - atomic write/delete/cleanup and schema-validation tests.
+  - `apps/viewer-server/src/azureDevopsReconcile.ts` - reconcile `.env.jeeves` + `.git/info/exclude` for `AZURE_DEVOPS_EXT_PAT`.
+  - `apps/viewer-server/src/azureDevopsReconcile.test.ts` - sync-status and warning-path tests (`in_sync`, deferred, failed_*).
+  - `apps/viewer-server/src/gitExclude.ts` - shared exclude helper updates for Azure env patterns.
+- Acceptance Criteria:
+  1. Secret persistence is atomic and writes only `{ schemaVersion, organization, project, pat, updated_at }`.
+  2. PAT deletion removes secret state idempotently and reconcile removes stale `.env.jeeves` when applicable.
+  3. Reconcile result status and warnings match the Section 4 sync-status semantics.
+- Dependencies: T1
+- Verification: `pnpm test -- apps/viewer-server/src/azureDevopsSecret.test.ts apps/viewer-server/src/azureDevopsReconcile.test.ts`
+
+**T3: Operation Journal and Locking**
+- Summary: Add crash-safe lock/journal primitives for credentials, ingest, and PR operations.
+- Files:
+  - `apps/viewer-server/src/providerOperationJournal.ts` - lock acquire/release, journal checkpoint write/update/finalize helpers.
+  - `apps/viewer-server/src/providerOperationJournal.test.ts` - stale lock, incomplete journal, and checkpoint-resume tests.
+  - `apps/viewer-server/src/server.ts` - startup recovery integration for stale lock/temp cleanup and resume checkpoints.
+- Acceptance Criteria:
+  1. `.jeeves/.ops/provider-operation.lock` and `.jeeves/.ops/provider-operation.json` follow Section 4 schema and ordering.
+  2. Lock timeout/cleanup behavior is deterministic and prevents concurrent mutation races.
+  3. Startup recovery detects stale/incomplete artifacts and returns a resumable checkpoint state.
+- Dependencies: None
+- Verification: `pnpm test -- apps/viewer-server/src/providerOperationJournal.test.ts`
+
+**T4: Provider CLI Adapters**
+- Summary: Implement provider adapter modules for GitHub and Azure issue/work-item creation, existing-item lookup, hierarchy lookup, and PR lookup/create.
+- Files:
+  - `apps/viewer-server/src/providerIssueAdapter.ts` - `gh issue create/view` and `az boards work-item create/show` adapters.
+  - `apps/viewer-server/src/providerIssueAdapter.test.ts` - success/error mapping and output-normalization tests.
+  - `apps/viewer-server/src/providerPrAdapter.ts` - `gh pr list/create` and `az repos pr list/create` adapters.
+  - `apps/viewer-server/src/providerPrAdapter.test.ts` - existing-PR and create-path behavior tests.
+  - `apps/viewer-server/src/githubIssueCreate.ts` - shared GitHub parser/error mapping reuse.
+- Acceptance Criteria:
+  1. Adapter output is normalized to provider-agnostic objects (`id`, `url`, `title`, `kind`, hierarchy/pr metadata).
+  2. Adapter failures map to documented status/code categories (`provider_auth_required`, `provider_permission_denied`, `provider_timeout`, etc.).
+  3. No adapter path logs or returns PAT values.
+- Dependencies: T1
+- Verification: `pnpm test -- apps/viewer-server/src/providerIssueAdapter.test.ts apps/viewer-server/src/providerPrAdapter.test.ts`
+
+**T5: Azure Credential Endpoints and Events**
+- Summary: Add Azure credential lifecycle endpoints, event emission, and auto-reconcile triggers around startup/issue selection/init.
+- Files:
+  - `apps/viewer-server/src/server.ts` - implement `GET/PUT/PATCH/DELETE /api/issue/azure-devops` and `POST /api/issue/azure-devops/reconcile`.
+  - `apps/viewer-server/src/init.ts` - invoke post-init auto-reconcile for selected issue when Azure credentials are configured.
+  - `apps/viewer-server/src/server.test.ts` - endpoint contract tests, mutex behavior, PAT redaction checks, and event emission tests.
+- Acceptance Criteria:
+  1. Endpoint envelopes and status/code matrix match Section 3 exactly.
+  2. `azure-devops-status` is emitted after successful mutate/reconcile and auto-reconcile paths.
+  3. All responses/events/logs exclude PAT while preserving non-secret status details.
+- Dependencies: T1, T2, T3
+- Verification: `pnpm test -- apps/viewer-server/src/server.test.ts`
+
+**T6: Provider-Aware Ingest Endpoints**
+- Summary: Add provider-aware create/init-from-existing endpoints and preserve legacy GitHub create route compatibility.
+- Files:
+  - `apps/viewer-server/src/server.ts` - implement `/api/issues/create`, `/api/issues/init-from-existing`, and legacy shim mapping.
+  - `apps/viewer-server/src/types.ts` - route-level type updates for provider-aware payload/result wiring.
+  - `apps/viewer-server/src/issueJson.ts` - helper updates used by ingest persistence flow.
+  - `apps/viewer-server/src/server.test.ts` - create/init-existing success/partial/error and legacy-envelope regression tests.
+- Acceptance Criteria:
+  1. Provider-aware endpoints accept GitHub/Azure payloads and return `IngestResponse` with `outcome=success|partial`.
+  2. Legacy `/api/github/issues/create` behavior remains backward-compatible while internally delegating to provider-aware logic.
+  3. Partial-success handling preserves remote references and warnings per workflow design.
+- Dependencies: T1, T3, T4, T7
+- Verification: `pnpm test -- apps/viewer-server/src/server.test.ts`
+
+**T7: Provider Metadata Persistence**
+- Summary: Persist provider-aware source/ingest/PR metadata and additive defaults without requiring offline migration.
+- Files:
+  - `apps/viewer-server/src/providerIssueState.ts` - helpers to read/write `issue.source.*`, `status.issueIngest.*`, and `pullRequest.*`.
+  - `apps/viewer-server/src/providerIssueState.test.ts` - persistence, fallback-default, and partial-outcome consistency tests.
+  - `packages/core/src/issueState.ts` - additive parsing/normalization updates for provider-aware fields.
+  - `packages/core/src/issueState.test.ts` - legacy compatibility and new-field normalization coverage.
+- Acceptance Criteria:
+  1. Metadata writes enforce Section 4 constraints (ID patterns, URL shape, timestamps, enum values).
+  2. Legacy records still load with documented defaults (`issue.source` fallback, legacy PR derivation).
+  3. `status.prCreated` semantics are provider-agnostic and only set after PR metadata persistence.
+- Dependencies: T1, T3
+- Verification: `pnpm test -- apps/viewer-server/src/providerIssueState.test.ts packages/core/src/issueState.test.ts`
+
+**T8: Viewer Contracts and Stream Wiring**
+- Summary: Update viewer request/response/event contracts and stream reducers for Azure credential and ingest status events.
+- Files:
+  - `apps/viewer/src/api/types.ts` - provider-aware create/init payload/result and event typings.
+  - `apps/viewer/src/api/azureDevopsTypes.ts` - Azure status/mutate payload and event definitions.
+  - `apps/viewer/src/stream/streamTypes.ts` - add stream action/state types for `azure-devops-status` and `issue-ingest-status`.
+  - `apps/viewer/src/stream/streamReducer.ts` - reduce new events into state.
+  - `apps/viewer/src/stream/ViewerStreamProvider.tsx` - route websocket events to new reducer actions/cache updates.
+  - `apps/viewer/src/stream/streamReducer.test.ts` - event-handling behavior tests.
+- Acceptance Criteria:
+  1. Viewer stream layer handles new events without adding noise to existing SDK event timelines.
+  2. Incoming event payloads update relevant cached state for the active issue.
+  3. Typecheck passes with no duplicate/incompatible contract definitions.
+- Dependencies: T5, T6
+- Verification: `pnpm test -- apps/viewer/src/stream/streamReducer.test.ts && pnpm typecheck`
+
+**T9: Viewer Azure + Provider Create UI**
+- Summary: Add Azure settings page and provider-aware Create Issue UX (including init-from-existing path).
+- Files:
+  - `apps/viewer/src/features/azureDevops/api.ts` - Azure settings endpoint wrappers.
+  - `apps/viewer/src/features/azureDevops/queries.ts` - query/mutation hooks for Azure settings.
+  - `apps/viewer/src/pages/AzureDevopsPage.tsx` - Azure credentials status/save/remove/reconcile UI.
+  - `apps/viewer/src/pages/AzureDevopsPage.css` - page styles using design tokens.
+  - `apps/viewer/src/pages/AzureDevopsPage.test.tsx` - UI behavior tests for loading/success/error states.
+  - `apps/viewer/src/pages/CreateIssuePage.tsx` - provider selector, Azure fields, and init-from-existing controls/results.
+  - `apps/viewer/src/pages/CreateIssuePage.test.ts` - request-building and local validation tests.
+  - `apps/viewer/src/features/mutations.ts` - provider-aware mutations for `/api/issues/create` and `/api/issues/init-from-existing`.
+  - `apps/viewer/src/app/router.tsx` - route registration for Azure settings.
+  - `apps/viewer/src/layout/AppShell.tsx` - navigation entry for Azure settings.
+- Acceptance Criteria:
+  1. Users can configure Azure credentials with inline validation errors and no PAT echo.
+  2. Create Issue supports both `create` and `init-from-existing` provider-aware flows.
+  3. UI displays remote links, hierarchy summaries, warnings, and auto-select/auto-run outcomes.
+- Dependencies: T8
+- Verification: `pnpm test -- apps/viewer/src/pages/CreateIssuePage.test.ts apps/viewer/src/features/mutations.test.ts apps/viewer/src/pages/AzureDevopsPage.test.tsx && pnpm typecheck`
+
+**T10: Provider-Aware PR Prompting and Docs**
+- Summary: Update prompt/docs behavior for provider-aware PR preparation and hierarchy-aware planning context, then run full quality checks.
+- Files:
+  - `prompts/pr.prepare.md` - provider-routed PR lookup/create instructions (`gh` vs `az`) and provider-aware persistence fields.
+  - `prompts/task.plan.md` - hierarchy-aware planning context guidance.
+  - `prompts/task.decompose.md` - hierarchy-aware decomposition context guidance.
+  - `docs/viewer-server-api.md` - API + event documentation for new provider-aware endpoints/contracts.
+  - `apps/viewer-server/CLAUDE.md` - reusable module-level notes for Azure credential/ingest lifecycle conventions.
+- Acceptance Criteria:
+  1. PR prep prompt selects provider commands from issue metadata and persists provider-aware PR fields.
+  2. Planning/decompose prompts instruct agents to use `issue.source.hierarchy` when available.
+  3. API docs describe new endpoints/events and legacy compatibility route behavior.
+  4. Repository quality checks pass.
+- Dependencies: T6, T9
+- Verification: `pnpm lint && pnpm typecheck && pnpm test`
 
 ## 6. Validation
-[To be completed in design_plan phase]
+
+### Pre-Implementation Checks
+- [ ] All dependencies installed: `pnpm install`
+- [ ] Types check: `pnpm typecheck`
+- [ ] Existing tests pass: `pnpm test`
+
+### Post-Implementation Checks
+- [ ] Types check: `pnpm typecheck`
+- [ ] Lint passes: `pnpm lint`
+- [ ] All tests pass: `pnpm test`
+- [ ] New tests added for: `apps/viewer-server/src/azureDevopsTypes.test.ts`, `apps/viewer-server/src/azureDevopsSecret.test.ts`, `apps/viewer-server/src/azureDevopsReconcile.test.ts`, `apps/viewer-server/src/providerOperationJournal.test.ts`, `apps/viewer-server/src/providerIssueAdapter.test.ts`, `apps/viewer-server/src/providerPrAdapter.test.ts`, `apps/viewer-server/src/providerIssueState.test.ts`, `apps/viewer/src/pages/AzureDevopsPage.test.tsx`
+
+### Manual Verification (if applicable)
+- [ ] Verify Azure settings UI can GET/PUT/PATCH/DELETE/reconcile credentials without exposing PAT.
+- [ ] Verify Create Issue supports provider-aware create and init-from-existing, including Azure hierarchy rendering.
+- [ ] Verify stream-driven UI updates for `azure-devops-status` and `issue-ingest-status` without page refresh.
+- [ ] Verify `prepare_pr` on a GitHub-backed issue still uses `gh` flow and preserves existing behavior.
+- [ ] Verify `prepare_pr` on an Azure-backed issue uses `az repos pr` flow and persists provider-aware PR metadata.

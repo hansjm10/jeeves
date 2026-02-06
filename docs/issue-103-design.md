@@ -258,8 +258,9 @@ This section defines all external and internal contracts added or changed by Azu
 ### Conventions
 
 **Envelope conventions**
-- Success: `{ "ok": true, ... }`
-- Error: `{ "ok": false, "error": string, "code": string, "field_errors"?: Record<string,string>, "run"?: RunStatus }`
+- Provider-aware route success (`/api/issue/azure-devops`, `/api/issues/*`): `{ "ok": true, ... }`
+- Provider-aware route error: `{ "ok": false, "error": string, "code": string, "field_errors"?: Record<string,string>, "run"?: RunStatus }`
+- Legacy compatibility route error (`/api/github/issues/create`): `{ "ok": false, "error": string, "run": RunStatus }` (no `code`, no `field_errors`)
 
 **Mutation gating**
 - Mutating routes remain localhost-only unless `--allow-remote-run` is enabled.
@@ -282,7 +283,7 @@ This section defines all external and internal contracts added or changed by Azu
 | POST | `/api/issue/azure-devops/reconcile` | `{ force?: boolean }` | `200` mutate payload (`updated=false`) | `400`, `403`, `409`, `500`, `503` |
 | POST | `/api/issues/create` | provider-aware create payload | `200` ingest payload (`outcome=success|partial`) | `400`, `401`, `403`, `404`, `409`, `422`, `500`, `503`, `504` |
 | POST | `/api/issues/init-from-existing` | provider-aware existing-item payload | `200` ingest payload (`outcome=success|partial`) | `400`, `401`, `403`, `404`, `409`, `422`, `500`, `503`, `504` |
-| POST | `/api/github/issues/create` | existing GitHub payload (legacy) | `200` existing response shape | existing behavior retained; route is compatibility shim |
+| POST | `/api/github/issues/create` | legacy GitHub create payload (`repo`, `title`, `body`, optional `labels`, `assignees`, `milestone`, `init`, `auto_select`, `auto_run`) | `200` legacy create payload | `400`, `401`, `403`, `404`, `409`, `422`, `500` |
 
 #### Endpoint Schemas
 
@@ -478,8 +479,51 @@ type InitFromExistingRequest = {
 - Errors: same status/code matrix as `/api/issues/create` plus `404 remote_not_found` for missing issue/work item.
 
 **POST `/api/github/issues/create` (compatibility route)**
-- Existing input/output shape is preserved.
-- Internally, this route delegates to `/api/issues/create` with `provider='github'` and maps the new result back to the legacy response fields.
+- Request:
+```ts
+type LegacyCreateIssueRequest = {
+  repo: string;
+  title: string;
+  body: string;
+  labels?: string[];
+  assignees?: string[];
+  milestone?: string;
+  init?: {
+    branch?: string;
+    workflow?: string;
+    phase?: string;
+    design_doc?: string;
+    force?: boolean;
+  };
+  auto_select?: boolean;
+  auto_run?: {
+    provider?: 'claude' | 'codex' | 'fake';
+    workflow?: string;
+    max_iterations?: number;
+    inactivity_timeout_sec?: number;
+    iteration_timeout_sec?: number;
+  };
+};
+```
+- Success (`200`):
+```ts
+type LegacyCreateIssueResponse = {
+  ok: true;
+  created: true;
+  issue_url: string;
+  issue_ref?: string;
+  run: RunStatus;
+  init?: { ok: true; result: { state_dir: string; work_dir: string; repo_dir: string; branch: string } }
+       | { ok: false; error: string };
+  auto_run?: { ok: true; run_started: true } | { ok: false; run_started: false; error: string };
+};
+```
+- Errors:
+  - `400` invalid payload (`repo/title/body`, dependency rules for `init`/`auto_select`/`auto_run`, invalid array types)
+  - `401`, `403`, `404`, `422` provider adapter passthrough (`CreateGitHubIssueError.status`)
+  - `409` init requested while run is already active
+  - `500` unhandled provider/init failure
+- Internal routing: route delegates to `/api/issues/create` with `provider='github'` and maps the provider-aware result back into the legacy response fields/envelope.
 - Deprecation: route remains supported through the next minor release after Azure provider rollout.
 
 ### CLI Commands (internal provider adapters)
@@ -549,7 +593,8 @@ type IssueIngestStatusEvent = {
 **Validation failure behavior**
 - Synchronous validation: JSON type checks, enum checks, dependency checks, length/format checks.
 - Asynchronous validation: mutex acquisition, run-state conflict checks, provider auth/permission checks, remote existence checks.
-- Sync failures return `400` with `code=validation_failed` (or `unsupported_provider`) and `field_errors`.
+- Sync failures on provider-aware routes return `400` with `code=validation_failed` (or `unsupported_provider`) and `field_errors`.
+- Sync failures on `/api/github/issues/create` return `400` with legacy `{ ok:false, error, run }` envelope to avoid a breaking contract change.
 - Async failures map to endpoint-specific `401/403/404/409/422/503/504/500` with sanitized `error` text.
 
 ### UI Interactions
@@ -578,7 +623,7 @@ UI state changes on success:
 8. **Event payload shapes**: `AzureDevopsStatusEvent`, `IssueIngestStatusEvent` types above.
 9. **Event consumers**: listed in `Events` table.
 10. **Per-input validation rules**: listed in `Validation Rules` table.
-11. **Validation failure behavior**: `400` envelope with `code` + `field_errors` for sync validation; mapped async codes otherwise.
+11. **Validation failure behavior**: provider-aware routes use `400` + `code` + `field_errors`; legacy compatibility route preserves `{ ok:false, error, run }` on `400`; async failures use mapped status codes with sanitized error text.
 12. **Sync vs async validation**: explicitly split in `Validation failure behavior`.
 13. **Breaking change?** No required breaking change; changes are additive.
 14. **Migration path**: viewer migrates from `/api/github/issues/create` to `/api/issues/create`; legacy route remains as compatibility shim for one minor release window.

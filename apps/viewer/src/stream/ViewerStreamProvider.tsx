@@ -3,7 +3,14 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useReducer, useRef } from 'react';
 
 import { wsUrlFromBaseUrl } from '../api/paths.js';
-import type { IssueStateSnapshot, LogEvent, RunStatus, SonarTokenStatusEvent } from '../api/types.js';
+import type {
+  IssueStateSnapshot,
+  LogEvent,
+  RunStatus,
+  SonarTokenStatusEvent,
+  AzureDevopsStatusEvent,
+  IssueIngestStatusEvent,
+} from '../api/types.js';
 import type { WorkerLogEvent } from './streamTypes.js';
 import { sonarTokenQueryKey } from '../features/sonarToken/queries.js';
 import type { ExtendedStreamState } from './streamReducer.js';
@@ -26,6 +33,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     runOverride: null,
     effectiveRun: null,
     sonarTokenStatus: null,
+    azureDevopsStatus: null,
+    issueIngestStatus: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -64,6 +73,10 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
             dispatch({ type: 'worker-logs', data: parsed.data as WorkerLogEvent });
           else if (event === 'sonar-token-status')
             dispatch({ type: 'sonar-token-status', data: parsed.data as SonarTokenStatusEvent });
+          else if (event === 'azure-devops-status')
+            dispatch({ type: 'azure-devops-status', data: parsed.data as AzureDevopsStatusEvent });
+          else if (event === 'issue-ingest-status')
+            dispatch({ type: 'issue-ingest-status', data: parsed.data as IssueIngestStatusEvent });
           else {
             // SDK events: check for workerId to route to worker-specific state
             const dataObj = parsed.data as Record<string, unknown> | null;

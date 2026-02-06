@@ -266,4 +266,98 @@ describe("mcp-pruner server", () => {
       expect(toolResponse!.error!.message).toBe("Invalid params");
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Extra argument rejection – tools/call
+  // -------------------------------------------------------------------------
+  describe("tools/call extra argument rejection", () => {
+    it("returns -32602 for read with extra arguments", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "read",
+            arguments: {
+              file_path: "/tmp/test.txt",
+              context_focus_question: "test",
+              extra_field: "should be rejected",
+            },
+          },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error).toBeDefined();
+      expect(toolResponse!.error!.code).toBe(-32602);
+      expect(toolResponse!.error!.message).toBe("Invalid params");
+    });
+
+    it("returns -32602 for bash with extra arguments", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "bash",
+            arguments: {
+              command: "echo hello",
+              extra_field: "should be rejected",
+            },
+          },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error).toBeDefined();
+      expect(toolResponse!.error!.code).toBe(-32602);
+      expect(toolResponse!.error!.message).toBe("Invalid params");
+    });
+
+    it("returns -32602 for grep with extra arguments", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "grep",
+            arguments: {
+              pattern: "test",
+              path: ".",
+              extra_field: "should be rejected",
+            },
+          },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error).toBeDefined();
+      expect(toolResponse!.error!.code).toBe(-32602);
+      expect(toolResponse!.error!.message).toBe("Invalid params");
+    });
+  });
 });

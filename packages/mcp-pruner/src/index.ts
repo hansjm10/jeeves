@@ -140,9 +140,9 @@ server.tool(
 // Compiled Zod schemas for validation in the custom handler
 // ---------------------------------------------------------------------------
 
-const readSchema = z.object(readInputSchema);
-const bashSchema = z.object(bashInputShape);
-const grepSchema = z.object(grepInputShape);
+const readSchema = z.object(readInputSchema).strict();
+const bashSchema = z.object(bashInputShape).strict();
+const grepSchema = z.object(grepInputShape).strict();
 
 // ---------------------------------------------------------------------------
 // Override the CallToolRequestSchema handler installed by server.tool() so

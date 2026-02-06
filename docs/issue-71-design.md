@@ -14,7 +14,7 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 ### Goals
 - [ ] (G1) Automatically hide the sidebar when a run becomes active and expand Watch content panels into that space.
 - [ ] (G2) Keep users in focused mode after the run ends until they explicitly re-open the sidebar.
-- [ ] (G3) Surface run-time control in context by showing Stop while running and an outcome badge after completion.
+- [ ] (G3) Surface run-time control in context by showing Stop while running and deterministic completion outcome semantics (`Complete` vs `Error`) after completion.
 - [ ] (G4) Persist a user override for sidebar visibility during runs across page reloads/sessions.
 - [ ] (G5) When a run starts with override `"auto"`, animate sidebar hide/content expansion inside a 150-200ms envelope.
 
@@ -23,8 +23,9 @@ During active runs, the Watch experience keeps the full sidebar visible even tho
 |----------------------------|-----------------|
 | Run start hides sidebar with a 150-200ms transition | G1, G5; Section 2 transitions `TR1`/`TR2`; Section 5 tasks `T2`/`T4`; Section 6 timing checks |
 | Focused mode stays after run completion until explicit reopen | G2; Section 2 transition `TR4` + `TR6`; Section 5 tasks `T1`/`T2`; Section 6 transition tests |
-| Edge-case transitions are deterministic (animation in-flight, refresh mid-run, websocket reconnection) | Section 2 Edge Cases `EC1`-`EC3`; Section 5 tasks `T1`/`T2`; Section 6 scenario checks |
-| Run context keeps stop/outcome controls in Watch and persists run override | G3, G4; Sections 4 and 5 tasks `T1`/`T3`; Section 6 automated + manual checks |
+| Edge-case transitions are deterministic (animation in-flight, refresh mid-run, websocket reconnection, manual-hide/run-restart transitions) | Section 2 transitions `TR7`-`TR9` and Edge Cases `EC1`-`EC4`; Section 5 tasks `T1`/`T2`; Section 6 scenario checks |
+| Run context keeps stop controls in Watch and persists run override | G3, G4; Sections 4 and 5 tasks `T1`/`T3`; Section 6 automated + manual checks |
+| Completion outcome badge semantics are deterministic (`Complete` vs `Error`) | G3; Section 5 task `T3` acceptance criteria + semantic mapping; Section 6 badge-semantic assertions |
 
 ### Non-Goals
 - Add new sidebar interaction modes (peek overlay, sliver collapse, or partial-width variants).
@@ -59,18 +60,23 @@ No backend workflow/state-machine contracts change for this issue. This section 
 | `TR5` | `W3 -> W0` | Run completes while override is `"open"` | Keep sidebar visible and remain in visible idle presentation. |
 | `TR6` | `W4 -> W0` | User explicitly reopens sidebar after run completion | Show sidebar immediately and clear sticky hidden state. |
 | `TR7` | `W1 -> W1` | Duplicate run-start signal while hide transition is already in progress | No restart; keep single in-flight hide transition. |
+| `TR8` | `W3 -> W2` | User explicitly hides sidebar while run is active | Enter focused hidden state directly (no `W1` replay animation) and clear persisted override from `"open"` to `"auto"`. |
+| `TR9` | `W4 -> W2` | New run starts while idle sticky hidden | Sidebar is already hidden, so transition directly to `W2` with no run-start animation. |
 
 ### Edge Cases (Required)
 - **EC1: Animation in-flight**
   - Duplicate run-start updates during `W1` MUST be treated as no-op (`TR7`) to avoid repeated restarts/flicker.
   - Explicit reopen during `W1` MUST transition directly to `W3` (`TR3`) and cancel the in-flight hide behavior.
   - If run completion is observed during `W1`, finish hide once and land in `W4` (hidden), not visible idle.
+  - Explicit hide while running in `W3` MUST transition directly to `W2` (`TR8`) and persist override `"auto"` (clearing `"open"`).
 - **EC2: Refresh mid-run**
   - On initial hydrate when `run.running === true` and override is `"auto"`, initialize to `W2` (hidden) immediately with no replayed run-start animation.
   - On initial hydrate when `run.running === true` and override is `"open"`, initialize to `W3` (visible).
 - **EC3: WebSocket reconnection**
   - During transient stream disconnect, preserve last known UI state; do not infer idle from missing updates.
   - On reconnect snapshot: if run is active, enter `W2` or `W3` by override; if run is idle after being active, transition once to `W4` or `W0` based on previous visibility mode.
+- **EC4: Run restart from sticky hidden idle**
+  - If a new run starts from `W4`, transition directly to `W2` (`TR9`) with no 150-200ms run-start animation replay.
 
 ## 3. Interfaces
 N/A - This feature does not add or modify external interfaces.
@@ -143,11 +149,11 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
 - **Goals from Section 1**:
   1. (G1) Auto-hide the sidebar when a run is active and expand Watch content into that space.
   2. (G2) Keep focused mode after run completion until the user explicitly re-opens the sidebar.
-  3. (G3) Show run-time controls in context (Stop while running + outcome badge after completion).
+  3. (G3) Show run-time controls in context (Stop while running + deterministic completion badge semantics).
   4. (G4) Persist run-time sidebar override across reloads/sessions.
   5. (G5) Apply a 150-200ms run-start hide/expand animation when override is `"auto"`.
 - **Workflow from Section 2**:
-  - UI states `W0`-`W4`, transitions `TR1`-`TR7`, and required edge cases `EC1`-`EC3`.
+  - UI states `W0`-`W4`, transitions `TR1`-`TR9`, and required edge cases `EC1`-`EC4`.
   - No backend viewer-server workflow/state-machine contract changes.
 - **Interfaces from Section 3**: N/A (no API, event, or command contract changes).
 - **Data from Section 4**:
@@ -160,9 +166,15 @@ This feature adds viewer-only browser persistence for run-time sidebar override.
 |------------------|------------------|
 | G1: Auto-hide sidebar during active run and expand content | T1, T2, T4 |
 | G2: Remain focused after run ends until explicit reopen | T1, T2 |
-| G3: In-context Stop + completion outcome badge | T3, T4 |
+| G3: In-context Stop + deterministic outcome badge semantics (`Complete` vs `Error`) | T3, T4 |
 | G4: Persist run-time sidebar override across sessions | T1, T2 |
 | G5: Run-start animation timing target (150-200ms) | T2, T4 |
+
+### Completion Outcome Semantic Mapping
+| Condition (run ended and `completion_reason` is present) | Badge label |
+|-----------------------------------------------------------|-------------|
+| `run.last_error` is non-empty OR normalized `completion_reason === "error"` | `Error` |
+| Otherwise | `Complete` |
 
 ### Planning Gates (Explicit Answers)
 1. **Smallest independently testable unit**: a pure helper that parses/persists `jeeves.watch.sidebar.runOverride` and derives effective sidebar visibility from `run.running` + override + user toggle action.
@@ -189,9 +201,9 @@ T4 → depends on T2, T3
 ### Task Breakdown
 | ID | Title | Summary | Files | Acceptance Criteria |
 |----|-------|---------|-------|---------------------|
-| T1 | Sidebar focus-state helper | Add pure helpers for run-override parsing/persistence and transition-safe sidebar visibility derivation. | `apps/viewer/src/layout/runFocusState.ts`, `apps/viewer/src/layout/runFocusState.test.ts` | Invalid/missing storage values resolve to `"auto"`; helper models `W0`-`W4` transitions and edge cases (`EC1`-`EC3`); post-run focused state persists until explicit reopen. |
-| T2 | AppShell focused-mode wiring | Wire AppShell + Header to run the 150-200ms run-start hide transition and required transition overrides. | `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/layout/Header.tsx`, `apps/viewer/src/layout/AppShell.test.ts` | Active run + `"auto"` starts hide animation in the 150-200ms envelope; explicit reopen cancels in-flight hide and persists `"open"`; focused state remains hidden after run end until explicit reopen. |
-| T3 | Watch run-context controls | Add Stop action during active runs and completion outcome badge after runs end in the Watch context strip. | `apps/viewer/src/pages/WatchPage.tsx`, `apps/viewer/src/pages/WatchPage.test.ts` | Stop button is visible only while running and calls stop mutation; completion badge appears only after run ends with a completion reason; tests cover visibility and reason formatting. |
+| T1 | Sidebar focus-state helper | Add pure helpers for run-override parsing/persistence and transition-safe sidebar visibility derivation. | `apps/viewer/src/layout/runFocusState.ts`, `apps/viewer/src/layout/runFocusState.test.ts` | Invalid/missing storage values resolve to `"auto"`; helper models `W0`-`W4` transitions including `TR8`/`TR9` and edge cases (`EC1`-`EC4`); post-run focused state persists until explicit reopen. |
+| T2 | AppShell focused-mode wiring | Wire AppShell + Header to run the 150-200ms run-start hide transition and required transition overrides. | `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/layout/Header.tsx`, `apps/viewer/src/layout/AppShell.test.ts` | `W0 -> W1 -> W2` uses 150-200ms timing; explicit reopen sets override `"open"`; explicit hide in `W3` clears override to `"auto"` and enters `W2` directly; run start from `W4` enters `W2` without animation. |
+| T3 | Watch run-context controls | Add Stop action during active runs and completion outcome badge after runs end in the Watch context strip. | `apps/viewer/src/pages/WatchPage.tsx`, `apps/viewer/src/pages/WatchPage.test.ts` | Stop button is visible only while running and calls stop mutation; completion badge maps deterministically to `Complete` vs `Error` (not only presence of `completion_reason`); tests cover semantic mapping and reason formatting. |
 | T4 | Focused-mode styling + integration polish | Add/adjust shared + Watch styles for focused layout, animation timing token wiring, and run-context action/badge presentation across desktop/mobile. | `apps/viewer/src/styles/tokens.css`, `apps/viewer/src/styles.css`, `apps/viewer/src/pages/WatchPage.css`, `apps/viewer/src/pages/WatchPage.tsx` | Sidebar hide transition token is set within 150-200ms and applied to focused-mode classes; hidden sidebar consumes no layout width; Watch context controls wrap without overflow on tablet/mobile; style changes use tokens/RGBA overlays only. |
 
 ### Task Details
@@ -200,14 +212,15 @@ T4 → depends on T2, T3
 - Summary: Introduce pure, testable utilities for `localStorage` run override and transition-safe effective sidebar visibility derivation.
 - Files:
   - `apps/viewer/src/layout/runFocusState.ts` - add constants/types/functions for `runOverride` parsing (`"auto" | "open"`), safe storage read/write, and viewer-side state transitions (`W0`-`W4`) including reconnect handling.
-  - `apps/viewer/src/layout/runFocusState.test.ts` - add tests for absent/invalid value defaulting, run-active auto-hide behavior, post-run sticky focus behavior, and edge cases `EC1`-`EC3`.
+  - `apps/viewer/src/layout/runFocusState.test.ts` - add tests for absent/invalid value defaulting, run-active auto-hide behavior, post-run sticky focus behavior, and edge cases `EC1`-`EC4`.
 - Acceptance Criteria:
   1. Storage value handling accepts only exact `"auto"` or `"open"` and maps all other values to `"auto"`.
   2. Transition reducer/derivation enters `W1`/`W2` when run starts in `"auto"` and resolves duplicate run-start while `W1` as no-op.
-  3. If run ends from focused mode, helper enters/stays in `W4` until explicit reopen action.
-  4. Refresh-mid-run initialization enters `W2` for `"auto"` and `W3` for `"open"` without requiring a synthetic run-start transition.
-  5. WebSocket disconnect/reconnect preserves last known state until reconnect snapshot is applied.
-  6. Storage read/write failures do not throw; behavior falls back to in-memory default `"auto"`.
+  3. User hide while running in `W3` transitions directly to `W2` (no `W1` replay) and clears persisted override from `"open"` to `"auto"`.
+  4. If run ends from focused mode, helper enters/stays in `W4` until explicit reopen action; if run starts from `W4`, helper enters `W2` with no run-start animation.
+  5. Refresh-mid-run initialization enters `W2` for `"auto"` and `W3` for `"open"` without requiring a synthetic run-start transition.
+  6. WebSocket disconnect/reconnect preserves last known state until reconnect snapshot is applied.
+  7. Storage read/write failures do not throw; behavior falls back to in-memory default `"auto"`.
 - Dependencies: None
 - Verification: `pnpm test -- apps/viewer/src/layout/runFocusState.test.ts`
 
@@ -216,13 +229,15 @@ T4 → depends on T2, T3
 - Files:
   - `apps/viewer/src/layout/AppShell.tsx` - use focus-state helper, derive effective run status from stream, trigger/cancel run-start hide animation, and wire toggle handlers.
   - `apps/viewer/src/layout/Header.tsx` - add focused-mode toggle control with clear labels for open/hide actions and explicit reopen during active run.
-  - `apps/viewer/src/layout/AppShell.test.ts` - add tests for run-start transition timing envelope, visibility decisions, and explicit reopen during in-flight animation.
+  - `apps/viewer/src/layout/AppShell.test.ts` - add tests for run-start transition timing envelope, visibility decisions, explicit reopen during in-flight animation, hide-from-`W3` behavior, and run-start-from-`W4` behavior.
 - Acceptance Criteria:
   1. On transition to running (`run.running=false -> true`) with override `"auto"`, AppShell starts hide transition and reaches hidden focused layout within 150-200ms.
   2. Explicit reopen during `W1` or `W2` restores sidebar immediately and persists override `"open"`.
-  3. On transition to idle (`true -> false`) from focused hidden mode, sidebar remains hidden until explicit reopen.
-  4. On stream reconnect, AppShell reapplies snapshot once without flickering through visible idle state.
-  5. Existing navigation tabs and page content remain mounted/accessible in both sidebar-visible and focused layouts.
+  3. Explicit hide while running in `W3` enters `W2` directly (no `W1` replay animation) and clears persisted override to `"auto"`.
+  4. If a new run starts from `W4`, AppShell enters `W2` directly without replaying the 150-200ms run-start animation.
+  5. On transition to idle (`true -> false`) from focused hidden mode, sidebar remains hidden until explicit reopen.
+  6. On stream reconnect, AppShell reapplies snapshot once without flickering through visible idle state.
+  7. Existing navigation tabs and page content remain mounted/accessible in both sidebar-visible and focused layouts.
 - Dependencies: T1
 - Verification: `pnpm test -- apps/viewer/src/layout/AppShell.test.ts && pnpm typecheck`
 
@@ -230,12 +245,13 @@ T4 → depends on T2, T3
 - Summary: Move run-time stop affordance and run outcome feedback into the Watch context strip where users monitor execution.
 - Files:
   - `apps/viewer/src/pages/WatchPage.tsx` - add context-strip Stop action (running only) and completion outcome badge (ended only), with non-blocking error handling.
-  - `apps/viewer/src/pages/WatchPage.test.ts` - extend tests for stop-action visibility, completion badge visibility, and completion-reason formatting.
+  - `apps/viewer/src/pages/WatchPage.test.ts` - extend tests for stop-action visibility, completion badge visibility, completion badge semantic mapping, and completion-reason formatting.
 - Acceptance Criteria:
   1. Context strip shows Stop only when `run.running === true`; button triggers stop mutation with `{ force: false }`.
   2. Stop button reflects pending mutation state (`Stopping…`) and is disabled while request is in flight.
-  3. Completion outcome badge is hidden while running and shown after completion when `completion_reason` is present.
-  4. Existing run context fields (Issue, Workflow, Phase, PID/Iteration/timestamps) keep current visibility semantics.
+  3. Completion outcome badge is hidden while running and shown only after completion when `completion_reason` is present.
+  4. When shown, badge semantics are deterministic: render `Error` if `run.last_error` is non-empty or normalized `completion_reason === "error"`, otherwise render `Complete`.
+  5. Existing run context fields (Issue, Workflow, Phase, PID/Iteration/timestamps) keep current visibility semantics.
 - Dependencies: T1
 - Verification: `pnpm test -- apps/viewer/src/pages/WatchPage.test.ts`
 
@@ -274,8 +290,11 @@ T4 → depends on T2, T3
 - [ ] Automated scenario assertions added and passing:
   - Run-start hide transition timing check validates configured duration is between 150ms and 200ms.
   - Animation in-flight check validates duplicate run-start is no-op and explicit reopen cancels hide behavior.
+  - Running-override-hide check validates `W3 -> W2` transition clears persisted override from `"open"` to `"auto"` and does not re-enter `W1`.
+  - Sticky-hidden-restart check validates run start from `W4` transitions directly to `W2` without replaying run-start animation.
   - Refresh mid-run check validates first paint initializes hidden (`"auto"`) or visible (`"open"`) without replaying run-start transition.
   - WebSocket reconnect check validates no visible-idle flicker before reconnect snapshot reconciliation.
+  - Completion outcome semantic check validates badge label mapping: `Error` for `last_error` present or `completion_reason === "error"`; otherwise `Complete` when completion reason exists.
 
 ### Manual Verification (required)
 - [ ] Run `pnpm dev`, open `/watch`, and start a run from sidebar controls.
@@ -286,4 +305,6 @@ T4 → depends on T2, T3
 - [ ] Reload during an active run and verify the initial render matches expected state (`auto` => hidden, `open` => visible) without replaying run-start animation.
 - [ ] Simulate websocket disconnect/reconnect during active run and verify UI preserves current state during disconnect, then reconciles once from reconnect snapshot.
 - [ ] While running, verify Stop is available in Watch context strip and triggers stop.
-- [ ] After completion, verify an outcome badge appears in Watch context strip with completion reason.
+- [ ] While running with sidebar explicitly open, trigger hide and verify transition goes directly to hidden state, persisted override is reset to `"auto"`, and no run-start animation replay occurs.
+- [ ] From idle sticky-hidden state (`W4`), start a new run and verify state enters hidden running (`W2`) without replaying the 150-200ms run-start animation.
+- [ ] After completion, verify outcome badge semantics: show `Complete` for non-error completion and `Error` for error completion (`last_error` present or reason `error`).

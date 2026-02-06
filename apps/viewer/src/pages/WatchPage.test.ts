@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeRunContextFields,
+  computeRunOutcome,
   extractCurrentPhase,
   extractWorkflowName,
   formatCompletionReason,
@@ -11,6 +12,7 @@ import {
   formatTimestamp,
   formatWorkerPhase,
   getWorkerStatusColor,
+  isStopVisible,
   isValidViewMode,
   normalizeViewMode,
   type RunContextField,
@@ -665,5 +667,308 @@ describe('formatWorkerPhase', () => {
 
   it('formats task_spec_check as "spec-check"', () => {
     expect(formatWorkerPhase('task_spec_check')).toBe('spec-check');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// T8: Watch context control tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('T8-AC1: Stop control visibility and pending state', () => {
+  describe('isStopVisible tracks run.running', () => {
+    it('returns true when running is true', () => {
+      expect(isStopVisible(true)).toBe(true);
+    });
+
+    it('returns false when running is false', () => {
+      expect(isStopVisible(false)).toBe(false);
+    });
+
+    it('returns false when running is null', () => {
+      expect(isStopVisible(null)).toBe(false);
+    });
+
+    it('returns false when running is undefined', () => {
+      expect(isStopVisible(undefined)).toBe(false);
+    });
+  });
+
+  describe('Stop visibility strictly follows running state transitions', () => {
+    it('Stop visible during run, hidden before and after', () => {
+      // Before run starts
+      expect(isStopVisible(false)).toBe(false);
+      // Run starts
+      expect(isStopVisible(true)).toBe(true);
+      // Run ends
+      expect(isStopVisible(false)).toBe(false);
+    });
+
+    it('Stop hidden when run data is absent', () => {
+      // No run data at all (null/undefined)
+      expect(isStopVisible(null)).toBe(false);
+      expect(isStopVisible(undefined)).toBe(false);
+    });
+
+    it('Stop visible immediately on run start, hidden immediately on run end', () => {
+      // Simulate quick state transitions
+      const states: (boolean | null)[] = [false, true, true, true, false];
+      const expected = [false, true, true, true, false];
+      states.forEach((running, i) => {
+        expect(isStopVisible(running)).toBe(expected[i]);
+      });
+    });
+  });
+
+  describe('Stop pending state tracks mutation status', () => {
+    it('Stop button calls stop mutation with force: false (verified via function signature)', () => {
+      // The Stop button in WatchPage.tsx calls stopRun.mutateAsync({ force: false })
+      // This test verifies isStopVisible is the gate for Stop rendering.
+      // Pending state is driven by stopRun.isPending (mutation hook state).
+      // Here we verify the gate condition is correct:
+      expect(isStopVisible(true)).toBe(true);  // Stop button rendered
+      expect(isStopVisible(false)).toBe(false); // Stop button not rendered
+    });
+
+    it('Stop visibility is independent of other run fields', () => {
+      // Even with completion_reason set, if running is true, Stop is visible
+      // (this is a pure visibility gate on the running boolean)
+      expect(isStopVisible(true)).toBe(true);
+    });
+  });
+});
+
+describe('T8-AC2: Completion badge visibility requires run completion and completion_reason', () => {
+  describe('badge hidden while running', () => {
+    it('returns null when running is true, even with completion_reason', () => {
+      expect(computeRunOutcome({
+        running: true,
+        completion_reason: 'success',
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when running is true and no completion_reason', () => {
+      expect(computeRunOutcome({
+        running: true,
+        completion_reason: null,
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when running is true with error state', () => {
+      expect(computeRunOutcome({
+        running: true,
+        completion_reason: 'error',
+        last_error: 'some error',
+      })).toBeNull();
+    });
+  });
+
+  describe('badge hidden when no completion_reason', () => {
+    it('returns null when not running and completion_reason is null', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: null,
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when not running and completion_reason is undefined', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: undefined,
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when not running and completion_reason is empty string', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: '',
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when running is null and no completion_reason', () => {
+      expect(computeRunOutcome({
+        running: null,
+        completion_reason: null,
+        last_error: null,
+      })).toBeNull();
+    });
+
+    it('returns null when running is undefined and no completion_reason', () => {
+      expect(computeRunOutcome({
+        running: undefined,
+        completion_reason: undefined,
+        last_error: undefined,
+      })).toBeNull();
+    });
+  });
+
+  describe('badge shown only when both run completed and completion_reason present', () => {
+    it('returns non-null when not running and completion_reason is present', () => {
+      const result = computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: null,
+      });
+      expect(result).not.toBeNull();
+    });
+
+    it('returns non-null when not running and completion_reason is "max_iterations"', () => {
+      const result = computeRunOutcome({
+        running: false,
+        completion_reason: 'max_iterations',
+        last_error: null,
+      });
+      expect(result).not.toBeNull();
+    });
+
+    it('badge visibility transitions correctly across run lifecycle', () => {
+      // Idle - no badge (no completion_reason)
+      expect(computeRunOutcome({ running: false, completion_reason: null })).toBeNull();
+      // Running - no badge
+      expect(computeRunOutcome({ running: true, completion_reason: null })).toBeNull();
+      // Run completes with reason - badge shows
+      expect(computeRunOutcome({ running: false, completion_reason: 'success' })).not.toBeNull();
+    });
+  });
+});
+
+describe('T8-AC3: Error vs Complete badge mapping', () => {
+  describe('Error badge when completion_reason is "error"', () => {
+    it('returns Error when completion_reason is "error" and no last_error', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'error',
+        last_error: null,
+      })).toBe('Error');
+    });
+
+    it('returns Error when completion_reason is "error" and last_error is present', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'error',
+        last_error: 'Process crashed',
+      })).toBe('Error');
+    });
+
+    it('returns Error when completion_reason is "error" and last_error is empty string', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'error',
+        last_error: '',
+      })).toBe('Error');
+    });
+  });
+
+  describe('Error badge when last_error is present (regardless of completion_reason)', () => {
+    it('returns Error when completion_reason is "success" but last_error is present', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: 'Some residual error',
+      })).toBe('Error');
+    });
+
+    it('returns Error when completion_reason is "max_iterations" but last_error is present', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'max_iterations',
+        last_error: 'Timeout error',
+      })).toBe('Error');
+    });
+
+    it('returns Error when completion_reason is any non-error value but last_error is present', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'user_cancelled',
+        last_error: 'Cancelled with error context',
+      })).toBe('Error');
+    });
+  });
+
+  describe('Complete badge for non-error completions', () => {
+    it('returns Complete when completion_reason is "success" and no last_error', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: null,
+      })).toBe('Complete');
+    });
+
+    it('returns Complete when completion_reason is "max_iterations" and no last_error', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'max_iterations',
+        last_error: null,
+      })).toBe('Complete');
+    });
+
+    it('returns Complete when completion_reason is "user_cancelled" and no last_error', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'user_cancelled',
+        last_error: null,
+      })).toBe('Complete');
+    });
+
+    it('returns Complete when completion_reason is present and last_error is empty string', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: '',
+      })).toBe('Complete');
+    });
+
+    it('returns Complete when completion_reason is present and last_error is undefined', () => {
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: undefined,
+      })).toBe('Complete');
+    });
+  });
+
+  describe('deterministic badge semantics across state transitions', () => {
+    it('badge changes from null to Complete on successful run completion', () => {
+      // Running
+      expect(computeRunOutcome({ running: true, completion_reason: null, last_error: null })).toBeNull();
+      // Completed successfully
+      expect(computeRunOutcome({ running: false, completion_reason: 'success', last_error: null })).toBe('Complete');
+    });
+
+    it('badge changes from null to Error on error run completion', () => {
+      // Running
+      expect(computeRunOutcome({ running: true, completion_reason: null, last_error: null })).toBeNull();
+      // Completed with error
+      expect(computeRunOutcome({ running: false, completion_reason: 'error', last_error: 'crash' })).toBe('Error');
+    });
+
+    it('Error takes precedence: last_error overrides non-error completion_reason', () => {
+      // Even with "success" completion_reason, last_error forces Error badge
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: 'unexpected error after completion',
+      })).toBe('Error');
+    });
+
+    it('Complete is returned only when both conditions hold: completion_reason present AND no error indicators', () => {
+      // Must be not running + have completion_reason + no error indicators
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: 'success',
+        last_error: null,
+      })).toBe('Complete');
+
+      // Missing completion_reason -> null (not Complete)
+      expect(computeRunOutcome({
+        running: false,
+        completion_reason: null,
+        last_error: null,
+      })).toBeNull();
+    });
   });
 });

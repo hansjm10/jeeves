@@ -27,6 +27,36 @@ Jeeves is currently GitHub-centric, so teams that manage work in Azure DevOps ca
 - **In scope**: Viewer + viewer-server contracts for Azure credential/config management, Azure Boards item creation, init-from-existing Azure item with hierarchy capture, provider-routed PR creation, provider-agnostic PR metadata persistence, prompt/context wiring for hierarchy-aware planning, and tests for endpoint behavior plus sanitized error handling.
 - **Out of scope**: Azure DevOps org/project provisioning, broad backlog synchronization, migration of historical issue state beyond required new fields, and changes to unrelated workflow phases.
 
+### Classification Gates (Explicit)
+1. **What specific problem does this solve?**
+   Jeeves only supports GitHub-native issue and PR flows today, so Azure DevOps teams cannot run end-to-end planning and delivery inside Jeeves without manual external steps.
+2. **Who or what is affected by this problem today?**
+   Viewer users and viewer-server workflows that depend on issue creation, issue initialization, credential sync, and PR preparation when the source of truth is Azure DevOps.
+3. **What happens if we don't solve it?**
+   Azure teams continue to split work across Jeeves and manual Azure CLI/UI operations, increasing setup friction, state drift risk, and inconsistent run outcomes.
+4. **What MUST this solution do?**
+   - Persist Azure org/PAT per issue with secret-safe handling and reconcile semantics.
+   - Create Azure Boards work items from Create Issue for `User Story`, `Bug`, and `Task`.
+   - Initialize from existing Azure items and capture parent/child hierarchy context.
+   - Route PR preparation by provider so Azure-backed issues use Azure PR flows while GitHub behavior remains intact.
+5. **What MUST this solution NOT do?**
+   - It must not break or replace existing GitHub create-issue and PR preparation behavior.
+   - It must not expose PAT values in API payloads, events, logs, or persisted non-secret status fields.
+   - It must not introduce broad Azure administration/discovery workflows beyond required org/project/item/PR operations.
+6. **What are the boundaries?**
+   - **In scope**: Credential lifecycle, provider-aware ingest/create/init-from-existing, hierarchy context persistence for prompts, provider-aware PR creation/reuse, and contract-level tests.
+   - **Out of scope**: Backlog synchronization, org/project provisioning, historical state migrations unrelated to new provider fields, and unrelated workflow phases.
+7. **Does this change workflow/orchestration/state machines?**
+   Yes. It adds provider-aware orchestration across credential sync, ingest/init, and PR preparation with additional state transitions and failure modes.
+8. **Does this add/modify endpoints, events, CLI commands, or contracts?**
+   Yes. It requires new/extended viewer-server routes, streamed status events, provider routing contracts, and Azure CLI command paths.
+9. **Does this add/modify schemas, config fields, or storage?**
+   Yes. It adds issue-scoped Azure secret storage and extends issue state with provider-aware source/hierarchy/PR metadata.
+10. **Does this change UI components or user interactions?**
+    Yes. Create Issue and provider credential UX must expose Azure-specific options and validations.
+11. **Does this change build, deploy, or tooling?**
+    Yes. Runtime tooling dependencies and failure handling expand to Azure CLI authentication/extension/permission conditions.
+
 ---
 
 ## 2. Workflow

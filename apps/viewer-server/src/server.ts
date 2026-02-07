@@ -58,7 +58,17 @@ import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
-import { cleanupStaleArtifacts, detectRecovery } from './providerOperationJournal.js';
+import {
+  cleanupStaleArtifacts,
+  detectRecovery,
+  acquireLock,
+  releaseLock,
+  createJournal,
+  updateJournalState,
+  updateJournalCheckpoint,
+  finalizeJournal,
+  generateOperationId,
+} from './providerOperationJournal.js';
 import {
   createProviderIssue as defaultCreateProviderIssue,
   lookupExistingIssue as defaultLookupExistingIssue,
@@ -426,6 +436,8 @@ export type ViewerServerConfig = Readonly<{
   lookupExistingIssue?: LookupExistingIssueAdapter;
   /** Azure hierarchy fetch adapter override. For testing only. */
   fetchAzureHierarchy?: FetchAzureHierarchyAdapter;
+  /** File-level lock timeout for provider operations (ms). Default: 30000. For testing only. */
+  providerOperationLockTimeoutMs?: number;
 }>;
 
 export async function buildServer(config: ViewerServerConfig) {
@@ -437,6 +449,7 @@ export async function buildServer(config: ViewerServerConfig) {
   const createProviderIssue = config.createProviderIssue ?? defaultCreateProviderIssue;
   const lookupExistingIssue = config.lookupExistingIssue ?? defaultLookupExistingIssue;
   const fetchAzureHierarchy = config.fetchAzureHierarchy ?? defaultFetchAzureHierarchy;
+  const providerOpLockTimeoutMs = config.providerOperationLockTimeoutMs ?? 30_000;
 
   const allowRemoteRun = config.allowRemoteRun || parseEnvBool(process.env.JEEVES_VIEWER_ALLOW_REMOTE_RUN);
   const allowedOrigins = parseAllowedOriginsFromEnv();
@@ -568,6 +581,41 @@ export async function buildServer(config: ViewerServerConfig) {
     } else {
       mutex.locked = false;
     }
+  }
+
+  // ============================================================================
+  // Provider Operation File Lock Helper
+  // ============================================================================
+
+  /**
+   * Acquire the per-issue file-level provider operation lock with retry-on-stale.
+   * Returns `{ acquired: true, operationId }` or `{ acquired: false }`.
+   */
+  async function acquireProviderOperationLock(
+    issueStateDir: string,
+    issueRef: string,
+  ): Promise<{ acquired: true; operationId: string } | { acquired: false }> {
+    const operationId = generateOperationId();
+    const lockResult = await acquireLock(issueStateDir, {
+      operation_id: operationId,
+      issue_ref: issueRef,
+      timeout_ms: providerOpLockTimeoutMs,
+    });
+    if (lockResult.acquired) {
+      return { acquired: true, operationId };
+    }
+    if (lockResult.reason === 'stale_cleaned') {
+      // Retry once after stale cleanup
+      const retry = await acquireLock(issueStateDir, {
+        operation_id: operationId,
+        issue_ref: issueRef,
+        timeout_ms: providerOpLockTimeoutMs,
+      });
+      if (retry.acquired) {
+        return { acquired: true, operationId };
+      }
+    }
+    return { acquired: false };
   }
 
   const logTailer = new LogTailer();
@@ -1112,6 +1160,28 @@ export async function buildServer(config: ViewerServerConfig) {
       throw { status: 409, body: { ok: false, error: 'Cannot init while a run is active.', code: 'conflict_running' } };
     }
 
+    // Acquire file-level provider operation lock if a state dir exists
+    const lockStateDir = currentIssue.stateDir ?? null;
+    let ingestOperationId: string | null = null;
+    if (lockStateDir) {
+      const lockResult = await acquireProviderOperationLock(lockStateDir, currentIssue.issueRef!);
+      if (!lockResult.acquired) {
+        throw { status: 503, body: { ok: false, error: 'Another provider operation is in progress.', code: 'busy' } };
+      }
+      ingestOperationId = lockResult.operationId;
+
+      // Create journal
+      await createJournal(lockStateDir, {
+        operation_id: ingestOperationId,
+        kind: 'ingest',
+        state: 'ingest.validating',
+        issue_ref: currentIssue.issueRef!,
+        provider,
+      });
+    }
+
+    try {
+
     // Resolve Azure credentials if needed
     let azurePat: string | undefined;
     let azureOrg: string | undefined;
@@ -1137,6 +1207,7 @@ export async function buildServer(config: ViewerServerConfig) {
     }
 
     // ---- Remote operation ----
+    if (lockStateDir) await updateJournalState(lockStateDir, mode === 'create' ? 'ingest.creating_remote' : 'ingest.resolving_existing');
     if (mode === 'create') {
       try {
         remoteRef = await createProviderIssue({
@@ -1204,7 +1275,16 @@ export async function buildServer(config: ViewerServerConfig) {
       }
     }
 
+    // Update journal checkpoint with remote reference
+    if (lockStateDir && remoteRef) {
+      await updateJournalCheckpoint(lockStateDir, {
+        remote_id: remoteRef.id,
+        remote_url: remoteRef.url,
+      });
+    }
+
     // ---- Hierarchy fetch (Azure only) ----
+    if (lockStateDir) await updateJournalState(lockStateDir, 'ingest.fetching_hierarchy');
     if (provider === 'azure_devops' && azureOrg && azureProject) {
       const fetchHierarchy = mode === 'init_existing'
         ? (params.azureInitOptions?.fetch_hierarchy ?? true)
@@ -1228,6 +1308,7 @@ export async function buildServer(config: ViewerServerConfig) {
     }
 
     // ---- Persist issue state ----
+    if (lockStateDir) await updateJournalState(lockStateDir, 'ingest.persisting_issue_state');
     let persistedStateDir: string | null = null;
     if (initRequested) {
       // Init will create issue state, then we persist source metadata
@@ -1278,19 +1359,23 @@ export async function buildServer(config: ViewerServerConfig) {
               : {}),
           };
           await writeIssueSource(initRes.state_dir, issueSource);
+          if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { issue_state_persisted: true, init_completed: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Failed to persist issue source metadata.';
           warnings.push(msg);
           outcome = 'partial';
+          if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { init_completed: true }).catch(() => void 0);
         }
 
         // Auto-select
+        if (lockStateDir) await updateJournalState(lockStateDir, 'ingest.auto_selecting').catch(() => void 0);
         if (autoSelectEnabled) {
           try {
             await runManager.setIssue(initRes.issue_ref);
             await saveActiveIssue(dataDir, initRes.issue_ref);
             await refreshFileTargets();
             autoSelectResult = { requested: true, ok: true };
+            if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { auto_selected: true }).catch(() => void 0);
 
             // Best-effort reconcile hooks
             const reconcileIssue = runManager.getIssue();
@@ -1315,6 +1400,7 @@ export async function buildServer(config: ViewerServerConfig) {
         }
 
         // Auto-run
+        if (lockStateDir) await updateJournalState(lockStateDir, 'ingest.auto_starting_run').catch(() => void 0);
         if (autoRunRequested) {
           if (autoSelectResult?.ok) {
             try {
@@ -1326,6 +1412,7 @@ export async function buildServer(config: ViewerServerConfig) {
                 iteration_timeout_sec: params.auto_run?.iteration_timeout_sec,
               });
               autoRunResult = { requested: true, ok: true };
+              if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { auto_run_started: true }).catch(() => void 0);
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Failed to start run.';
               autoRunResult = { requested: true, ok: false, error: msg };
@@ -1373,6 +1460,7 @@ export async function buildServer(config: ViewerServerConfig) {
     }
 
     // ---- Record ingest status ----
+    if (lockStateDir) await updateJournalState(lockStateDir, 'ingest.recording_status').catch(() => void 0);
     const stateDir = persistedStateDir ?? currentIssue.stateDir;
     if (stateDir) {
       try {
@@ -1426,7 +1514,24 @@ export async function buildServer(config: ViewerServerConfig) {
       run: { running: runManager.getStatus().running, runId: runManager.getStatus().run_id ?? undefined },
     };
 
+    // Finalize journal
+    if (lockStateDir) {
+      const terminalState = outcome === 'success' ? 'ingest.done_success' : 'ingest.done_partial';
+      if (warnings.length > 0) await updateJournalCheckpoint(lockStateDir, { warnings }).catch(() => void 0);
+      await finalizeJournal(lockStateDir, terminalState).catch(() => void 0);
+    }
+
     return response;
+
+    } catch (err) {
+      // Finalize journal on error
+      if (lockStateDir) {
+        try { await finalizeJournal(lockStateDir, 'ingest.done_error'); } catch { /* journal finalize best-effort */ }
+      }
+      throw err;
+    } finally {
+      if (lockStateDir) await releaseLock(lockStateDir);
+    }
   }
 
   // POST /api/issues/create — provider-aware create
@@ -2965,17 +3070,34 @@ export async function buildServer(config: ViewerServerConfig) {
       });
     }
 
-    // Acquire mutex
+    // Acquire in-memory mutex
     const acquired = await acquireAzureDevopsMutex(issue.issueRef);
     if (!acquired) {
-      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
+    }
+
+    // Acquire file-level lock inside mutex
+    const lockResult = await acquireProviderOperationLock(issue.stateDir, issue.issueRef);
+    if (!lockResult.acquired) {
+      releaseAzureDevopsMutex(issue.issueRef);
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
     }
 
     try {
+      // Create journal
+      await createJournal(issue.stateDir, {
+        operation_id: lockResult.operationId,
+        kind: 'credentials',
+        state: 'cred.validating',
+        issue_ref: issue.issueRef,
+        provider: null,
+      });
+
       const warnings: string[] = [];
       const now = new Date().toISOString();
 
-      // Write secret file (organization, project, pat)
+      // Persist secret
+      await updateJournalState(issue.stateDir, 'cred.persisting_secret');
       await writeAzureDevopsSecret(
         issue.stateDir,
         validation.value.organization,
@@ -2991,6 +3113,7 @@ export async function buildServer(config: ViewerServerConfig) {
       });
 
       // Reconcile if sync_now is true (default) and worktree exists
+      await updateJournalState(issue.stateDir, 'cred.reconciling_worktree');
       let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
       let lastError: string | null = null;
 
@@ -3042,17 +3165,25 @@ export async function buildServer(config: ViewerServerConfig) {
         });
       }
 
+      // Record status
+      await updateJournalState(issue.stateDir, 'cred.recording_status');
+
       // Build final status
       const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
 
       // Emit event
       emitAzureDevopsStatus(status, 'put');
 
+      // Finalize journal
+      await finalizeJournal(issue.stateDir, 'cred.done_success');
+
       return reply.send({ ok: true, updated: true, status, warnings });
     } catch (err) {
+      try { await finalizeJournal(issue.stateDir, 'cred.done_error'); } catch { /* journal finalize best-effort */ }
       const message = sanitizePatFromMessage(sanitizeErrorForUi(err));
       return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
     } finally {
+      await releaseLock(issue.stateDir);
       releaseAzureDevopsMutex(issue.issueRef);
     }
   });
@@ -3082,13 +3213,29 @@ export async function buildServer(config: ViewerServerConfig) {
       });
     }
 
-    // Acquire mutex
+    // Acquire in-memory mutex
     const acquired = await acquireAzureDevopsMutex(issue.issueRef);
     if (!acquired) {
-      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
+    }
+
+    // Acquire file-level lock inside mutex
+    const lockResult = await acquireProviderOperationLock(issue.stateDir, issue.issueRef);
+    if (!lockResult.acquired) {
+      releaseAzureDevopsMutex(issue.issueRef);
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
     }
 
     try {
+      // Create journal
+      await createJournal(issue.stateDir, {
+        operation_id: lockResult.operationId,
+        kind: 'credentials',
+        state: 'cred.validating',
+        issue_ref: issue.issueRef,
+        provider: null,
+      });
+
       const warnings: string[] = [];
       const now = new Date().toISOString();
 
@@ -3098,6 +3245,9 @@ export async function buildServer(config: ViewerServerConfig) {
 
       const { value } = validation;
       let meaningfulChange = false;
+
+      // Persist secret changes
+      await updateJournalState(issue.stateDir, 'cred.persisting_secret');
 
       // Handle clear_pat: delete secret but keep org/project in status
       if (value.clear_pat) {
@@ -3154,6 +3304,7 @@ export async function buildServer(config: ViewerServerConfig) {
       }
 
       // Reconcile if sync_now and there were changes (or always if sync_now=true)
+      await updateJournalState(issue.stateDir, 'cred.reconciling_worktree');
       let syncStatus: AzureDevopsSyncStatus = existingStatus.sync_status;
       let lastError: string | null = existingStatus.last_error;
 
@@ -3202,17 +3353,25 @@ export async function buildServer(config: ViewerServerConfig) {
         });
       }
 
+      // Record status
+      await updateJournalState(issue.stateDir, 'cred.recording_status');
+
       // Build final status
       const status = await buildAzureDevopsStatus(issue.issueRef, issue.stateDir, issue.workDir);
 
       // Emit event
       emitAzureDevopsStatus(status, 'patch');
 
+      // Finalize journal
+      await finalizeJournal(issue.stateDir, 'cred.done_success');
+
       return reply.send({ ok: true, updated: meaningfulChange, status, warnings });
     } catch (err) {
+      try { await finalizeJournal(issue.stateDir, 'cred.done_error'); } catch { /* journal finalize best-effort */ }
       const message = sanitizePatFromMessage(sanitizeErrorForUi(err));
       return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
     } finally {
+      await releaseLock(issue.stateDir);
       releaseAzureDevopsMutex(issue.issueRef);
     }
   });
@@ -3231,13 +3390,29 @@ export async function buildServer(config: ViewerServerConfig) {
       return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
     }
 
-    // Acquire mutex
+    // Acquire in-memory mutex
     const acquired = await acquireAzureDevopsMutex(issue.issueRef);
     if (!acquired) {
-      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
+    }
+
+    // Acquire file-level lock inside mutex
+    const lockResult = await acquireProviderOperationLock(issue.stateDir, issue.issueRef);
+    if (!lockResult.acquired) {
+      releaseAzureDevopsMutex(issue.issueRef);
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
     }
 
     try {
+      // Create journal
+      await createJournal(issue.stateDir, {
+        operation_id: lockResult.operationId,
+        kind: 'credentials',
+        state: 'cred.validating',
+        issue_ref: issue.issueRef,
+        provider: null,
+      });
+
       const warnings: string[] = [];
       const now = new Date().toISOString();
 
@@ -3246,9 +3421,11 @@ export async function buildServer(config: ViewerServerConfig) {
       const hadSecret = existingStatus.has_pat;
 
       // Delete the secret file
+      await updateJournalState(issue.stateDir, 'cred.persisting_secret');
       await deleteAzureDevopsSecret(issue.stateDir);
 
       // Reconcile (remove env var from .env.jeeves) if worktree exists
+      await updateJournalState(issue.stateDir, 'cred.reconciling_worktree');
       let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
       let lastError: string | null = null;
 
@@ -3274,6 +3451,9 @@ export async function buildServer(config: ViewerServerConfig) {
         syncStatus = 'in_sync'; // No worktree — trivially satisfied
       }
 
+      // Record status
+      await updateJournalState(issue.stateDir, 'cred.recording_status');
+
       // Clear status fields (org/project and sync state)
       await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
         organization: null,
@@ -3291,11 +3471,16 @@ export async function buildServer(config: ViewerServerConfig) {
       // Emit event
       emitAzureDevopsStatus(status, 'delete');
 
+      // Finalize journal
+      await finalizeJournal(issue.stateDir, 'cred.done_success');
+
       return reply.send({ ok: true, updated: hadSecret, status, warnings });
     } catch (err) {
+      try { await finalizeJournal(issue.stateDir, 'cred.done_error'); } catch { /* journal finalize best-effort */ }
       const message = sanitizeErrorForUi(err);
       return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
     } finally {
+      await releaseLock(issue.stateDir);
       releaseAzureDevopsMutex(issue.issueRef);
     }
   });
@@ -3325,13 +3510,29 @@ export async function buildServer(config: ViewerServerConfig) {
       });
     }
 
-    // Acquire mutex
+    // Acquire in-memory mutex
     const acquired = await acquireAzureDevopsMutex(issue.issueRef);
     if (!acquired) {
-      return reply.code(503).send({ ok: false, error: 'Another Azure DevOps credential operation is in progress.', code: 'busy' });
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
+    }
+
+    // Acquire file-level lock inside mutex
+    const lockResult = await acquireProviderOperationLock(issue.stateDir, issue.issueRef);
+    if (!lockResult.acquired) {
+      releaseAzureDevopsMutex(issue.issueRef);
+      return reply.code(503).send({ ok: false, error: 'Another provider operation is in progress.', code: 'busy' });
     }
 
     try {
+      // Create journal
+      await createJournal(issue.stateDir, {
+        operation_id: lockResult.operationId,
+        kind: 'credentials',
+        state: 'cred.validating',
+        issue_ref: issue.issueRef,
+        provider: null,
+      });
+
       const warnings: string[] = [];
       const now = new Date().toISOString();
       const forceReconcile = validation.value.force;
@@ -3341,6 +3542,7 @@ export async function buildServer(config: ViewerServerConfig) {
 
       // Skip if already in_sync and force is not set
       if (existingStatus.sync_status === 'in_sync' && !forceReconcile) {
+        await finalizeJournal(issue.stateDir, 'cred.done_success');
         return reply.send({
           ok: true,
           updated: false,
@@ -3350,6 +3552,7 @@ export async function buildServer(config: ViewerServerConfig) {
       }
 
       // Reconcile only if worktree exists
+      await updateJournalState(issue.stateDir, 'cred.reconciling_worktree');
       let syncStatus: AzureDevopsSyncStatus = existingStatus.sync_status;
       let lastError: string | null = existingStatus.last_error;
 
@@ -3383,6 +3586,9 @@ export async function buildServer(config: ViewerServerConfig) {
         }
       }
 
+      // Record status
+      await updateJournalState(issue.stateDir, 'cred.recording_status');
+
       await updateAzureDevopsStatusInIssueJson(issue.stateDir, {
         sync_status: syncStatus,
         last_attempt_at: now,
@@ -3396,12 +3602,17 @@ export async function buildServer(config: ViewerServerConfig) {
       // Emit event
       emitAzureDevopsStatus(status, 'reconcile');
 
+      // Finalize journal
+      await finalizeJournal(issue.stateDir, 'cred.done_success');
+
       // Reconcile never changes credential presence, so updated is always false
       return reply.send({ ok: true, updated: false, status, warnings });
     } catch (err) {
+      try { await finalizeJournal(issue.stateDir, 'cred.done_error'); } catch { /* journal finalize best-effort */ }
       const message = sanitizeErrorForUi(err);
       return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
     } finally {
+      await releaseLock(issue.stateDir);
       releaseAzureDevopsMutex(issue.issueRef);
     }
   });

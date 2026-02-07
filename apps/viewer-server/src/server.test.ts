@@ -12,6 +12,7 @@ import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson
 import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
 import { ProviderAdapterError } from './providerIssueAdapter.js';
+import { acquireLock, readJournal, releaseLock, generateOperationId } from './providerOperationJournal.js';
 import { buildServer } from './server.js';
 
 const execFileAsync = promisify(execFile);
@@ -5569,6 +5570,418 @@ describe('azure-devops credential endpoints', () => {
     });
     expect(deleteRes.statusCode).toBe(200);
     expect(deleteRes.payload).not.toContain(patValue);
+
+    await app.close();
+  });
+});
+
+// ============================================================================
+// Provider operation lock/journal tests (T11)
+// ============================================================================
+
+describe('provider operation serialization', () => {
+  // Helper: set up a server with an issue selected and a worktree
+  async function setupServerWithIssue(prefix: string) {
+    const dataDir = await makeTempDir(`jeeves-vs-${prefix}-`);
+    const repoRoot = await makeTempDir(`jeeves-vs-repo-${prefix}-`);
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const server = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+      providerOperationLockTimeoutMs: 500,
+      createProviderIssue: async () => ({
+        id: '99',
+        url: 'https://github.com/testorg/testrepo/issues/99',
+        title: 'Test Issue',
+        kind: 'issue' as const,
+      }),
+      lookupExistingIssue: async () => ({
+        id: '77',
+        url: 'https://github.com/testorg/testrepo/issues/77',
+        title: 'Existing Issue',
+        kind: 'issue' as const,
+      }),
+    });
+
+    return { ...server, dataDir, stateDir, worktreeDir, issueRef, owner, repo };
+  }
+
+  // ---- Credential lock contention tests ----
+
+  it('PUT /api/issue/azure-devops returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-put');
+
+    // Hold the file lock
+    const opId = generateOperationId();
+    const lockRes = await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+    expect(lockRes.acquired).toBe(true);
+
+    try {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/issue/azure-devops',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          organization: 'https://dev.azure.com/myorg',
+          project: 'MyProject',
+          pat: 'test-pat-value',
+        },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  it('PATCH /api/issue/azure-devops returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-patch');
+
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/issue/azure-devops',
+        remoteAddress: '127.0.0.1',
+        payload: { organization: 'https://dev.azure.com/neworg' },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  it('DELETE /api/issue/azure-devops returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-delete');
+
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      const res = await app.inject({
+        method: 'DELETE',
+        url: '/api/issue/azure-devops',
+        remoteAddress: '127.0.0.1',
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  it('POST /api/issue/azure-devops/reconcile returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-reconcile');
+
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issue/azure-devops/reconcile',
+        remoteAddress: '127.0.0.1',
+        payload: { force: true },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  // ---- Ingest lock contention tests ----
+
+  it('POST /api/issues/create returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-ingest-create');
+
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'github',
+          repo: 'testorg/testrepo',
+          title: 'Test',
+          body: 'Test body',
+        },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  it('POST /api/issues/init-from-existing returns 503 when file lock is held', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-ingest-init');
+
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'github',
+          repo: 'testorg/testrepo',
+          existing: { id: 77 },
+        },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  // ---- Cross-endpoint contention tests ----
+
+  it('credential lock blocks ingest and vice versa (shared file lock)', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('lock-cross');
+
+    // Hold lock (simulating a credential operation)
+    const opId = generateOperationId();
+    await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 30000 });
+
+    try {
+      // Ingest should be blocked
+      const ingestRes = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'github',
+          repo: 'testorg/testrepo',
+          title: 'Test',
+          body: 'Test body',
+        },
+      });
+      expect(ingestRes.statusCode).toBe(503);
+      expect(ingestRes.json()).toMatchObject({ ok: false, code: 'busy' });
+
+      // Credential should also be blocked
+      const credRes = await app.inject({
+        method: 'PUT',
+        url: '/api/issue/azure-devops',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          organization: 'https://dev.azure.com/myorg',
+          project: 'MyProject',
+          pat: 'test-pat',
+        },
+      });
+      expect(credRes.statusCode).toBe(503);
+      expect(credRes.json()).toMatchObject({ ok: false, code: 'busy' });
+    } finally {
+      await releaseLock(stateDir);
+    }
+
+    await app.close();
+  });
+
+  // ---- Journal lifecycle tests ----
+
+  it('successful PUT creates and finalizes a credentials journal', async () => {
+    const { app, stateDir } = await setupServerWithIssue('journal-put');
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat-value',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Journal should be finalized
+    const journal = await readJournal(stateDir);
+    expect(journal).not.toBeNull();
+    expect(journal!.kind).toBe('credentials');
+    expect(journal!.completed_at).not.toBeNull();
+    expect(journal!.state).toBe('cred.done_success');
+
+    await app.close();
+  });
+
+  it('successful ingest creates and finalizes an ingest journal with checkpoints', async () => {
+    const { app, stateDir, dataDir } = await setupServerWithIssue('journal-ingest');
+
+    await ensureLocalRepoClone({ dataDir, owner: 'testorg', repo: 'testrepo' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        provider: 'github',
+        repo: 'testorg/testrepo',
+        title: 'Test Issue',
+        body: 'Test body',
+        init: { branch: 'issue/99-test' },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+
+    // Journal should be finalized with ingest state
+    const journal = await readJournal(stateDir);
+    expect(journal).not.toBeNull();
+    expect(journal!.kind).toBe('ingest');
+    expect(journal!.completed_at).not.toBeNull();
+    expect(journal!.state).toMatch(/^ingest\.done_/);
+    // Checkpoint should have remote_id set
+    expect(journal!.checkpoint.remote_id).toBe('99');
+    expect(journal!.checkpoint.remote_url).toBe('https://github.com/testorg/testrepo/issues/99');
+
+    await app.close();
+  });
+
+  it('lock file is released after successful credential operation', async () => {
+    const { app, stateDir } = await setupServerWithIssue('journal-lock-release');
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/issue/azure-devops',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        organization: 'https://dev.azure.com/myorg',
+        project: 'MyProject',
+        pat: 'test-pat-value',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Lock file should be released — we should be able to acquire a new lock
+    const opId = generateOperationId();
+    const lockRes = await acquireLock(stateDir, { operation_id: opId, issue_ref: 'testorg/testrepo#42', timeout_ms: 1000 });
+    expect(lockRes.acquired).toBe(true);
+    await releaseLock(stateDir);
+
+    await app.close();
+  });
+
+  it('lock file is released after credential operation error', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-journal-err-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-journal-err-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    // Make the .secrets directory read-only to trigger a write error
+    const secretsDir = path.join(stateDir, '.secrets');
+    await fs.mkdir(secretsDir, { recursive: true });
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+      providerOperationLockTimeoutMs: 500,
+    });
+
+    // Make .secrets read-only to cause writeAzureDevopsSecret to fail
+    await fs.chmod(secretsDir, 0o444);
+
+    try {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/issue/azure-devops',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          organization: 'https://dev.azure.com/myorg',
+          project: 'MyProject',
+          pat: 'test-pat-value',
+        },
+      });
+      expect(res.statusCode).toBe(500);
+
+      // Journal should be finalized with error state
+      const journal = await readJournal(stateDir);
+      expect(journal).not.toBeNull();
+      expect(journal!.completed_at).not.toBeNull();
+      expect(journal!.state).toBe('cred.done_error');
+
+      // Lock should still be released
+      const opId = generateOperationId();
+      const lockRes = await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 1000 });
+      expect(lockRes.acquired).toBe(true);
+      await releaseLock(stateDir);
+    } finally {
+      // Restore permissions for cleanup
+      await fs.chmod(secretsDir, 0o755).catch(() => void 0);
+    }
+
+    await app.close();
+  });
+
+  it('reconcile journal is finalized when already in_sync', async () => {
+    const { app, stateDir } = await setupServerWithIssue('journal-reconcile-skip');
+
+    // Reconcile should complete quickly (already in_sync with no secret)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issue/azure-devops/reconcile',
+      remoteAddress: '127.0.0.1',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Journal should be finalized (reconcile creates and finalizes immediately for in_sync + no force)
+    const journal = await readJournal(stateDir);
+    expect(journal).not.toBeNull();
+    expect(journal!.kind).toBe('credentials');
+    expect(journal!.completed_at).not.toBeNull();
+    expect(journal!.state).toBe('cred.done_success');
 
     await app.close();
   });

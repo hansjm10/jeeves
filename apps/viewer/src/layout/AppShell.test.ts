@@ -1617,3 +1617,75 @@ describe('T12-AC2: TR1/TR2 determinism and W4->W2 no-replay (via focus model)', 
     expect(sim.layoutClasses).toContain('layout-focused');
   });
 });
+
+// ============================================================================
+// T13: AppShell tab/link navigation verification
+// ============================================================================
+
+/**
+ * T13 Acceptance Criteria (AppShell tab coverage):
+ * Verify that AppShell.tsx contains all expected TabLink entries with correct
+ * paths and labels. Uses source-file reading (same pattern as T12 CSS tests)
+ * to assert against the actual component source.
+ */
+
+const APPSHELL_SOURCE_PATH = resolve(__test_dirname, './AppShell.tsx');
+
+function readAppShellSource(): string {
+  return readFileSync(APPSHELL_SOURCE_PATH, 'utf-8');
+}
+
+describe('T13: AppShell tab navigation structure', () => {
+  let appShellSource: string;
+
+  beforeEach(() => {
+    appShellSource = readAppShellSource();
+  });
+
+  it('contains all expected TabLink entries', () => {
+    const expectedTabs = [
+      { to: '/watch', label: 'watch' },
+      { to: '/workflows', label: 'workflows' },
+      { to: '/create-issue', label: 'create-issue' },
+      { to: '/sonar-token', label: 'sonar-token' },
+      { to: '/azure-devops', label: 'azure-devops' },
+      { to: '/prompts', label: 'prompts' },
+    ];
+
+    for (const tab of expectedTabs) {
+      expect(appShellSource).toContain(`to="${tab.to}"`);
+      expect(appShellSource).toContain(`label="${tab.label}"`);
+    }
+  });
+
+  it('azure-devops tab is present with correct path and label', () => {
+    expect(appShellSource).toContain('TabLink to="/azure-devops" label="azure-devops"');
+  });
+
+  it('sonar-token tab is present with correct path and label', () => {
+    expect(appShellSource).toContain('TabLink to="/sonar-token" label="sonar-token"');
+  });
+
+  it('watch tab appears before prompts tab', () => {
+    const watchPos = appShellSource.indexOf('TabLink to="/watch"');
+    const promptsPos = appShellSource.indexOf('TabLink to="/prompts"');
+    expect(watchPos).toBeGreaterThan(-1);
+    expect(promptsPos).toBeGreaterThan(-1);
+    expect(watchPos).toBeLessThan(promptsPos);
+  });
+
+  it('all tabs are within the tabs container div', () => {
+    // Verify tabs are wrapped in div.tabs
+    const tabsSection = appShellSource.match(/<div className="tabs">([\s\S]*?)<\/div>/);
+    expect(tabsSection).not.toBeNull();
+    const tabsContent = tabsSection![1];
+
+    // All expected TabLink entries should be within the tabs div
+    expect(tabsContent).toContain('TabLink to="/watch"');
+    expect(tabsContent).toContain('TabLink to="/workflows"');
+    expect(tabsContent).toContain('TabLink to="/create-issue"');
+    expect(tabsContent).toContain('TabLink to="/sonar-token"');
+    expect(tabsContent).toContain('TabLink to="/azure-devops"');
+    expect(tabsContent).toContain('TabLink to="/prompts"');
+  });
+});

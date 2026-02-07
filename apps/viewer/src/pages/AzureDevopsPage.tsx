@@ -34,7 +34,7 @@ import './AzureDevopsPage.css';
 /**
  * Format a sync status for display.
  */
-function formatSyncStatus(status: AzureDevopsSyncStatus): { label: string; color: string } {
+export function formatSyncStatus(status: AzureDevopsSyncStatus): { label: string; color: string } {
   switch (status) {
     case 'in_sync':
       return { label: 'In Sync', color: 'var(--color-accent-green)' };
@@ -60,7 +60,7 @@ function formatSyncStatus(status: AzureDevopsSyncStatus): { label: string; color
 /**
  * Format an ISO timestamp for display.
  */
-function formatTimestamp(isoString: string | null): string {
+export function formatTimestamp(isoString: string | null): string {
   if (!isoString) return '-';
   try {
     const d = new Date(isoString);
@@ -68,6 +68,216 @@ function formatTimestamp(isoString: string | null): string {
   } catch {
     return isoString;
   }
+}
+
+// ============================================================================
+// Extracted pure helpers for testability
+// ============================================================================
+
+/**
+ * Check whether a new azure-devops-status event differs from the previous one.
+ * Used to deduplicate stream events before updating the query cache.
+ */
+export function isNewStatusEvent(
+  prevEvent: AzureDevopsStatusEvent | null,
+  newEvent: AzureDevopsStatusEvent,
+): boolean {
+  if (!prevEvent) return true;
+  return (
+    prevEvent.issue_ref !== newEvent.issue_ref ||
+    prevEvent.configured !== newEvent.configured ||
+    prevEvent.has_pat !== newEvent.has_pat ||
+    prevEvent.worktree_present !== newEvent.worktree_present ||
+    prevEvent.organization !== newEvent.organization ||
+    prevEvent.project !== newEvent.project ||
+    prevEvent.sync_status !== newEvent.sync_status ||
+    prevEvent.last_attempt_at !== newEvent.last_attempt_at ||
+    prevEvent.last_success_at !== newEvent.last_success_at ||
+    prevEvent.last_error !== newEvent.last_error
+  );
+}
+
+/**
+ * Transform an AzureDevopsStatusEvent into the shape needed for the query cache entry.
+ * The `operation` field from the event is NOT included in the cache entry.
+ */
+export function eventToQueryCacheEntry(event: AzureDevopsStatusEvent): {
+  ok: true;
+  issue_ref: string;
+  worktree_present: boolean;
+  configured: boolean;
+  organization: string | null;
+  project: string | null;
+  has_pat: boolean;
+  pat_last_updated_at: string | null;
+  pat_env_var_name: 'AZURE_DEVOPS_EXT_PAT';
+  sync_status: AzureDevopsSyncStatus;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+} {
+  return {
+    ok: true as const,
+    issue_ref: event.issue_ref,
+    worktree_present: event.worktree_present,
+    configured: event.configured,
+    organization: event.organization,
+    project: event.project,
+    has_pat: event.has_pat,
+    pat_last_updated_at: event.pat_last_updated_at,
+    pat_env_var_name: event.pat_env_var_name,
+    sync_status: event.sync_status,
+    last_attempt_at: event.last_attempt_at,
+    last_success_at: event.last_success_at,
+    last_error: event.last_error,
+  };
+}
+
+/**
+ * Derive the save button's label and disabled state.
+ */
+export function deriveSaveButtonState(
+  isConfigured: boolean,
+  isMutating: boolean,
+  isPutPending: boolean,
+  isPatchPending: boolean,
+  runRunning: boolean,
+): { disabled: boolean; label: string } {
+  const label = isPutPending || isPatchPending
+    ? 'Saving...'
+    : isConfigured
+      ? 'Update'
+      : 'Save';
+  return { disabled: isMutating || runRunning, label };
+}
+
+/**
+ * Derive the remove button section state. Returns null when the button should not be rendered.
+ */
+export function deriveRemoveButtonState(
+  isConfigured: boolean,
+  showRemoveConfirm: boolean,
+  isMutating: boolean,
+  isDeletePending: boolean,
+  runRunning: boolean,
+): {
+  rendered: true;
+  showConfirm: boolean;
+  disabled: boolean;
+  label: string;
+  cancelDisabled: boolean;
+} | null {
+  if (!isConfigured) return null;
+  if (showRemoveConfirm) {
+    return {
+      rendered: true,
+      showConfirm: true,
+      disabled: isMutating || runRunning,
+      label: isDeletePending ? 'Removing...' : 'Confirm Remove',
+      cancelDisabled: isMutating,
+    };
+  }
+  return {
+    rendered: true,
+    showConfirm: false,
+    disabled: isMutating || runRunning,
+    label: 'Remove',
+    cancelDisabled: false,
+  };
+}
+
+/**
+ * Derive the retry sync button state. Returns null when the button should not be rendered.
+ */
+export function deriveRetrySyncButtonState(
+  worktreePresent: boolean,
+  syncStatus: AzureDevopsSyncStatus | undefined,
+  isMutating: boolean,
+  isReconcilePending: boolean,
+  runRunning: boolean,
+): { rendered: true; disabled: boolean; label: string } | null {
+  const needsSync = syncStatus && syncStatus !== 'in_sync' && syncStatus !== 'never_attempted';
+  const canRetrySync = worktreePresent && needsSync;
+  if (!canRetrySync) return null;
+  return {
+    rendered: true,
+    disabled: isMutating || runRunning,
+    label: isReconcilePending ? 'Syncing...' : 'Retry Sync',
+  };
+}
+
+/**
+ * Build a PATCH request from current form inputs and existing status values.
+ * Returns the request object and a flag indicating whether anything changed.
+ */
+export function buildPatchRequest(
+  orgInput: string,
+  projectInput: string,
+  patInput: string,
+  syncNow: boolean,
+  currentOrg: string | null | undefined,
+  currentProject: string | null | undefined,
+): { request: Record<string, unknown>; hasChanges: boolean } {
+  const trimmedOrg = orgInput.trim();
+  const trimmedProject = projectInput.trim();
+  const trimmedPat = patInput.trim();
+
+  const request: Record<string, unknown> = {};
+  let hasChanges = false;
+
+  if (trimmedOrg && trimmedOrg !== (currentOrg ?? '')) {
+    request.organization = trimmedOrg;
+    hasChanges = true;
+  }
+  if (trimmedProject && trimmedProject !== (currentProject ?? '')) {
+    request.project = trimmedProject;
+    hasChanges = true;
+  }
+  if (trimmedPat) {
+    request.pat = trimmedPat;
+    hasChanges = true;
+  }
+  if (syncNow) {
+    request.sync_now = true;
+  }
+
+  return { request, hasChanges };
+}
+
+/**
+ * Validate the inputs for a PUT (full setup) operation.
+ * Returns field errors or null if all inputs are valid.
+ */
+export function validatePutInputs(
+  org: string,
+  project: string,
+  pat: string,
+): Record<string, string> | null {
+  const trimmedOrg = org.trim();
+  const trimmedProject = project.trim();
+  const trimmedPat = pat.trim();
+
+  if (!trimmedOrg) return { organization: 'Organization is required' };
+  if (!trimmedProject) return { project: 'Project is required' };
+  if (!trimmedPat) return { pat: 'PAT is required' };
+  return null;
+}
+
+/**
+ * Parse a mutation error into field errors and a toast message.
+ * Extracts field_errors from ApiValidationError while keeping the PAT safe.
+ */
+export function parseMutationError(
+  err: unknown,
+  fallbackMsg: string,
+): { fieldErrors: Record<string, string> | null; toastMessage: string } {
+  if (err instanceof ApiValidationError) {
+    return { fieldErrors: err.fieldErrors, toastMessage: err.message };
+  }
+  return {
+    fieldErrors: null,
+    toastMessage: err instanceof Error ? err.message : fallbackMsg,
+  };
 }
 
 export function AzureDevopsPage() {
@@ -107,36 +317,11 @@ export function AzureDevopsPage() {
   useEffect(() => {
     if (!azureDevopsStatus) return;
 
-    const prevEvent = prevEventRef.current;
-    const isNewEvent =
-      !prevEvent ||
-      prevEvent.issue_ref !== azureDevopsStatus.issue_ref ||
-      prevEvent.configured !== azureDevopsStatus.configured ||
-      prevEvent.has_pat !== azureDevopsStatus.has_pat ||
-      prevEvent.worktree_present !== azureDevopsStatus.worktree_present ||
-      prevEvent.organization !== azureDevopsStatus.organization ||
-      prevEvent.project !== azureDevopsStatus.project ||
-      prevEvent.sync_status !== azureDevopsStatus.sync_status ||
-      prevEvent.last_attempt_at !== azureDevopsStatus.last_attempt_at ||
-      prevEvent.last_success_at !== azureDevopsStatus.last_success_at ||
-      prevEvent.last_error !== azureDevopsStatus.last_error;
-
-    if (isNewEvent) {
-      queryClient.setQueryData(azureDevopsQueryKey(baseUrl, azureDevopsStatus.issue_ref), {
-        ok: true as const,
-        issue_ref: azureDevopsStatus.issue_ref,
-        worktree_present: azureDevopsStatus.worktree_present,
-        configured: azureDevopsStatus.configured,
-        organization: azureDevopsStatus.organization,
-        project: azureDevopsStatus.project,
-        has_pat: azureDevopsStatus.has_pat,
-        pat_last_updated_at: azureDevopsStatus.pat_last_updated_at,
-        pat_env_var_name: azureDevopsStatus.pat_env_var_name,
-        sync_status: azureDevopsStatus.sync_status,
-        last_attempt_at: azureDevopsStatus.last_attempt_at,
-        last_success_at: azureDevopsStatus.last_success_at,
-        last_error: azureDevopsStatus.last_error,
-      });
+    if (isNewStatusEvent(prevEventRef.current, azureDevopsStatus)) {
+      queryClient.setQueryData(
+        azureDevopsQueryKey(baseUrl, azureDevopsStatus.issue_ref),
+        eventToQueryCacheEntry(azureDevopsStatus),
+      );
       prevEventRef.current = azureDevopsStatus;
     }
   }, [azureDevopsStatus, baseUrl, queryClient]);
@@ -162,12 +347,11 @@ export function AzureDevopsPage() {
    * Handle mutation errors, extracting field_errors from ApiValidationError.
    */
   function handleMutationError(err: unknown, fallbackMsg: string): void {
-    if (err instanceof ApiValidationError) {
-      setFieldErrors(err.fieldErrors);
-      pushToast(err.message);
-    } else {
-      pushToast(err instanceof Error ? err.message : fallbackMsg);
+    const parsed = parseMutationError(err, fallbackMsg);
+    if (parsed.fieldErrors) {
+      setFieldErrors(parsed.fieldErrors);
     }
+    pushToast(parsed.toastMessage);
   }
 
   const handleSave = useCallback(async () => {

@@ -1366,6 +1366,21 @@ describe('providerOperationJournal', () => {
   // --------------------------------------------------------------------------
 
   describe('concurrent lock behavior', () => {
+    it('only one acquireLock succeeds under concurrent attempts', async () => {
+      const attempts = await Promise.all(
+        Array.from({ length: 8 }, (_unused, idx) => acquireLock(tempDir, {
+          operation_id: `concurrent-op-${idx.toString().padStart(8, '0')}`,
+          issue_ref: 'owner/repo#42',
+        })),
+      );
+
+      const acquiredCount = attempts.filter((res) => res.acquired).length;
+      const busyCount = attempts.filter((res) => !res.acquired && res.reason === 'busy').length;
+
+      expect(acquiredCount).toBe(1);
+      expect(busyCount).toBe(7);
+    });
+
     it('second acquireLock while first held returns busy', async () => {
       const first = await acquireLock(tempDir, {
         operation_id: 'first-op-12345678',

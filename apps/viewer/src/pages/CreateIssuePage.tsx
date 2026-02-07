@@ -198,7 +198,7 @@ export function buildInitFromExistingRequest(
       azure: {
         ...(options.azureOrganization?.trim() ? { organization: options.azureOrganization.trim() } : {}),
         ...(options.azureProject?.trim() ? { project: options.azureProject.trim() } : {}),
-        ...(options.azureFetchHierarchy ? { fetch_hierarchy: true } : {}),
+        ...(options.azureFetchHierarchy !== undefined ? { fetch_hierarchy: options.azureFetchHierarchy } : {}),
       },
     } : {}),
     ...(options.init ? {

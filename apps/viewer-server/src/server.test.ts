@@ -1556,6 +1556,44 @@ describe('viewer-server', () => {
       await app.close();
     });
 
+    it('parses Azure existing.url into work-item ID before lookup', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-azure-url-');
+      let capturedLookupId: string | null = null;
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        lookupExistingIssue: async (params) => {
+          capturedLookupId = params.id;
+          return {
+            id: '77',
+            url: 'https://dev.azure.com/o/r/_workitems/edit/77',
+            title: 'Existing Work Item',
+            kind: 'work_item' as const,
+          };
+        },
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'azure_devops',
+          repo: 'o/r',
+          existing: { url: 'https://dev.azure.com/o/r/_workitems/edit/77?view=all' },
+          azure: { organization: 'https://dev.azure.com/o', project: 'r', fetch_hierarchy: false },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(capturedLookupId).toBe('77');
+
+      await app.close();
+    });
+
     it('returns 400 when existing is missing', async () => {
       const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-missing-');
       const { app } = await buildServer({
@@ -5959,6 +5997,35 @@ describe('provider operation serialization', () => {
       // Restore permissions for cleanup
       await fs.chmod(secretsDir, 0o755).catch(() => void 0);
     }
+
+    await app.close();
+  });
+
+  it('releases ingest lock when journal creation fails during setup', async () => {
+    const { app, stateDir, issueRef } = await setupServerWithIssue('journal-ingest-setup-fail');
+    const invalidJournalPath = path.join(stateDir, '.ops', 'provider-operation.json');
+
+    // Force createJournal to fail after lock acquisition by making journal target a directory.
+    await fs.mkdir(invalidJournalPath, { recursive: true });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        provider: 'github',
+        repo: 'testorg/testrepo',
+        title: 'Test',
+        body: 'Test body',
+      },
+    });
+    expect(res.statusCode).toBe(500);
+
+    // Lock should be released even though setup failed before ingest body executed.
+    const opId = generateOperationId();
+    const lockRes = await acquireLock(stateDir, { operation_id: opId, issue_ref: issueRef, timeout_ms: 1000 });
+    expect(lockRes.acquired).toBe(true);
+    await releaseLock(stateDir);
 
     await app.close();
   });

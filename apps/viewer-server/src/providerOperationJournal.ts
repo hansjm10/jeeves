@@ -205,7 +205,28 @@ export async function acquireLock(
   // Ensure .ops directory exists
   await fs.mkdir(opsDir, { recursive: true });
 
-  // Check for existing lock
+  // Build the lock record up front; write is attempted with exclusive create.
+  const now = new Date();
+  const lock: ProviderOperationLock = {
+    schemaVersion: LOCK_SCHEMA_VERSION,
+    operation_id: params.operation_id,
+    issue_ref: params.issue_ref,
+    acquired_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + timeoutMs).toISOString(),
+    pid: process.pid,
+  };
+
+  // Atomically create lock file. This avoids check-then-write races.
+  try {
+    await writeNewFileWithPermissions(lockPath, lock);
+    return { acquired: true, operation_id: params.operation_id };
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+
+  // Lock already exists; inspect whether it's stale.
   const existingLock = await readLock(issueStateDir);
   if (existingLock) {
     if (isLockStale(existingLock)) {
@@ -217,20 +238,9 @@ export async function acquireLock(
     return { acquired: false, reason: 'busy' };
   }
 
-  // No lock or cleaned: create new lock atomically
-  const now = new Date();
-  const lock: ProviderOperationLock = {
-    schemaVersion: LOCK_SCHEMA_VERSION,
-    operation_id: params.operation_id,
-    issue_ref: params.issue_ref,
-    acquired_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + timeoutMs).toISOString(),
-    pid: process.pid,
-  };
-
-  await writeAtomicWithPermissions(lockPath, lock);
-
-  return { acquired: true, operation_id: params.operation_id };
+  // Lock path existed but was unreadable/invalid; clean and let caller retry.
+  await fs.rm(lockPath, { force: true }).catch(() => void 0);
+  return { acquired: false, reason: 'stale_cleaned' };
 }
 
 /**
@@ -778,5 +788,28 @@ async function writeAtomicWithPermissions(filePath: string, data: object): Promi
     // On Windows, rename can fail if target exists; remove and retry
     await fs.rm(filePath, { force: true }).catch(() => void 0);
     await fs.rename(tmp, filePath);
+  }
+}
+
+/**
+ * Create a new file with 0600 permissions and fail if it already exists.
+ * Used for lock acquisition to guarantee exclusivity.
+ */
+async function writeNewFileWithPermissions(filePath: string, data: object): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+
+  const content = JSON.stringify(data, null, 2) + '\n';
+  await fs.writeFile(filePath, content, {
+    encoding: 'utf-8',
+    mode: FILE_MODE,
+    flag: 'wx',
+  });
+
+  // Set permissions explicitly (some systems ignore mode in writeFile)
+  try {
+    await fs.chmod(filePath, FILE_MODE);
+  } catch {
+    // Ignore on platforms that don't support chmod
   }
 }

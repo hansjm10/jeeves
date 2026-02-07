@@ -233,6 +233,30 @@ function parseOptionalBool(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function parseAzureWorkItemIdFromUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isAzureHost = host === 'dev.azure.com' || host.endsWith('.visualstudio.com');
+  if (!isAzureHost) return null;
+
+  const pathMatch = parsed.pathname.match(/\/(?:_workitems\/edit|_apis\/wit\/workitems)\/(\d+)(?:\/|$)/i);
+  if (pathMatch) return pathMatch[1];
+
+  const queryId = parsed.searchParams.get('id');
+  if (queryId && /^[1-9][0-9]*$/.test(queryId)) return queryId;
+
+  return null;
+}
+
 function errorToHttp(err: unknown): { status: number; message: string } {
   const message = err instanceof Error ? err.message : String(err);
   if (message.includes('worktree already exists')) return { status: 409, message };
@@ -1169,8 +1193,14 @@ export async function buildServer(config: ViewerServerConfig) {
         throw { status: 503, body: { ok: false, error: 'Another provider operation is in progress.', code: 'busy' } };
       }
       ingestOperationId = lockResult.operationId;
+    }
 
-      // Create journal
+    try {
+    if (lockStateDir) {
+      if (!ingestOperationId) {
+        throw new Error('Provider ingest lock state missing operation id.');
+      }
+      // Create journal after lock acquisition; failures still flow through finally for lock release.
       await createJournal(lockStateDir, {
         operation_id: ingestOperationId,
         kind: 'ingest',
@@ -1179,8 +1209,6 @@ export async function buildServer(config: ViewerServerConfig) {
         provider,
       });
     }
-
-    try {
 
     // Resolve Azure credentials if needed
     let azurePat: string | undefined;
@@ -1252,11 +1280,24 @@ export async function buildServer(config: ViewerServerConfig) {
           body: { ok: false, error: 'existing.id or existing.url is required', code: 'validation_failed' },
         };
       }
+      const lookupId = provider === 'azure_devops' && params.existing?.url
+        ? parseAzureWorkItemIdFromUrl(params.existing.url)
+        : String(existingId);
+      if (!lookupId) {
+        throw {
+          status: 400,
+          body: {
+            ok: false,
+            error: 'For Azure DevOps, existing.url must include a numeric work-item ID.',
+            code: 'validation_failed',
+          },
+        };
+      }
       try {
         remoteRef = await lookupExistingIssue({
           provider,
           repo,
-          id: String(existingId),
+          id: lookupId,
           azure: provider === 'azure_devops'
             ? { organization: azureOrg, project: azureProject, pat: azurePat }
             : undefined,

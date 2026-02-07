@@ -383,6 +383,17 @@ describe('buildInitFromExistingRequest', () => {
     expect(result.azure?.fetch_hierarchy).toBe(true);
   });
 
+  it('preserves azure fetch_hierarchy=false when explicitly disabled', () => {
+    const result = buildInitFromExistingRequest('azure_devops', 'owner/repo', '12345', {
+      ...baseOptions,
+      azureOrganization: 'https://dev.azure.com/myorg',
+      azureProject: 'MyProject',
+      azureFetchHierarchy: false,
+    });
+    expect(result.azure).toBeDefined();
+    expect(result.azure?.fetch_hierarchy).toBe(false);
+  });
+
   it('treats non-numeric strings as string IDs', () => {
     const result = buildInitFromExistingRequest('github', 'owner/repo', 'abc-123', baseOptions);
     expect(result.existing).toEqual({ id: 'abc-123' });

@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
-import { CreateGitHubIssueError } from './githubIssueCreate.js';
 import { readIssueJson } from './issueJson.js';
 import { ProviderAdapterError } from './providerIssueAdapter.js';
 import { acquireLock, readJournal, releaseLock, generateOperationId } from './providerOperationJournal.js';
@@ -883,10 +882,10 @@ describe('viewer-server', () => {
       allowRemoteRun: false,
       dataDir,
       repoRoot: path.resolve(process.cwd()),
-      createGitHubIssue: async () => {
-        throw new CreateGitHubIssueError({
+      createProviderIssue: async () => {
+        throw new ProviderAdapterError({
           status: 403,
-          code: 'REPO_NOT_FOUND_OR_FORBIDDEN',
+          code: 'provider_permission_denied',
           message: 'Repository not found or access denied for the authenticated user. Check the repo name and your GitHub permissions.',
         });
       },

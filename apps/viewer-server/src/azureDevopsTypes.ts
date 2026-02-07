@@ -458,6 +458,9 @@ export const REPO_MAX_LENGTH = 200;
 /** Pattern for valid repo: owner/repo format. */
 export const REPO_PATTERN = /^[^\s/]+\/[^\s/]+$/;
 
+/** Pattern for Azure DevOps git URLs. */
+export const AZURE_GIT_URL_PATTERN = /^https?:\/\/[^/]+\/.+\/_git\/.+$/;
+
 /** Minimum title length after trim. */
 export const TITLE_MIN_LENGTH = 1;
 
@@ -848,10 +851,10 @@ export function validateRepo(value: unknown): ValidationResult<string> {
     };
   }
 
-  if (!REPO_PATTERN.test(trimmed)) {
+  if (!REPO_PATTERN.test(trimmed) && !AZURE_GIT_URL_PATTERN.test(trimmed)) {
     return {
       valid: false,
-      error: 'Repo must be in owner/repo format.',
+      error: 'Repo must be in owner/repo format or an Azure DevOps git URL.',
     };
   }
 

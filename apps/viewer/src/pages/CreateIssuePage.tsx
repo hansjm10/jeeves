@@ -645,12 +645,12 @@ export function CreateIssuePage() {
           }}
         >
           <label className="label">
-            repo (owner/repo)
+            {issueProvider === 'azure_devops' ? 'repo (git URL or org/repo)' : 'repo (owner/repo)'}
             <input
               className="input"
               value={repo}
               onChange={(e) => setRepo(e.target.value)}
-              placeholder="hansjm10/jeeves"
+              placeholder={issueProvider === 'azure_devops' ? 'https://dev.azure.com/org/project/_git/repo' : 'hansjm10/jeeves'}
             />
             {fieldErrors.repo && (
               <span style={{ color: 'var(--color-accent-red)', fontSize: 12 }}>{fieldErrors.repo}</span>

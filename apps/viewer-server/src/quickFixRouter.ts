@@ -43,6 +43,9 @@ export async function fetchIssueMetaViaGhApi(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<GitHubIssueMeta> {
   const repoSpec = parseRepoSpec(params.repo);
+  if (repoSpec.cloneUrl) {
+    throw new Error('Quick-fix routing is only supported for GitHub repositories.');
+  }
   const apiPath = `/repos/${repoSpec.owner}/${repoSpec.repo}/issues/${params.issueNumber}`;
 
   let stdout: string;

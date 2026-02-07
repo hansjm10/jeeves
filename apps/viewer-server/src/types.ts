@@ -8,7 +8,7 @@ import type { IngestRemoteRef, IngestHierarchy } from './azureDevopsTypes.js';
 
 export type IssueRefString = `${string}/${string}#${number}`;
 
-export type RepoSpec = Readonly<{ owner: string; repo: string }>;
+export type RepoSpec = Readonly<{ owner: string; repo: string; cloneUrl?: string }>;
 
 export type CreateGitHubIssueAdapter = (
   params: CreateGitHubIssueParams,

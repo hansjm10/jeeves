@@ -313,6 +313,28 @@ describe('validateRepo', () => {
     const result = validateRepo('own er/repo');
     expect(result.valid).toBe(false);
   });
+
+  it('accepts Azure DevOps git URL', () => {
+    const result = validateRepo('https://dev.azure.com/MyOrg/MyProject/_git/MyRepo');
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.value).toBe('https://dev.azure.com/MyOrg/MyProject/_git/MyRepo');
+  });
+
+  it('accepts Azure DevOps git URL with encoded spaces', () => {
+    const result = validateRepo('https://dev.azure.com/IOCHealthSystems/Software%20Development/_git/IOC-HealthSystems');
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.value).toBe('https://dev.azure.com/IOCHealthSystems/Software%20Development/_git/IOC-HealthSystems');
+  });
+
+  it('accepts legacy visualstudio.com git URL', () => {
+    const result = validateRepo('https://myorg.visualstudio.com/MyProject/_git/MyRepo');
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects non-Azure URLs without owner/repo format', () => {
+    const result = validateRepo('https://example.com/something');
+    expect(result.valid).toBe(false);
+  });
 });
 
 // ============================================================================

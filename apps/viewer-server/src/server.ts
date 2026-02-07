@@ -1380,6 +1380,7 @@ export async function buildServer(config: ViewerServerConfig) {
             phase: params.init?.phase,
             design_doc: params.init?.design_doc,
             force: params.init?.force,
+            ...(provider === 'azure_devops' && azurePat ? { pat: azurePat } : {}),
           },
         });
 

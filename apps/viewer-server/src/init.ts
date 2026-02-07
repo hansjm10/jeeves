@@ -31,12 +31,24 @@ async function resolveBaseRef(repoDir: string): Promise<string> {
   return 'origin/main';
 }
 
-async function ensureRepoClone(params: { dataDir: string; repo: RepoSpec }): Promise<string> {
+function injectPatIntoUrl(url: string, pat: string): string {
+  return url.replace(/^(https?:\/\/)/, `$1x-token-auth:${pat}@`);
+}
+
+async function ensureRepoClone(params: { dataDir: string; repo: RepoSpec; pat?: string }): Promise<string> {
   const repoDir = path.join(params.dataDir, 'repos', params.repo.owner, params.repo.repo);
+  const cloneUrl = params.repo.cloneUrl
+    ? (params.pat ? injectPatIntoUrl(params.repo.cloneUrl, params.pat) : params.repo.cloneUrl)
+    : `https://github.com/${params.repo.owner}/${params.repo.repo}.git`;
+
   if (!(await pathExists(repoDir))) {
     await ensureDir(path.dirname(repoDir));
-    await runGit(['clone', `https://github.com/${params.repo.owner}/${params.repo.repo}.git`, repoDir]);
+    await runGit(['clone', cloneUrl, repoDir]);
   } else {
+    // Update remote URL to handle PAT rotation
+    if (params.repo.cloneUrl) {
+      await runGit(['-C', repoDir, 'remote', 'set-url', 'origin', cloneUrl]);
+    }
     await runGit(['-C', repoDir, 'fetch', 'origin', '--prune']);
   }
   return repoDir;
@@ -75,6 +87,7 @@ export type InitIssueRequest = Readonly<{
   phase?: string;
   design_doc?: string;
   force?: boolean;
+  pat?: string;
 }>;
 
 export type InitIssueResult = Readonly<{
@@ -97,7 +110,7 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
     (await loadWorkflowByName(workflow, { workflowsDir: params.workflowsDir }).then((w) => w.start));
   const force = Boolean(params.body.force ?? false);
 
-  const repoDir = await ensureRepoClone({ dataDir: params.dataDir, repo });
+  const repoDir = await ensureRepoClone({ dataDir: params.dataDir, repo, pat: params.body.pat });
   const baseRef = await resolveBaseRef(repoDir);
 
   const stateDir = getIssueStateDir(repo.owner, repo.repo, issueNumber, params.dataDir);

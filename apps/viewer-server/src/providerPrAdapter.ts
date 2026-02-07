@@ -14,6 +14,8 @@ import {
   ProviderAdapterError,
   spawnCliCommand,
   mapAzError,
+  buildAzureEnv,
+  formatCliArgs,
 } from './providerIssueAdapter.js';
 
 // ============================================================================
@@ -147,9 +149,10 @@ async function listAzurePr(
     'json',
   ];
 
+  const cmdSummary = formatCliArgs('az', args);
   const result = await spawnCliCommand('az', args, {
     cwd: params.cwd,
-    env: params.env,
+    env: buildAzureEnv(params.env, pat),
     spawnImpl: params.spawnImpl,
   });
 
@@ -165,7 +168,7 @@ async function listAzurePr(
   }
 
   if (result.exitCode !== 0) {
-    throw mapAzError(result.stderr, pat);
+    throw mapAzError(result.stderr, pat, false, cmdSummary);
   }
 
   let parsed: unknown[];
@@ -312,9 +315,10 @@ async function createAzurePr(
     'json',
   ];
 
+  const cmdSummary = formatCliArgs('az', args);
   const result = await spawnCliCommand('az', args, {
     cwd: params.cwd,
-    env: params.env,
+    env: buildAzureEnv(params.env, pat),
     spawnImpl: params.spawnImpl,
   });
 
@@ -331,11 +335,11 @@ async function createAzurePr(
 
   // Timeout
   if (result.signal !== null && result.exitCode === null) {
-    throw mapAzError(result.stderr, pat, true);
+    throw mapAzError(result.stderr, pat, true, cmdSummary);
   }
 
   if (result.exitCode !== 0) {
-    throw mapAzError(result.stderr, pat);
+    throw mapAzError(result.stderr, pat, false, cmdSummary);
   }
 
   let parsed: Record<string, unknown>;

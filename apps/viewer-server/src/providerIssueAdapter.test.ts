@@ -10,6 +10,7 @@ import {
   ProviderAdapterError,
   spawnCliCommand,
   mapAzError,
+  formatCliArgs,
 } from './providerIssueAdapter.js';
 
 // ============================================================================
@@ -178,6 +179,39 @@ describe('mapAzError', () => {
       'my-secret-pat',
     );
     expect(err.message).not.toContain('my-secret-pat');
+  });
+
+  it('includes cmdSummary in error message when provided', () => {
+    const cmd = 'az boards work-item create --project "Software Development"';
+    const err = mapAzError('Something broke', undefined, false, cmd);
+    expect(err.message).toContain('Command: az boards work-item create --project "Software Development"');
+  });
+
+  it('omits command line when cmdSummary is not provided', () => {
+    const err = mapAzError('Something broke');
+    expect(err.message).not.toContain('Command:');
+  });
+});
+
+// ============================================================================
+// formatCliArgs
+// ============================================================================
+
+describe('formatCliArgs', () => {
+  it('joins simple args with spaces', () => {
+    expect(formatCliArgs('az', ['boards', 'work-item', 'create'])).toBe(
+      'az boards work-item create',
+    );
+  });
+
+  it('quotes args containing spaces', () => {
+    expect(
+      formatCliArgs('az', ['boards', '--project', 'Software Development', '--type', 'User Story']),
+    ).toBe('az boards --project "Software Development" --type "User Story"');
+  });
+
+  it('does not quote args without spaces', () => {
+    expect(formatCliArgs('az', ['--project', 'MyProject'])).toBe('az --project MyProject');
   });
 });
 

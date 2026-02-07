@@ -16,7 +16,10 @@ import type {
   AzureWorkItemType,
   RemoteItemKind,
 } from './azureDevopsTypes.js';
-import { sanitizePatFromMessage } from './azureDevopsTypes.js';
+import {
+  sanitizePatFromMessage,
+  AZURE_PAT_ENV_VAR_NAME,
+} from './azureDevopsTypes.js';
 import {
   createGitHubIssue,
   CreateGitHubIssueError,
@@ -185,6 +188,26 @@ export async function spawnCliCommand(
 }
 
 // ============================================================================
+// Azure CLI Environment Helpers
+// ============================================================================
+
+/**
+ * Build a process environment with the Azure PAT injected.
+ * If `pat` is provided, sets AZURE_DEVOPS_EXT_PAT so the `az` CLI
+ * authenticates with it. Falls back to the base env (or process.env).
+ */
+export function buildAzureEnv(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  pat: string | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!pat) return baseEnv;
+  return {
+    ...(baseEnv ?? process.env),
+    [AZURE_PAT_ENV_VAR_NAME]: pat,
+  };
+}
+
+// ============================================================================
 // Azure CLI Error Mapping
 // ============================================================================
 
@@ -225,6 +248,19 @@ const AZ_VALIDATION_HINTS = [
 ];
 
 /**
+ * Format a CLI args array into a shell-like string for error messages.
+ * Values containing spaces are quoted. PAT values are never included
+ * because they are passed via env var, not args.
+ */
+export function formatCliArgs(cmd: string, args: readonly string[]): string {
+  const parts = [cmd];
+  for (const arg of args) {
+    parts.push(arg.includes(' ') ? `"${arg}"` : arg);
+  }
+  return parts.join(' ');
+}
+
+/**
  * Map Azure CLI stderr to a ProviderAdapterError.
  * PAT is scrubbed from the message before returning.
  */
@@ -232,16 +268,18 @@ export function mapAzError(
   stderr: string,
   pat?: string,
   isTimeout?: boolean,
+  cmdSummary?: string,
 ): ProviderAdapterError {
   const raw = String(stderr ?? '').trim();
   const lower = raw.toLowerCase();
+  const cmdLine = cmdSummary ? ` Command: ${cmdSummary}` : '';
 
   if (isTimeout) {
     return new ProviderAdapterError({
       status: 504,
       code: 'provider_timeout',
       message: sanitizePatFromMessage(
-        'Azure DevOps CLI command timed out.',
+        `Azure DevOps CLI command timed out.${cmdLine}`,
         pat,
       ),
     });
@@ -252,7 +290,7 @@ export function mapAzError(
       status: 401,
       code: 'provider_auth_required',
       message: sanitizePatFromMessage(
-        'Azure DevOps CLI is not authenticated. Run `az login` on the viewer-server host.',
+        `Azure DevOps CLI is not authenticated. Run \`az login\` on the viewer-server host.${cmdLine}`,
         pat,
       ),
     });
@@ -263,7 +301,7 @@ export function mapAzError(
       status: 403,
       code: 'provider_permission_denied',
       message: sanitizePatFromMessage(
-        'Azure DevOps access denied. Check your permissions for the organization and project.',
+        `Azure DevOps access denied. Check your permissions for the organization and project.${cmdLine}`,
         pat,
       ),
     });
@@ -274,7 +312,7 @@ export function mapAzError(
       status: 404,
       code: 'remote_not_found',
       message: sanitizePatFromMessage(
-        'Azure DevOps resource not found. Check the organization, project, and item ID.',
+        `Azure DevOps resource not found. Check the organization, project, and item ID.${cmdLine}`,
         pat,
       ),
     });
@@ -285,17 +323,18 @@ export function mapAzError(
       status: 422,
       code: 'remote_validation_failed',
       message: sanitizePatFromMessage(
-        'Azure DevOps rejected the request due to a validation error.',
+        `Azure DevOps rejected the request due to a validation error.${cmdLine}`,
         pat,
       ),
     });
   }
 
+  const detail = raw.length > 0 ? ` Detail: ${raw}` : '';
   return new ProviderAdapterError({
     status: 500,
     code: 'io_error',
     message: sanitizePatFromMessage(
-      'Azure DevOps CLI command failed.',
+      `Azure DevOps CLI command failed.${detail}${cmdLine}`,
       pat,
     ),
   });
@@ -537,9 +576,10 @@ async function createAzureWorkItem(
     }
   }
 
+  const cmdSummary = formatCliArgs('az', args);
   const result = await spawnCliCommand('az', args, {
     cwd: params.cwd,
-    env: params.env,
+    env: buildAzureEnv(params.env, pat),
     spawnImpl: params.spawnImpl,
   });
 
@@ -557,12 +597,12 @@ async function createAzureWorkItem(
 
   // Timeout
   if (result.signal !== null && result.exitCode === null) {
-    throw mapAzError(result.stderr, pat, true);
+    throw mapAzError(result.stderr, pat, true, cmdSummary);
   }
 
   // Non-zero exit
   if (result.exitCode !== 0) {
-    throw mapAzError(result.stderr, pat);
+    throw mapAzError(result.stderr, pat, false, cmdSummary);
   }
 
   // Parse JSON output
@@ -691,23 +731,24 @@ async function lookupAzureWorkItem(
   const project = azure?.project ?? '';
   const pat = azure?.pat;
 
+  // az boards work-item show does not accept --project; work items are
+  // identified by --id alone (IDs are org-scoped).
   const args = [
     'boards',
     'work-item',
     'show',
     '--organization',
     org,
-    '--project',
-    project,
     '--id',
     params.id,
     '--output',
     'json',
   ];
 
+  const cmdSummary = formatCliArgs('az', args);
   const result = await spawnCliCommand('az', args, {
     cwd: params.cwd,
-    env: params.env,
+    env: buildAzureEnv(params.env, pat),
     spawnImpl: params.spawnImpl,
   });
 
@@ -725,7 +766,7 @@ async function lookupAzureWorkItem(
 
   // Non-zero exit
   if (result.exitCode !== 0) {
-    throw mapAzError(result.stderr, pat);
+    throw mapAzError(result.stderr, pat, false, cmdSummary);
   }
 
   // Parse JSON output
@@ -779,14 +820,14 @@ export async function fetchAzureHierarchy(
 ): Promise<IngestHierarchy> {
   const { organization, project, id, pat } = params;
 
+  // az boards work-item show does not accept --project; work items are
+  // identified by --id alone (IDs are org-scoped).
   const args = [
     'boards',
     'work-item',
     'show',
     '--organization',
     organization,
-    '--project',
-    project,
     '--id',
     id,
     '--expand',
@@ -795,9 +836,10 @@ export async function fetchAzureHierarchy(
     'json',
   ];
 
+  const cmdSummary = formatCliArgs('az', args);
   const result = await spawnCliCommand('az', args, {
     cwd: params.cwd,
-    env: params.env,
+    env: buildAzureEnv(params.env, pat),
     spawnImpl: params.spawnImpl,
   });
 
@@ -814,7 +856,7 @@ export async function fetchAzureHierarchy(
   }
 
   if (result.exitCode !== 0) {
-    throw mapAzError(result.stderr, pat);
+    throw mapAzError(result.stderr, pat, false, cmdSummary);
   }
 
   let parsed: Record<string, unknown>;

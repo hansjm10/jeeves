@@ -54,6 +54,23 @@ import {
   type SonarTokenStatus,
   type SonarSyncStatus,
 } from './sonarTokenTypes.js';
+import { reconcileProjectFilesToWorktree } from './projectFilesReconcile.js';
+import {
+  listProjectFiles,
+  upsertProjectFile,
+  deleteProjectFile,
+  getRepoProjectFilesDir,
+} from './projectFilesStore.js';
+import {
+  validatePutProjectFileRequest,
+  validateDeleteProjectFileId,
+  validateReconcileProjectFilesRequest,
+  toProjectFilePublic,
+  type ProjectFilesSyncStatus,
+  type ProjectFilesStatus,
+  type ProjectFilesStatusEvent,
+  type ProjectFilesOperation,
+} from './projectFilesTypes.js';
 import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
@@ -257,6 +274,14 @@ function parseAzureWorkItemIdFromUrl(value: string): string | null {
   return null;
 }
 
+function parseOwnerRepoFromIssueRef(issueRef: string): { owner: string; repo: string } {
+  const hashIndex = issueRef.indexOf('#');
+  if (hashIndex <= 0) throw new Error(`invalid issue ref: ${issueRef}`);
+  const repoPart = issueRef.slice(0, hashIndex);
+  const parsed = parseRepoSpec(repoPart);
+  return { owner: parsed.owner, repo: parsed.repo };
+}
+
 function errorToHttp(err: unknown): { status: number; message: string } {
   const message = err instanceof Error ? err.message : String(err);
   if (message.includes('worktree already exists')) return { status: 409, message };
@@ -454,6 +479,8 @@ export type ViewerServerConfig = Readonly<{
   sonarTokenMutexTimeoutMs?: number;
   /** Mutex timeout for Azure DevOps credential operations (ms). Default: 1500. For testing only. */
   azureDevopsMutexTimeoutMs?: number;
+  /** Mutex timeout for project files operations (ms). Default: 1500. For testing only. */
+  projectFilesMutexTimeoutMs?: number;
   /** Provider issue create adapter override. For testing only. */
   createProviderIssue?: CreateProviderIssueAdapter;
   /** Provider issue lookup adapter override. For testing only. */
@@ -597,6 +624,50 @@ export async function buildServer(config: ViewerServerConfig) {
   /** Release Azure DevOps mutex for issue. */
   function releaseAzureDevopsMutex(issueRef: string): void {
     const mutex = azureDevopsMutexes.get(issueRef);
+    if (!mutex) return;
+
+    if (mutex.waiters.length > 0) {
+      const next = mutex.waiters.shift();
+      if (next) next(true);
+    } else {
+      mutex.locked = false;
+    }
+  }
+
+  // ── Project files mutex (repo-scoped) ──
+  const PROJECT_FILES_MUTEX_TIMEOUT_MS = config.projectFilesMutexTimeoutMs ?? 1500;
+  const projectFilesMutexes = new Map<string, { locked: boolean; waiters: ((acquired: boolean) => void)[] }>();
+
+  async function acquireProjectFilesMutex(repoRef: string): Promise<boolean> {
+    let mutex = projectFilesMutexes.get(repoRef);
+    if (!mutex) {
+      mutex = { locked: false, waiters: [] };
+      projectFilesMutexes.set(repoRef, mutex);
+    }
+
+    if (!mutex.locked) {
+      mutex.locked = true;
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        const idx = mutex!.waiters.indexOf(waiterCallback);
+        if (idx !== -1) mutex!.waiters.splice(idx, 1);
+        resolve(false);
+      }, PROJECT_FILES_MUTEX_TIMEOUT_MS);
+
+      const waiterCallback = (acquired: boolean) => {
+        clearTimeout(timer);
+        resolve(acquired);
+      };
+
+      mutex!.waiters.push(waiterCallback);
+    });
+  }
+
+  function releaseProjectFilesMutex(repoRef: string): void {
+    const mutex = projectFilesMutexes.get(repoRef);
     if (!mutex) return;
 
     if (mutex.waiters.length > 0) {
@@ -796,6 +867,16 @@ export async function buildServer(config: ViewerServerConfig) {
     } catch (err) {
       console.error(
         'Startup Azure DevOps reconcile failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    // Startup project files reconcile (best-effort, non-fatal)
+    try {
+      await autoReconcileProjectFiles(startupIssue.issueRef, startupIssue.stateDir, startupIssue.workDir);
+    } catch (err) {
+      console.error(
+        'Startup project files reconcile failed (non-fatal):',
         err instanceof Error ? err.message : String(err),
       );
     }
@@ -1430,6 +1511,7 @@ export async function buildServer(config: ViewerServerConfig) {
             if (reconcileIssue.issueRef && reconcileIssue.stateDir) {
               try { await autoReconcileSonarToken(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
               try { await autoReconcileAzureDevops(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
+              try { await autoReconcileProjectFiles(reconcileIssue.issueRef, reconcileIssue.stateDir, reconcileIssue.workDir); } catch { /* non-fatal */ }
             }
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to auto-select issue.';
@@ -1980,12 +2062,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	        } catch {
 	          // Non-fatal - ignore reconcile errors
 	        }
-	        try {
-	          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
-	        } catch {
-	          // Non-fatal - ignore reconcile errors
-	        }
-	      }
+        try {
+          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
+        } catch {
+          // Non-fatal - ignore reconcile errors
+        }
+        try {
+          await autoReconcileProjectFiles(issue.issueRef, issue.stateDir, issue.workDir);
+        } catch {
+          // Non-fatal - ignore reconcile errors
+        }
+      }
 
 	      return reply.send({ ok: true, issue_ref: issueRef });
 	    } catch (err) {
@@ -2039,12 +2126,17 @@ export async function buildServer(config: ViewerServerConfig) {
 	        } catch {
 	          // Non-fatal - ignore reconcile errors
 	        }
-	        try {
-	          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
-	        } catch {
-	          // Non-fatal - ignore reconcile errors
-	        }
-	      }
+        try {
+          await autoReconcileAzureDevops(issue.issueRef, issue.stateDir, issue.workDir);
+        } catch {
+          // Non-fatal - ignore reconcile errors
+        }
+        try {
+          await autoReconcileProjectFiles(issue.issueRef, issue.stateDir, issue.workDir);
+        } catch {
+          // Non-fatal - ignore reconcile errors
+        }
+      }
 
 	      return reply.send({ ok: true, ...res });
 	    } catch (err) {
@@ -2537,6 +2629,212 @@ export async function buildServer(config: ViewerServerConfig) {
     // Build and emit final status
     const status = await buildSonarTokenStatus(issueRef, stateDir, workDir);
     emitSonarTokenStatus(status);
+  }
+
+  // ── Project files status helpers ──
+
+  async function buildProjectFilesStatus(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<ProjectFilesStatus> {
+    const { owner, repo } = parseOwnerRepoFromIssueRef(issueRef);
+    const records = await listProjectFiles(dataDir, owner, repo);
+    const files = records.map(toProjectFilePublic);
+
+    const worktreePresent = Boolean(
+      workDir && (await fs.stat(workDir).catch(() => null))?.isDirectory(),
+    );
+
+    const issueJson = await readIssueJson(stateDir);
+    const projectFilesStatus = (issueJson?.status as Record<string, unknown> | undefined)?.projectFiles as
+      | Record<string, unknown>
+      | undefined;
+
+    const storedSyncStatus = (projectFilesStatus?.sync_status as ProjectFilesSyncStatus) ?? 'never_attempted';
+    const lastAttemptAt =
+      typeof projectFilesStatus?.last_attempt_at === 'string' ? projectFilesStatus.last_attempt_at : null;
+    const lastSuccessAt =
+      typeof projectFilesStatus?.last_success_at === 'string' ? projectFilesStatus.last_success_at : null;
+    const lastError =
+      typeof projectFilesStatus?.last_error === 'string' ? projectFilesStatus.last_error : null;
+
+    let syncStatus: ProjectFilesSyncStatus;
+    if (!worktreePresent) {
+      syncStatus = files.length > 0 ? 'deferred_worktree_absent' : 'in_sync';
+    } else {
+      syncStatus = storedSyncStatus;
+    }
+
+    return {
+      issue_ref: issueRef,
+      worktree_present: worktreePresent,
+      file_count: files.length,
+      files,
+      sync_status: syncStatus,
+      last_attempt_at: lastAttemptAt,
+      last_success_at: lastSuccessAt,
+      last_error: lastError,
+    };
+  }
+
+  async function updateProjectFilesStatusInIssueJson(
+    stateDir: string,
+    updates: Partial<{
+      sync_status: ProjectFilesSyncStatus;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+      managed_targets: readonly string[];
+    }>,
+  ): Promise<void> {
+    const issueJson = (await readIssueJson(stateDir)) ?? {};
+
+    if (!issueJson.status || typeof issueJson.status !== 'object') {
+      issueJson.status = {};
+    }
+    const status = issueJson.status as Record<string, unknown>;
+
+    if (!status.projectFiles || typeof status.projectFiles !== 'object') {
+      status.projectFiles = {};
+    }
+    const projectFiles = status.projectFiles as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        projectFiles[key] = value;
+      }
+    }
+
+    await writeIssueJson(stateDir, issueJson);
+  }
+
+  async function getManagedProjectTargetsFromIssueJson(stateDir: string): Promise<readonly string[]> {
+    const issueJson = await readIssueJson(stateDir);
+    const projectFilesStatus = (issueJson?.status as Record<string, unknown> | undefined)?.projectFiles as
+      | Record<string, unknown>
+      | undefined;
+    const raw = projectFilesStatus?.managed_targets;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  }
+
+  async function hasProjectFilesStatusInIssueJson(stateDir: string): Promise<boolean> {
+    const issueJson = await readIssueJson(stateDir);
+    const projectFilesStatus = (issueJson?.status as Record<string, unknown> | undefined)?.projectFiles;
+    return Boolean(projectFilesStatus && typeof projectFilesStatus === 'object' && !Array.isArray(projectFilesStatus));
+  }
+
+  function emitProjectFilesStatus(status: ProjectFilesStatus, operation: ProjectFilesOperation): void {
+    const event: ProjectFilesStatusEvent = { ...status, operation };
+    hub.broadcast('project-files-status', event);
+  }
+
+  async function reconcileProjectFilesForIssue(
+    params: {
+      issueRef: string;
+      stateDir: string;
+      workDir: string | null;
+      operation: ProjectFilesOperation;
+    },
+  ): Promise<{ status: ProjectFilesStatus; warnings: string[] }> {
+    const { issueRef, stateDir, workDir, operation } = params;
+    const { owner, repo } = parseOwnerRepoFromIssueRef(issueRef);
+    const records = await listProjectFiles(dataDir, owner, repo);
+
+    const now = new Date().toISOString();
+    const existingStatus = await buildProjectFilesStatus(issueRef, stateDir, workDir);
+    const previousManagedTargets = await getManagedProjectTargetsFromIssueJson(stateDir);
+
+    if (!workDir) {
+      const syncStatus: ProjectFilesSyncStatus = records.length > 0 ? 'deferred_worktree_absent' : 'in_sync';
+      await updateProjectFilesStatusInIssueJson(stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: null,
+      });
+      const status = await buildProjectFilesStatus(issueRef, stateDir, workDir);
+      emitProjectFilesStatus(status, operation);
+      return {
+        status,
+        warnings: syncStatus === 'deferred_worktree_absent'
+          ? ['Worktree not present; project files will sync when a worktree exists.']
+          : [],
+      };
+    }
+
+    const worktreeExists = (await fs.stat(workDir).catch(() => null))?.isDirectory();
+    if (!worktreeExists) {
+      const syncStatus: ProjectFilesSyncStatus = records.length > 0 ? 'deferred_worktree_absent' : 'in_sync';
+      await updateProjectFilesStatusInIssueJson(stateDir, {
+        sync_status: syncStatus,
+        last_attempt_at: now,
+        last_success_at: syncStatus === 'in_sync' ? now : existingStatus.last_success_at,
+        last_error: null,
+      });
+      const status = await buildProjectFilesStatus(issueRef, stateDir, workDir);
+      emitProjectFilesStatus(status, operation);
+      return {
+        status,
+        warnings: syncStatus === 'deferred_worktree_absent'
+          ? ['Worktree directory does not exist; project files sync deferred.']
+          : [],
+      };
+    }
+
+    const reconcileResult = await reconcileProjectFilesToWorktree({
+      worktreeDir: workDir,
+      repoFilesDir: getRepoProjectFilesDir(dataDir, owner, repo),
+      files: records,
+      previousManagedTargets,
+    });
+
+    await updateProjectFilesStatusInIssueJson(stateDir, {
+      sync_status: reconcileResult.sync_status,
+      last_attempt_at: now,
+      last_success_at:
+        reconcileResult.sync_status === 'in_sync'
+          ? now
+          : existingStatus.last_success_at,
+      last_error: reconcileResult.last_error,
+      ...(reconcileResult.sync_status === 'in_sync'
+        ? { managed_targets: reconcileResult.managed_targets }
+        : {}),
+    });
+
+    const status = await buildProjectFilesStatus(issueRef, stateDir, workDir);
+    emitProjectFilesStatus(status, operation);
+    return { status, warnings: reconcileResult.warnings };
+  }
+
+  async function autoReconcileProjectFiles(
+    issueRef: string,
+    stateDir: string,
+    workDir: string | null,
+  ): Promise<void> {
+    const { owner, repo } = parseOwnerRepoFromIssueRef(issueRef);
+    const repoRef = `${owner}/${repo}`;
+
+    const acquired = await acquireProjectFilesMutex(repoRef);
+    if (!acquired) return;
+
+    try {
+      const records = await listProjectFiles(dataDir, owner, repo);
+      const hasStoredStatus = await hasProjectFilesStatusInIssueJson(stateDir);
+      if (records.length === 0 && !hasStoredStatus) {
+        return;
+      }
+
+      await reconcileProjectFilesForIssue({
+        issueRef,
+        stateDir,
+        workDir,
+        operation: 'auto_reconcile',
+      });
+    } finally {
+      releaseProjectFilesMutex(repoRef);
+    }
   }
 
   // ── Azure DevOps credential status helpers ──
@@ -3662,6 +3960,251 @@ export async function buildServer(config: ViewerServerConfig) {
     } finally {
       await releaseLock(issue.stateDir);
       releaseAzureDevopsMutex(issue.issueRef);
+    }
+  });
+
+  // ── Project files endpoints ──
+
+  app.get('/api/project-files', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    try {
+      const status = await buildProjectFilesStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      return reply.send({ ok: true, ...status });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    }
+  });
+
+  app.put('/api/project-files', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    const validation = validatePutProjectFileRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    let ownerRepo: { owner: string; repo: string };
+    try {
+      ownerRepo = parseOwnerRepoFromIssueRef(issue.issueRef);
+    } catch (err) {
+      return reply.code(400).send({ ok: false, error: sanitizeErrorForUi(err), code: 'validation_failed' });
+    }
+    const repoRef = `${ownerRepo.owner}/${ownerRepo.repo}`;
+
+    const acquired = await acquireProjectFilesMutex(repoRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another project files operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const upsertResult = await upsertProjectFile({
+        dataDir,
+        owner: ownerRepo.owner,
+        repo: ownerRepo.repo,
+        id: validation.value.id,
+        displayName: validation.value.display_name,
+        targetPath: validation.value.target_path,
+        content: validation.value.content,
+      });
+
+      let status: ProjectFilesStatus;
+      let warnings: string[] = [];
+
+      if (validation.value.sync_now) {
+        const reconcileResult = await reconcileProjectFilesForIssue({
+          issueRef: issue.issueRef,
+          stateDir: issue.stateDir,
+          workDir: issue.workDir,
+          operation: 'put',
+        });
+        status = reconcileResult.status;
+        warnings = reconcileResult.warnings;
+      } else {
+        await updateProjectFilesStatusInIssueJson(issue.stateDir, {
+          sync_status: 'never_attempted',
+          last_error: null,
+        });
+        status = await buildProjectFilesStatus(issue.issueRef, issue.stateDir, issue.workDir);
+        emitProjectFilesStatus(status, 'put');
+      }
+
+      return reply.send({
+        ok: true,
+        updated: true,
+        status,
+        warnings,
+        file: toProjectFilePublic(upsertResult.record),
+      });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      if (message.includes('target_path already exists') || message.includes('Maximum of')) {
+        return reply.code(400).send({ ok: false, error: message, code: 'validation_failed' });
+      }
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseProjectFilesMutex(repoRef);
+    }
+  });
+
+  app.delete('/api/project-files/:id', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    const params = (req.params ?? {}) as Record<string, unknown>;
+    const validation = validateDeleteProjectFileId(params.id);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    let ownerRepo: { owner: string; repo: string };
+    try {
+      ownerRepo = parseOwnerRepoFromIssueRef(issue.issueRef);
+    } catch (err) {
+      return reply.code(400).send({ ok: false, error: sanitizeErrorForUi(err), code: 'validation_failed' });
+    }
+    const repoRef = `${ownerRepo.owner}/${ownerRepo.repo}`;
+
+    const acquired = await acquireProjectFilesMutex(repoRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another project files operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const deleted = await deleteProjectFile({
+        dataDir,
+        owner: ownerRepo.owner,
+        repo: ownerRepo.repo,
+        id: validation.id,
+      });
+
+      const reconcileResult = await reconcileProjectFilesForIssue({
+        issueRef: issue.issueRef,
+        stateDir: issue.stateDir,
+        workDir: issue.workDir,
+        operation: 'delete',
+      });
+
+      const warnings = [...reconcileResult.warnings];
+      if (!deleted.deleted) {
+        warnings.push('File id not found.');
+      }
+
+      return reply.send({
+        ok: true,
+        updated: deleted.deleted,
+        status: reconcileResult.status,
+        warnings,
+      });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseProjectFilesMutex(repoRef);
+    }
+  });
+
+  app.post('/api/project-files/reconcile', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error, code: 'forbidden' });
+
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot edit while Jeeves is running.', code: 'conflict_running' });
+    }
+
+    const issue = runManager.getIssue();
+    if (!issue.issueRef || !issue.stateDir) {
+      return reply.code(400).send({ ok: false, error: 'No issue selected.', code: 'no_issue_selected' });
+    }
+
+    const validation = validateReconcileProjectFilesRequest(req.body);
+    if (!validation.valid) {
+      return reply.code(400).send({
+        ok: false,
+        error: validation.error,
+        code: validation.code,
+        field_errors: validation.field_errors,
+      });
+    }
+
+    let ownerRepo: { owner: string; repo: string };
+    try {
+      ownerRepo = parseOwnerRepoFromIssueRef(issue.issueRef);
+    } catch (err) {
+      return reply.code(400).send({ ok: false, error: sanitizeErrorForUi(err), code: 'validation_failed' });
+    }
+    const repoRef = `${ownerRepo.owner}/${ownerRepo.repo}`;
+
+    const acquired = await acquireProjectFilesMutex(repoRef);
+    if (!acquired) {
+      return reply.code(503).send({ ok: false, error: 'Another project files operation is in progress.', code: 'busy' });
+    }
+
+    try {
+      const existing = await buildProjectFilesStatus(issue.issueRef, issue.stateDir, issue.workDir);
+      if (existing.sync_status === 'in_sync' && !validation.value.force) {
+        return reply.send({
+          ok: true,
+          updated: false,
+          status: existing,
+          warnings: ['Already in sync; use force=true to re-run reconciliation.'],
+        });
+      }
+
+      const reconcileResult = await reconcileProjectFilesForIssue({
+        issueRef: issue.issueRef,
+        stateDir: issue.stateDir,
+        workDir: issue.workDir,
+        operation: 'reconcile',
+      });
+
+      return reply.send({
+        ok: true,
+        updated: false,
+        status: reconcileResult.status,
+        warnings: reconcileResult.warnings,
+      });
+    } catch (err) {
+      const message = sanitizeErrorForUi(err);
+      return reply.code(500).send({ ok: false, error: message, code: 'io_error' });
+    } finally {
+      releaseProjectFilesMutex(repoRef);
     }
   });
 

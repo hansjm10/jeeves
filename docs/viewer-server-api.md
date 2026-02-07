@@ -49,7 +49,7 @@ JSON endpoints:
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`. See [`POST /api/run`](#post-apirun) below.
 - `POST /api/run/stop`: stop the current run. Body: `{ "force"?: boolean }`.
-- `POST /api/issue/status`: update current issue phase. Body: `{ "phase": "design_draft" }`.
+- `POST /api/issue/status`: update current issue phase. Body: `{ "phase": "design_research" }`.
 - `GET /api/issue/task-execution`: get current issue task execution settings (parallel/sequential).
 - `POST /api/issue/task-execution`: update current issue task execution settings. Body: `{ "mode": "sequential" | "parallel", "maxParallelTasks"?: number }`.
 - `GET /api/workflow`: returns workflow metadata (phases, current phase, ordering).
@@ -58,6 +58,10 @@ JSON endpoints:
 - `PATCH /api/issue/azure-devops`: partial Azure DevOps credential update.
 - `DELETE /api/issue/azure-devops`: remove Azure DevOps credentials.
 - `POST /api/issue/azure-devops/reconcile`: force Azure DevOps worktree reconciliation.
+- `GET /api/project-files`: repo-scoped project files status + managed file list for selected issue.
+- `PUT /api/project-files`: add/update one managed project file mapping + content.
+- `DELETE /api/project-files/:id`: remove one managed project file mapping.
+- `POST /api/project-files/reconcile`: force project files worktree reconciliation.
 
 Streaming endpoints:
 - `GET /api/stream`: Server-Sent Events (SSE).
@@ -90,7 +94,7 @@ Request body:
   "init": {                 // optional; when omitted this endpoint is create-only
     "branch": "issue/123",
     "workflow": "default",
-    "phase": "design_draft",
+    "phase": "design_classify",
     "design_doc": "docs/issue-123-design.md",
     "force": false
   },
@@ -372,6 +376,79 @@ Error responses:
 | `500` | `io_error` | File system error |
 | `503` | `busy` | Another credential mutation is in progress |
 
+### `GET /api/project-files`
+
+Get repo-scoped managed project files status for the currently selected issue.
+
+**Security**: localhost-only (same as other credential/project file endpoints).
+
+Prerequisites:
+- An issue must be selected.
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "issue_ref": "owner/repo#123",
+  "worktree_present": true,
+  "file_count": 2,
+  "files": [
+    {
+      "id": "a1b2c3...",
+      "display_name": "connections.local.config",
+      "target_path": "connections.local.config",
+      "size_bytes": 231,
+      "sha256": "3c9f...",
+      "updated_at": "2026-02-07T12:00:00.000Z"
+    }
+  ],
+  "sync_status": "in_sync",
+  "last_attempt_at": "2026-02-07T12:00:00.000Z",
+  "last_success_at": "2026-02-07T12:00:00.000Z",
+  "last_error": null
+}
+```
+
+`sync_status` values:
+- `in_sync`
+- `deferred_worktree_absent`
+- `failed_conflict`
+- `failed_link_create`
+- `failed_source_missing`
+- `failed_exclude`
+- `never_attempted`
+
+### `PUT /api/project-files`
+
+Add or update one managed project file mapping for the selected repo.
+
+Request body:
+```jsonc
+{
+  "id": "optional-existing-id",          // optional; update existing file by id
+  "display_name": "connections.local.config", // optional
+  "target_path": "connections.local.config",  // required; worktree-relative
+  "content_base64": "BASE64...",         // required; max 1 MiB decoded
+  "sync_now": true                       // optional; default true
+}
+```
+
+Response (`200`): `{ ok: true, updated: true, status, warnings, file }`.
+
+### `DELETE /api/project-files/:id`
+
+Remove one managed project file mapping by id and reconcile the current worktree.
+
+Response (`200`): `{ ok: true, updated: boolean, status, warnings }`.
+
+### `POST /api/project-files/reconcile`
+
+Force reconcile managed project files into the current worktree.
+
+Request body: optional `{ "force": true }`.
+
+Response (`200`): `{ ok: true, updated: false, status, warnings }`.
+
 ### `POST /api/issues/create`
 
 Create a new issue (GitHub) or work item (Azure DevOps) using the appropriate provider CLI, with optional init/select/auto-run.
@@ -407,7 +484,7 @@ Request body:
   "init": {                          // optional; init issue state + worktree after create
     "branch": "issue/123",
     "workflow": "default",
-    "phase": "design_draft",
+    "phase": "design_classify",
     "design_doc": "docs/issue-123-design.md",
     "force": false
   },
@@ -495,7 +572,7 @@ Request body:
   "init": {                            // optional; same as POST /api/issues/create
     "branch": "issue/456",
     "workflow": "default",
-    "phase": "design_draft",
+    "phase": "design_classify",
     "design_doc": "docs/issue-456-design.md",
     "force": false
   },

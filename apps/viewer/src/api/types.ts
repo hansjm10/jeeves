@@ -350,3 +350,12 @@ export type {
   IngestOutcome,
   IngestEventOutcome,
 } from './azureDevopsTypes.js';
+
+// ============================================================================
+// Project Files Types (re-exported for convenience)
+// ============================================================================
+
+export type {
+  ProjectFilesStatusEvent,
+  ProjectFilesSyncStatus,
+} from './projectFilesTypes.js';

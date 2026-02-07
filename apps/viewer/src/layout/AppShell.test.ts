@@ -1649,6 +1649,7 @@ describe('T13: AppShell tab navigation structure', () => {
       { to: '/create-issue', label: 'create-issue' },
       { to: '/sonar-token', label: 'sonar-token' },
       { to: '/azure-devops', label: 'azure-devops' },
+      { to: '/project-files', label: 'project-files' },
       { to: '/prompts', label: 'prompts' },
     ];
 
@@ -1664,6 +1665,10 @@ describe('T13: AppShell tab navigation structure', () => {
 
   it('sonar-token tab is present with correct path and label', () => {
     expect(appShellSource).toContain('TabLink to="/sonar-token" label="sonar-token"');
+  });
+
+  it('project-files tab is present with correct path and label', () => {
+    expect(appShellSource).toContain('TabLink to="/project-files" label="project-files"');
   });
 
   it('watch tab appears before prompts tab', () => {
@@ -1686,6 +1691,7 @@ describe('T13: AppShell tab navigation structure', () => {
     expect(tabsContent).toContain('TabLink to="/create-issue"');
     expect(tabsContent).toContain('TabLink to="/sonar-token"');
     expect(tabsContent).toContain('TabLink to="/azure-devops"');
+    expect(tabsContent).toContain('TabLink to="/project-files"');
     expect(tabsContent).toContain('TabLink to="/prompts"');
   });
 });

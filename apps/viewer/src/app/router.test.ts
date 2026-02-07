@@ -28,6 +28,7 @@ import { AppShell } from '../layout/AppShell.js';
 import { AzureDevopsPage } from '../pages/AzureDevopsPage.js';
 import { CreateIssuePage } from '../pages/CreateIssuePage.js';
 import { PromptsPage } from '../pages/PromptsPage.js';
+import { ProjectFilesPage } from '../pages/ProjectFilesPage.js';
 import { SonarTokenPage } from '../pages/SonarTokenPage.js';
 import { WatchPage } from '../pages/WatchPage.js';
 import { WorkflowsPage } from '../pages/WorkflowsPage.js';
@@ -51,6 +52,7 @@ const routeConfig = [
       { path: 'create-issue', element: e(CreateIssuePage) },
       { path: 'sonar-token', element: e(SonarTokenPage) },
       { path: 'azure-devops', element: e(AzureDevopsPage) },
+      { path: 'project-files', element: e(ProjectFilesPage) },
       { path: 'prompts/*', element: e(PromptsPage) },
       { path: '*', element: e(Navigate, { to: '/watch', replace: true }) },
     ],
@@ -109,6 +111,13 @@ describe('Route smoke tests: key routes exist and match', () => {
     expect(match?.route.path).toBe('prompts/*');
   });
 
+  it('/project-files route matches', () => {
+    const router = createTestRouter('/project-files');
+    expect(router.state.errors).toBeNull();
+    const match = router.state.matches[router.state.matches.length - 1];
+    expect(match?.route.path).toBe('project-files');
+  });
+
   it('/prompts/subpath route matches', () => {
     const router = createTestRouter('/prompts/some/path');
     expect(router.state.errors).toBeNull();
@@ -163,9 +172,9 @@ describe('Route smoke tests: route configuration verification', () => {
     expect(routeConfig).toHaveLength(1);
     expect(routeConfig[0]?.path).toBe('/');
 
-    // Verify children count (index + watch + sdk + logs + viewer-logs + workflows + create-issue + sonar-token + azure-devops + prompts/* + *)
+    // Verify children count (index + watch + sdk + logs + viewer-logs + workflows + create-issue + sonar-token + azure-devops + project-files + prompts/* + *)
     const children = routeConfig[0]?.children ?? [];
-    expect(children).toHaveLength(11);
+    expect(children).toHaveLength(12);
 
     // Verify key paths exist in children
     const paths = children.map((r) => r.path ?? (r.index ? 'index' : undefined));
@@ -178,6 +187,7 @@ describe('Route smoke tests: route configuration verification', () => {
     expect(paths).toContain('create-issue');
     expect(paths).toContain('sonar-token');
     expect(paths).toContain('azure-devops');
+    expect(paths).toContain('project-files');
     expect(paths).toContain('prompts/*');
     expect(paths).toContain('*');
   });
@@ -223,6 +233,7 @@ describe('T13: router.tsx source-file route verification', () => {
       'create-issue',
       'sonar-token',
       'azure-devops',
+      'project-files',
       'prompts/*',
     ];
 
@@ -256,4 +267,3 @@ describe('T13: router.tsx source-file route verification', () => {
     expect(routerSource).toMatch(/path:\s*'\/'[\s\S]*element:.*AppShell/);
   });
 });
-

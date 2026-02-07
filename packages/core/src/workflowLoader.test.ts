@@ -12,8 +12,10 @@ describe('workflowLoader', () => {
     expect(workflow.name).toBe('default');
     expect(workflow.start).toBe('design_classify');
     expect(workflow.phases.design_classify.type).toBe('execute');
+    expect(workflow.phases.design_research.type).toBe('execute');
     expect(workflow.phases.design_review.type).toBe('evaluate');
     expect(workflow.phases.complete.type).toBe('terminal');
+    expect(workflow.phases.design_classify.transitions.find((t) => t.to === 'design_research')).toBeDefined();
     expect(workflow.phases.task_spec_check.transitions.length).toBeGreaterThan(1);
   });
 

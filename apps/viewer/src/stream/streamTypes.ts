@@ -5,6 +5,7 @@ import type {
   SonarTokenStatusEvent,
   AzureDevopsStatusEvent,
   IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
 } from '../api/types.js';
 
 export type StreamState = Readonly<{
@@ -24,6 +25,8 @@ export type StreamState = Readonly<{
   azureDevopsStatus: AzureDevopsStatusEvent | null;
   /** Latest issue-ingest-status event for the current issue (may be null if none received). */
   issueIngestStatus: IssueIngestStatusEvent | null;
+  /** Latest project-files-status event for the current issue (may be null if none received). */
+  projectFilesStatus: ProjectFilesStatusEvent | null;
 }>;
 
 export type WorkerLogEvent = Readonly<{ workerId: string; lines: string[]; reset?: boolean }>;
@@ -39,5 +42,5 @@ export type StreamAction =
   | { type: 'worker-sdk'; event: string; data: unknown; workerId: string }
   | { type: 'sonar-token-status'; data: SonarTokenStatusEvent }
   | { type: 'azure-devops-status'; data: AzureDevopsStatusEvent }
-  | { type: 'issue-ingest-status'; data: IssueIngestStatusEvent };
-
+  | { type: 'issue-ingest-status'; data: IssueIngestStatusEvent }
+  | { type: 'project-files-status'; data: ProjectFilesStatusEvent };

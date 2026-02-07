@@ -99,6 +99,7 @@ function resetMocks() {
     sonarTokenStatus: null,
     azureDevopsStatus: null,
     issueIngestStatus: null,
+    projectFilesStatus: null,
     runOverride: null,
     effectiveRun: null,
   });

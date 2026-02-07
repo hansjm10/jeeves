@@ -322,6 +322,60 @@ describe('RunManager', () => {
 	    expect(updated?.phase).toBe('design_review');
 	  });
 
+  it('commits a design doc checkpoint after design_research success', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 1;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_research', workflow: 'default', branch: 'issue/1', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await runGit(workDir, ['init']);
+    await fs.mkdir(path.join(workDir, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(workDir, 'docs', `issue-${issueNumber}-design.md`), '# design\n', 'utf-8');
+    await runGit(workDir, ['add', '--', `docs/issue-${issueNumber}-design.md`]);
+
+    const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    const subject = (await runGit(workDir, ['log', '-1', '--pretty=%s'])).trim();
+    expect(subject).toContain(`checkpoint issue #${issueNumber} design doc (design_research)`);
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('design_workflow');
+  });
+
   it('commits a design doc checkpoint after design_edit success', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');
@@ -601,7 +655,7 @@ describe('RunManager', () => {
     await waitFor(() => rm.getStatus().running === false);
 
     const updatedIssue = await readIssueJson(stateDir);
-    expect(updatedIssue?.phase).toBe('plan_task');
+    expect(updatedIssue?.phase).toBe('implement_task');
 
     const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
     const tasksJson = JSON.parse(tasksRaw) as { tasks: { filesAllowed: string[] }[] };
@@ -2875,11 +2929,11 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await waitFor(() => rm.getStatus().running === false, 15000);
 
     // Verify: After merge conflict, phase should NOT be task_spec_check
-    // (it should have transitioned to plan_task to allow retry via the planning phase)
+    // (it should have transitioned to implement_task to allow retry)
     const issueAfter = await readIssueJson(stateDir);
 
-    // The critical assertion: phase should be plan_task, not task_spec_check
-    expect(issueAfter?.phase).toBe('plan_task');
+    // The critical assertion: phase should be implement_task, not task_spec_check
+    expect(issueAfter?.phase).toBe('implement_task');
 
     // Verify: status.parallel should be cleared
     expect((issueAfter?.status as Record<string, unknown>)?.parallel).toBeUndefined();

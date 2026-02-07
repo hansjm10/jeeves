@@ -5,8 +5,8 @@ export type GroupPhase = 'design' | 'implement' | 'review' | 'complete';
 // Group buttons represent intent checkpoints, not declaration order.
 // `phase_order` is currently object-key order from YAML and may not match a useful jump target.
 const GROUP_ANCHORS: Readonly<Record<GroupPhase, readonly string[]>> = {
-  design: ['design_classify', 'design_draft'],
-  implement: ['plan_task', 'implement_task', 'task_decomposition', 'pre_implementation_check'],
+  design: ['design_classify', 'design_research', 'design_draft'],
+  implement: ['implement_task', 'task_decomposition', 'pre_implementation_check'],
   review: ['prepare_pr', 'code_review'],
   complete: ['complete'],
 };

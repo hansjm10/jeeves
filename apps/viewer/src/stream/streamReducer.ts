@@ -3,6 +3,7 @@ import type {
   SonarTokenStatusEvent,
   AzureDevopsStatusEvent,
   IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
 } from '../api/types.js';
 import type { StreamAction, StreamState } from './streamTypes.js';
 
@@ -25,6 +26,8 @@ export type ExtendedStreamState = StreamState & {
   azureDevopsStatus: AzureDevopsStatusEvent | null;
   /** Latest issue-ingest-status event (mirrors StreamState for direct access). */
   issueIngestStatus: IssueIngestStatusEvent | null;
+  /** Latest project-files-status event (mirrors StreamState for direct access). */
+  projectFilesStatus: ProjectFilesStatusEvent | null;
 };
 
 /** Action for live run updates from the viewer-server */
@@ -105,8 +108,12 @@ export function streamReducer(
       // This does NOT add to sdkEvents (no noise)
       return { ...state, issueIngestStatus: action.data };
     }
+    case 'project-files-status': {
+      // Store the latest project-files-status event for direct access by consumers
+      // This does NOT add to sdkEvents (no noise)
+      return { ...state, projectFilesStatus: action.data };
+    }
     default:
       return state;
   }
 }
-

@@ -10,6 +10,7 @@ import type {
   SonarTokenStatusEvent,
   AzureDevopsStatusEvent,
   IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
 } from '../api/types.js';
 import type { WorkerLogEvent } from './streamTypes.js';
 import { sonarTokenQueryKey } from '../features/sonarToken/queries.js';
@@ -35,6 +36,7 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
     sonarTokenStatus: null,
     azureDevopsStatus: null,
     issueIngestStatus: null,
+    projectFilesStatus: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -77,6 +79,8 @@ export function ViewerStreamProvider(props: { baseUrl: string; children: ReactNo
             dispatch({ type: 'azure-devops-status', data: parsed.data as AzureDevopsStatusEvent });
           else if (event === 'issue-ingest-status')
             dispatch({ type: 'issue-ingest-status', data: parsed.data as IssueIngestStatusEvent });
+          else if (event === 'project-files-status')
+            dispatch({ type: 'project-files-status', data: parsed.data as ProjectFilesStatusEvent });
           else {
             // SDK events: check for workerId to route to worker-specific state
             const dataObj = parsed.data as Record<string, unknown> | null;

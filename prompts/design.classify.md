@@ -7,7 +7,7 @@ You do not design solutions yet. You establish scope and constraints that will g
 <context>
 - Phase type: execute (you may create/modify the design document)
 - Workflow position: First design phase - establishes scope for subsequent phases
-- Next phases: design_workflow, design_api, design_data, design_plan, design_review
+- Next phases: design_research, design_workflow, design_api, design_data, design_plan, design_review
 - The `.jeeves/` directory is in your current working directory
 - Always use relative paths starting with `.jeeves/`
 </context>
@@ -137,7 +137,7 @@ Append to `.jeeves/progress.txt`:
 - Non-Goals: [count] defined
 
 ### Next Phase
-design_workflow (or design_api if no workflow changes)
+design_research
 ---
 ```
 

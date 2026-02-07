@@ -6,6 +6,7 @@ import type {
   SonarTokenStatusEvent,
   AzureDevopsStatusEvent,
   IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
 } from '../api/types.js';
 import type { ExtendedStreamState } from './streamReducer.js';
 import { MAX_LOG_LINES, MAX_SDK_EVENTS, capArray, streamReducer } from './streamReducer.js';
@@ -25,6 +26,7 @@ function makeState(): ExtendedStreamState {
     sonarTokenStatus: null,
     azureDevopsStatus: null,
     issueIngestStatus: null,
+    projectFilesStatus: null,
   };
 }
 
@@ -629,3 +631,50 @@ describe('streamReducer issue-ingest-status', () => {
   });
 });
 
+function makeProjectFilesStatusEvent(
+  overrides: Partial<ProjectFilesStatusEvent> = {},
+): ProjectFilesStatusEvent {
+  return {
+    issue_ref: 'owner/repo#1',
+    worktree_present: true,
+    file_count: 1,
+    files: [{
+      id: 'abc',
+      display_name: 'connections.local.config',
+      target_path: 'connections.local.config',
+      size_bytes: 123,
+      sha256: 'deadbeef',
+      updated_at: '2026-02-07T12:00:00.000Z',
+    }],
+    sync_status: 'in_sync',
+    last_attempt_at: '2026-02-07T12:00:00.000Z',
+    last_success_at: '2026-02-07T12:00:00.000Z',
+    last_error: null,
+    operation: 'put',
+    ...overrides,
+  };
+}
+
+describe('streamReducer project-files-status', () => {
+  it('stores project-files-status event in state', () => {
+    const s1 = makeState();
+    const event = makeProjectFilesStatusEvent();
+    const s2 = streamReducer(s1, { type: 'project-files-status', data: event });
+    expect(s2.projectFilesStatus).toEqual(event);
+  });
+
+  it('does not interfere with other status events', () => {
+    const s1 = makeState();
+    const sonarEvent = makeSonarTokenStatusEvent();
+    const azureEvent = makeAzureDevopsStatusEvent();
+    const projectEvent = makeProjectFilesStatusEvent();
+
+    let state = streamReducer(s1, { type: 'sonar-token-status', data: sonarEvent });
+    state = streamReducer(state, { type: 'azure-devops-status', data: azureEvent });
+    state = streamReducer(state, { type: 'project-files-status', data: projectEvent });
+
+    expect(state.sonarTokenStatus).toEqual(sonarEvent);
+    expect(state.azureDevopsStatus).toEqual(azureEvent);
+    expect(state.projectFilesStatus).toEqual(projectEvent);
+  });
+});

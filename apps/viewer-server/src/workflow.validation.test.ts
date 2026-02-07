@@ -13,6 +13,33 @@ import { loadWorkflowFromFile } from '@jeeves/core';
  * between design approval, pre-implementation verification, and implementation.
  */
 describe('default workflow validation', () => {
+  it('includes design_research phase with correct prompt reference', async () => {
+    const workflowPath = fileURLToPath(new URL('../../../workflows/default.yaml', import.meta.url));
+    const workflow = await loadWorkflowFromFile(workflowPath);
+
+    expect(workflow.phases).toHaveProperty('design_research');
+
+    const designResearch = workflow.phases.design_research;
+    expect(designResearch.prompt).toBe('design.research.md');
+    expect(designResearch.type).toBe('execute');
+  });
+
+  it('routes design_classify to design_research, then design_research to design_workflow', async () => {
+    const workflowPath = fileURLToPath(new URL('../../../workflows/default.yaml', import.meta.url));
+    const workflow = await loadWorkflowFromFile(workflowPath);
+
+    const designClassify = workflow.phases.design_classify;
+    const designResearch = workflow.phases.design_research;
+
+    const classifyToResearch = designClassify.transitions.find((t) => t.to === 'design_research');
+    expect(classifyToResearch).toBeDefined();
+    expect(classifyToResearch?.auto).toBe(true);
+
+    const researchToWorkflow = designResearch.transitions.find((t) => t.to === 'design_workflow');
+    expect(researchToWorkflow).toBeDefined();
+    expect(researchToWorkflow?.auto).toBe(true);
+  });
+
   it('includes pre_implementation_check phase with correct prompt reference', async () => {
     const workflowPath = fileURLToPath(new URL('../../../workflows/default.yaml', import.meta.url));
     const workflow = await loadWorkflowFromFile(workflowPath);
@@ -35,8 +62,8 @@ describe('default workflow validation', () => {
 
     const preCheck = workflow.phases.pre_implementation_check;
 
-    // Find the transition to plan_task (planning phase before implement)
-    const passTransition = preCheck.transitions.find((t) => t.to === 'plan_task');
+    // Find the transition to implement_task
+    const passTransition = preCheck.transitions.find((t) => t.to === 'implement_task');
 
     expect(passTransition).toBeDefined();
     expect(passTransition?.when).toBe('status.preCheckPassed == true');
@@ -112,8 +139,8 @@ describe('default workflow validation', () => {
     // pre_implementation_check has exactly two transitions (pass and fail)
     expect(preCheck.transitions).toHaveLength(2);
 
-    // Verify pass transition (now routes to plan_task before implement)
-    const passTransition = preCheck.transitions.find((t) => t.to === 'plan_task');
+    // Verify pass transition (routes directly to implement_task)
+    const passTransition = preCheck.transitions.find((t) => t.to === 'implement_task');
     expect(passTransition).toBeDefined();
     expect(passTransition?.when).toBe('status.preCheckPassed == true');
 

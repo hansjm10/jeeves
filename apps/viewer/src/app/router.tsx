@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import { AppShell } from '../layout/AppShell.js';
+import { AzureDevopsPage } from '../pages/AzureDevopsPage.js';
 import { CreateIssuePage } from '../pages/CreateIssuePage.js';
 import { PromptsPage } from '../pages/PromptsPage.js';
 import { SonarTokenPage } from '../pages/SonarTokenPage.js';
@@ -22,6 +23,7 @@ export function makeRouter(): ReturnType<typeof createBrowserRouter> {
         { path: 'workflows', element: <WorkflowsPage /> },
         { path: 'create-issue', element: <CreateIssuePage /> },
         { path: 'sonar-token', element: <SonarTokenPage /> },
+        { path: 'azure-devops', element: <AzureDevopsPage /> },
         { path: 'prompts/*', element: <PromptsPage /> },
         { path: '*', element: <Navigate to="/watch" replace /> },
       ],

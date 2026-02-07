@@ -275,6 +275,7 @@ export function AppShell() {
               <TabLink to="/workflows" label="workflows" />
               <TabLink to="/create-issue" label="create-issue" />
               <TabLink to="/sonar-token" label="sonar-token" />
+              <TabLink to="/azure-devops" label="azure-devops" />
               <TabLink to="/prompts" label="prompts" />
             </div>
             <Outlet />

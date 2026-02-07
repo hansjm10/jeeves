@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
+import { terminateProcess } from './processTermination.js';
 
 /**
  * Issue expansion request input validated by the endpoint
@@ -163,19 +164,11 @@ export async function runIssueExpand(
     // Set up timeout
     timeoutHandle = setTimeout(() => {
       timedOut = true;
-      try {
-        proc.kill('SIGTERM');
-        // Give it a moment, then force kill
-        setTimeout(() => {
-          try {
-            proc.kill('SIGKILL');
-          } catch {
-            // ignore
-          }
-        }, 1000);
-      } catch {
-        // ignore
-      }
+      terminateProcess(proc, 'SIGTERM');
+      // Give it a moment, then force kill
+      setTimeout(() => {
+        terminateProcess(proc, 'SIGKILL');
+      }, 1000);
     }, timeoutMs);
 
     proc.once('exit', () => {

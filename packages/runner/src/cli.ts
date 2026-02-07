@@ -19,7 +19,7 @@ function usage(): string {
     '',
     'Notes:',
     '  - run-fixture defaults to workflow=fixture-trivial and provider=fake so it runs without credentials.',
-    '  - If --issue is provided, state/work dirs default to the XDG layout (override with JEEVES_DATA_DIR).',
+    '  - If --issue is provided, state/work dirs default to the platform data-dir layout (override with JEEVES_DATA_DIR).',
     '  - expand-issue reads JSON from stdin with { summary, issue_type?, repo? } and outputs JSON to stdout.',
   ].join('\n');
 }

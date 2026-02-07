@@ -19,6 +19,15 @@ Stdio MCP server that exposes `read`, `bash`, and `grep` tools with optional con
 | `PRUNER_URL` | `http://localhost:8000/prune` | Full URL of the swe-pruner HTTP endpoint. Empty string disables pruning. |
 | `PRUNER_TIMEOUT_MS` | `30000` | Timeout in milliseconds for pruner HTTP calls (range: 100–300000). |
 | `MCP_PRUNER_CWD` | `process.cwd()` | Working directory used to resolve relative `file_path` values in the `read` tool. |
+| `MCP_PRUNER_BASH_PATH` | (unset) | Optional absolute path to a bash-compatible shell binary used by the `bash` tool. On Windows, set this to `bash.exe` when PATH discovery is insufficient. |
+| `MCP_PRUNER_GREP_PATH` | (unset) | Optional absolute path to a `grep` executable used by the `grep` tool. On Windows, set this to `grep.exe` when PATH discovery is insufficient. |
+
+## Windows Notes
+
+- Native Windows is supported.
+- For best parity with Unix command behavior, install Git for Windows so `bash`/`grep` are available.
+- If binaries are not discoverable on PATH, set `MCP_PRUNER_BASH_PATH` and/or `MCP_PRUNER_GREP_PATH`.
+- `grep` has a built-in Node fallback path when external `grep` is unavailable.
 
 ## Tools
 

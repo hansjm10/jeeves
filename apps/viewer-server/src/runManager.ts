@@ -33,6 +33,7 @@ import {
   hasCompletionMarker,
 } from './workerSandbox.js';
 import { decideQuickFixRouting } from './quickFixRouter.js';
+import { terminateProcess } from './processTermination.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -325,11 +326,7 @@ export class RunManager {
     this.stopRequested = true;
     const proc = this.proc;
     if (proc && proc.exitCode === null) {
-      try {
-        proc.kill(force ? 'SIGKILL' : 'SIGTERM');
-      } catch {
-        // ignore
-      }
+      terminateProcess(proc, force ? 'SIGKILL' : 'SIGTERM');
     }
     // Also stop parallel runner if active
     if (this.activeParallelRunner) {
@@ -928,7 +925,7 @@ export class RunManager {
             }
 
             await writeIssueJson(this.stateDir!, updatedIssue);
-            if (nextPhase === 'implement_task' || nextPhase === 'plan_task') {
+            if (nextPhase === 'implement_task') {
               await expandTasksFilesAllowedForTests(this.stateDir!);
             }
             this.broadcast('state', await this.getStateSnapshot());
@@ -1229,6 +1226,7 @@ export class RunManager {
       'design_draft',
       // Multi-phase design workflow (v3)
       'design_classify',
+      'design_research',
       'design_workflow',
       'design_api',
       'design_data',

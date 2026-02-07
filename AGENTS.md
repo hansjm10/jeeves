@@ -90,7 +90,10 @@ The viewer provides:
 
 ## State and Data
 
-- State is stored in the XDG data directory (override with `JEEVES_DATA_DIR`).
+- State is stored in the platform data directory (override with `JEEVES_DATA_DIR`):
+  - Linux: `$XDG_DATA_HOME/jeeves` or `~/.local/share/jeeves`
+  - macOS: `~/Library/Application Support/jeeves`
+  - Windows: `%LOCALAPPDATA%\\jeeves`
 - Issue state lives at `.../issues/<owner>/<repo>/<issue>/issue.json`.
 - Worktrees live under `.../worktrees/<owner>/<repo>/issue-<N>/`.
 

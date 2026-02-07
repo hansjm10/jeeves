@@ -23,13 +23,23 @@ You are a senior software architect breaking down a design document into small, 
 
 2. Read the design document at the specified `designDocPath`.
 
-3. Extract tasks from the design document:
+3. Check for issue hierarchy context
+
+   Read `.jeeves/issue.json` and check if `issue.source` and `issue.source.hierarchy` exist.
+   When hierarchy context is available (e.g., Azure DevOps work items with parent/children):
+   - Use the parent work item's title and context to understand the broader epic or feature
+   - Review child work items if present to identify which parts of the broader scope this issue addresses
+   - Use hierarchy boundaries to inform task decomposition — avoid creating tasks that overlap with sibling work items
+
+   This context is optional — not all issues have hierarchy (GitHub issues typically do not).
+
+4. Extract tasks from the design document:
    - Look for the Work Breakdown / Task List section
    - Each task should be completable in ~20k tokens of context
    - Aim for 5-15 tasks total
    - Tasks should be small and focused (single responsibility)
 
-4. For each task, create a task object with:
+5. For each task, create a task object with:
    - `id`: Unique identifier (e.g., "T1", "T2")
    - `title`: Short descriptive title (under 50 characters)
    - `summary`: What this task accomplishes (1-2 sentences)
@@ -38,12 +48,12 @@ You are a senior software architect breaking down a design document into small, 
    - `dependsOn`: Task IDs that must complete first (for ordering)
    - `status`: Always set to "pending" initially
 
-5. Order tasks respecting dependencies:
+6. Order tasks respecting dependencies:
    - Core data structures before functions that use them
    - Functions before tests that exercise them
    - Configuration before code that reads it
 
-6. Write the task list to `.jeeves/tasks.json`:
+7. Write the task list to `.jeeves/tasks.json`:
    ```json
    {
      "schemaVersion": 1,
@@ -62,11 +72,11 @@ You are a senior software architect breaking down a design document into small, 
    }
    ```
 
-7. Update `.jeeves/issue.json`:
+8. Update `.jeeves/issue.json`:
    - Set `status.taskDecompositionComplete` to `true`
    - Set `status.currentTaskId` to the first task's ID (e.g., "T1")
 
-8. Append progress to `.jeeves/progress.txt`.
+9. Append progress to `.jeeves/progress.txt`.
 </instructions>
 
 <task_guidelines>
@@ -103,6 +113,7 @@ Before creating tasks, think through:
 3. Is each task small enough to complete with fresh context?
 4. Can each acceptance criterion be verified objectively?
 5. Are the file permissions tight enough to prevent scope creep?
+6. If issue hierarchy context is available, does task decomposition respect the scope boundaries of the current work item vs. sibling items?
 </thinking_guidance>
 
 <completion>

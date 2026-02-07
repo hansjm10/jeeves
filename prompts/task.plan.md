@@ -48,7 +48,18 @@ Your job is to **explore the codebase and produce a detailed implementation plan
    Your plan MUST address every failure point identified in the feedback.
    Note specific files, line numbers, and issues mentioned.
 
-6. Explore the relevant codebase
+6. Check for issue hierarchy context
+
+   Read `.jeeves/issue.json` and check if `issue.source.hierarchy` exists.
+   When hierarchy context is available (e.g., Azure DevOps work items with parent/children):
+   - Note the parent work item (title, URL) to understand the broader scope
+   - Review child work items if present to understand sibling tasks
+   - Use this context to inform how the current task fits into the work item tree
+   - Consider hierarchy boundaries when planning the implementation approach
+
+   This context is optional — not all issues have hierarchy (GitHub issues typically do not).
+
+7. Explore the relevant codebase
 
    For each file pattern in `filesAllowed`:
    - Read the existing files that match
@@ -61,7 +72,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
    - Type definitions and interfaces used by the allowed files
    - Configuration files that may need awareness (but NOT modification)
 
-7. Identify existing patterns and conventions
+8. Identify existing patterns and conventions
 
    As you explore, note:
    - Code style and naming conventions
@@ -71,7 +82,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
    - State management patterns
    - API patterns
 
-8. Produce the implementation plan
+9. Produce the implementation plan
 
    Output a structured plan with the following sections:
 

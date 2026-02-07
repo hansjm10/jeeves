@@ -42,7 +42,9 @@ JSON endpoints:
 - `GET /api/prompts`: returns prompt template IDs under the prompts directory.
 - `GET /api/prompts/<id>`: returns prompt contents (supports nested paths like `fixtures/trivial.md`).
 - `PUT /api/prompts/<id>`: writes prompt contents. Body: `{ "content": "..." }`.
-- `POST /api/github/issues/create`: create a GitHub issue via `gh` (optional init/select/auto-run).
+- `POST /api/github/issues/create`: create a GitHub issue via `gh` (legacy; delegates internally to provider-aware flow).
+- `POST /api/issues/create`: provider-aware issue/work-item create (GitHub or Azure DevOps).
+- `POST /api/issues/init-from-existing`: provider-aware init from existing issue/work-item.
 - `POST /api/issues/select`: select an existing issue state. Body: `{ "issue_ref": "owner/repo#N" }`.
 - `POST /api/init/issue`: initialize issue state + worktree, then select it. Body: `{ "repo": "owner/repo", "issue": 123, "branch"?, "workflow"?, "phase"?, "design_doc"?, "force"? }`.
 - `POST /api/run`: start a run (and optionally select an issue first). Body: `{ "issue_ref"?, "provider"?: "claude" | "codex" | "fake", "workflow"?, "max_iterations"?, "inactivity_timeout_sec"?, "iteration_timeout_sec"? }`. See [`POST /api/run`](#post-apirun) below.
@@ -51,14 +53,21 @@ JSON endpoints:
 - `GET /api/issue/task-execution`: get current issue task execution settings (parallel/sequential).
 - `POST /api/issue/task-execution`: update current issue task execution settings. Body: `{ "mode": "sequential" | "parallel", "maxParallelTasks"?: number }`.
 - `GET /api/workflow`: returns workflow metadata (phases, current phase, ordering).
+- `GET /api/issue/azure-devops`: Azure DevOps credential and sync status.
+- `PUT /api/issue/azure-devops`: full Azure DevOps credential upsert.
+- `PATCH /api/issue/azure-devops`: partial Azure DevOps credential update.
+- `DELETE /api/issue/azure-devops`: remove Azure DevOps credentials.
+- `POST /api/issue/azure-devops/reconcile`: force Azure DevOps worktree reconciliation.
 
 Streaming endpoints:
 - `GET /api/stream`: Server-Sent Events (SSE).
 - `GET /api/ws`: WebSocket that streams the same events as SSE.
 
-### `POST /api/github/issues/create`
+### `POST /api/github/issues/create` (Legacy)
 
 Create a new GitHub issue in a repository using the local GitHub CLI (`gh`) on the viewer-server host.
+
+> **Legacy compatibility note:** This endpoint preserves its original response envelope for backward compatibility. Internally, it now persists provider metadata (`issue.source`, `status.issueIngest`) and emits an `issue-ingest-status` event, the same as the provider-aware `POST /api/issues/create` endpoint. New integrations should use `POST /api/issues/create` with `provider: "github"` instead.
 
 Prerequisites:
 - `gh` must be installed on the viewer-server host.
@@ -182,6 +191,330 @@ Error response:
 }
 ```
 
+### `GET /api/issue/azure-devops`
+
+Get the Azure DevOps credential and sync status for the currently selected issue.
+
+**Security**: ALL Azure DevOps credential endpoints (including GET) require localhost access. Remote clients receive `403` with `code: "forbidden"`.
+
+Prerequisites:
+- An issue must be selected.
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "issue_ref": "owner/repo#123",
+  "worktree_present": true,
+  "configured": true,
+  "organization": "https://dev.azure.com/myorg",
+  "project": "MyProject",
+  "has_pat": true,
+  "pat_last_updated_at": "2026-02-06T12:00:00.000Z",
+  "pat_env_var_name": "AZURE_DEVOPS_EXT_PAT",
+  "sync_status": "in_sync",
+  "last_attempt_at": "2026-02-06T12:00:00.000Z",
+  "last_success_at": "2026-02-06T12:00:00.000Z",
+  "last_error": null
+}
+```
+
+**`sync_status` values:**
+| Value | Meaning |
+|-------|---------|
+| `in_sync` | Worktree `.env.jeeves` and `.git/info/exclude` are up to date |
+| `deferred_worktree_absent` | No worktree exists yet; reconcile will run when one is created |
+| `failed_exclude` | Failed to update `.git/info/exclude` |
+| `failed_env_write` | Failed to write PAT to `.env.jeeves` |
+| `failed_env_delete` | Failed to remove PAT from `.env.jeeves` |
+| `failed_secret_read` | Failed to read the secret file |
+| `never_attempted` | No reconcile has been attempted |
+
+Error responses:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `no_issue_selected` | No issue is currently selected |
+| `403` | `forbidden` | Request from non-localhost |
+| `500` | `io_error` | File system error reading secret or status |
+
+### `PUT /api/issue/azure-devops`
+
+Create or fully replace Azure DevOps credentials for the current issue.
+
+Prerequisites:
+- An issue must be selected.
+- Jeeves must not be running (returns `409`).
+
+Request body:
+```jsonc
+{
+  "organization": "https://dev.azure.com/myorg",  // required; 3-200 chars
+  "project": "MyProject",                         // required; 1-128 chars
+  "pat": "azure-pat-value",                        // required; 1-1024 chars
+  "sync_now": true                                 // optional; default true
+}
+```
+
+**Organization format**: Must be a valid Azure DevOps organization slug (letters, digits, `.`, `_`, `-`). Bare slugs are auto-prefixed to `https://dev.azure.com/<slug>`.
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "updated": true,
+  "status": { /* AzureDevopsStatus (see GET response) */ },
+  "warnings": []
+}
+```
+
+Error responses:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `validation_failed` | Invalid fields; includes `field_errors` |
+| `403` | `forbidden` | Request from non-localhost |
+| `409` | `conflict_running` | Jeeves is currently running |
+| `500` | `io_error` | File system error |
+| `503` | `busy` | Another credential mutation is in progress |
+
+Validation error example (`400`):
+```jsonc
+{
+  "ok": false,
+  "error": "Validation failed",
+  "code": "validation_failed",
+  "field_errors": {
+    "organization": "organization must be between 3 and 200 characters",
+    "pat": "pat is required"
+  }
+}
+```
+
+### `PATCH /api/issue/azure-devops`
+
+Partially update Azure DevOps credentials. At least one field must be provided.
+
+Request body:
+```jsonc
+{
+  "organization": "https://dev.azure.com/neworg",  // optional
+  "project": "NewProject",                         // optional
+  "pat": "new-pat-value",                           // optional; conflicts with clear_pat
+  "clear_pat": true,                                // optional; deletes secret; conflicts with pat
+  "sync_now": false                                 // optional; default false
+}
+```
+
+**Conflict rule**: Cannot provide both `pat` and `clear_pat: true` in the same request.
+
+Success response: Same shape as PUT (`200` with `updated`, `status`, `warnings`).
+
+Error responses: Same as PUT, plus:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `validation_failed` | No fields provided, or `pat`+`clear_pat` conflict |
+
+### `DELETE /api/issue/azure-devops`
+
+Remove Azure DevOps credentials for the current issue. Idempotent.
+
+Prerequisites:
+- An issue must be selected.
+- Jeeves must not be running.
+
+Request body: empty or `{}`.
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "status": { /* AzureDevopsStatus with configured=false, has_pat=false */ },
+  "warnings": []
+}
+```
+
+Error responses:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `no_issue_selected` | No issue is currently selected |
+| `403` | `forbidden` | Request from non-localhost |
+| `409` | `conflict_running` | Jeeves is currently running |
+| `500` | `io_error` | File system error |
+| `503` | `busy` | Another credential mutation is in progress |
+
+### `POST /api/issue/azure-devops/reconcile`
+
+Force reconciliation of Azure DevOps credentials into the worktree (`.env.jeeves` and `.git/info/exclude`).
+
+Prerequisites:
+- An issue must be selected.
+
+Request body: empty or `{}`.
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "status": { /* AzureDevopsStatus with updated sync_status */ },
+  "warnings": []
+}
+```
+
+Error responses:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `no_issue_selected` | No issue is currently selected |
+| `403` | `forbidden` | Request from non-localhost |
+| `500` | `io_error` | File system error |
+| `503` | `busy` | Another credential mutation is in progress |
+
+### `POST /api/issues/create`
+
+Create a new issue (GitHub) or work item (Azure DevOps) using the appropriate provider CLI, with optional init/select/auto-run.
+
+**Security**: Localhost-only. Returns `403` with `code: "forbidden"` for non-local requests.
+
+Prerequisites:
+- **GitHub**: `gh` CLI installed and authenticated.
+- **Azure DevOps**: `az` CLI installed and authenticated. Azure credentials (organization, project, PAT) should be configured via the Azure DevOps credential endpoints.
+
+Request body:
+```jsonc
+{
+  "provider": "github",              // required; "github" or "azure_devops"
+  "repo": "owner/repo",              // required; 3-200 chars
+  "title": "Issue title",            // required; 1-256 chars
+  "body": "Issue description",       // required; 1-20000 chars
+
+  "labels": ["bug"],                 // optional; max 20 items, each max 64 chars
+  "assignees": ["octocat"],          // optional; max 20 items, each max 64 chars
+  "milestone": "v1.0",               // optional; max 128 chars
+
+  "azure": {                         // optional; Azure-specific fields (required for azure_devops)
+    "organization": "https://dev.azure.com/myorg",  // optional; overrides configured value
+    "project": "MyProject",                          // optional; overrides configured value
+    "work_item_type": "User Story",                  // required for azure_devops; "User Story" | "Bug" | "Task"
+    "parent_id": 100,                                // optional; positive integer
+    "area_path": "MyProject\\Area",                  // optional; max 256 chars
+    "iteration_path": "MyProject\\Sprint 1",         // optional; max 256 chars
+    "tags": ["frontend", "priority"]                 // optional; max 50 items, each max 64 chars
+  },
+
+  "init": {                          // optional; init issue state + worktree after create
+    "branch": "issue/123",
+    "workflow": "default",
+    "phase": "design_draft",
+    "design_doc": "docs/issue-123-design.md",
+    "force": false
+  },
+  "auto_select": true,               // optional; default true when init is provided
+  "auto_run": {                      // optional; requires init + auto_select
+    "provider": "claude",
+    "workflow": "default",
+    "max_iterations": 10,
+    "inactivity_timeout_sec": 600,
+    "iteration_timeout_sec": 3600
+  }
+}
+```
+
+Success response (`200`):
+```jsonc
+{
+  "ok": true,
+  "provider": "github",
+  "mode": "create",
+  "outcome": "success",                // "success" or "partial"
+  "remote": {
+    "id": "123",
+    "url": "https://github.com/owner/repo/issues/123",
+    "title": "Issue title",
+    "kind": "issue"                     // "issue" (GitHub) or "work_item" (Azure)
+  },
+  "hierarchy": {                        // present when Azure hierarchy is fetched
+    "parent": { "id": "100", "title": "Parent Epic", "url": "https://..." },
+    "children": []
+  },
+  "init": { "ok": true, "issue_ref": "owner/repo#123", "branch": "issue/123" },
+  "auto_select": { "requested": true, "ok": true },
+  "auto_run": { "requested": true, "ok": true },
+  "warnings": [],
+  "run": { /* RunStatus */ }
+}
+```
+
+**Outcome semantics:**
+- `success`: All requested operations completed.
+- `partial`: Remote item was created but a downstream step (init, auto_select, auto_run) failed. The `warnings` array describes what failed. Remote references are preserved in the response.
+
+Error responses:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `unsupported_provider` | Invalid provider value |
+| `400` | `validation_failed` | Invalid fields; includes `field_errors` |
+| `403` | `forbidden` | Request from non-localhost |
+| `401` | `provider_auth_required` | CLI not authenticated |
+| `403` | `provider_permission_denied` | Insufficient permissions |
+| `404` | `remote_not_found` | Repository or project not found |
+| `422` | `remote_validation_failed` | Remote rejected the request |
+| `500` | `io_error` | File system or internal error |
+| `500` | `missing_cli` | Required CLI (`gh` or `az`) not installed |
+| `504` | `provider_timeout` | CLI command timed out |
+
+**Side effects:**
+- Persists `issue.source` and `status.issueIngest` in issue.json
+- Emits `issue-ingest-status` streaming event
+
+### `POST /api/issues/init-from-existing`
+
+Initialize a Jeeves issue from an existing GitHub issue or Azure DevOps work item.
+
+**Security**: Localhost-only.
+
+Request body:
+```jsonc
+{
+  "provider": "azure_devops",         // required; "github" or "azure_devops"
+  "repo": "owner/repo",               // required; 3-200 chars
+
+  "existing": {                        // required; exactly one of id or url
+    "id": 456,                         // number or string; the issue/work-item ID
+    "url": "https://..."               // alternative; absolute https:// URL
+  },
+
+  "azure": {                           // optional; Azure-specific overrides
+    "organization": "https://dev.azure.com/myorg",
+    "project": "MyProject"
+  },
+
+  "init": {                            // optional; same as POST /api/issues/create
+    "branch": "issue/456",
+    "workflow": "default",
+    "phase": "design_draft",
+    "design_doc": "docs/issue-456-design.md",
+    "force": false
+  },
+  "auto_select": true,
+  "auto_run": {
+    "provider": "claude",
+    "max_iterations": 10
+  }
+}
+```
+
+**`existing` field**: Exactly one of `id` or `url` must be provided. Providing both or neither returns `400`.
+
+Success response: Same shape as `POST /api/issues/create` with `mode: "init_existing"`.
+
+Error responses: Same as `POST /api/issues/create`.
+
+**Side effects**: Same as `POST /api/issues/create`.
+
 ## Streaming formats
 
 SSE (`/api/stream`):
@@ -207,6 +540,43 @@ SDK stream (from `sdk-output.json` snapshots):
 - `sdk-tool-start`: `{ tool_use_id: string, name?: unknown, input: unknown }`
 - `sdk-tool-complete`: `{ tool_use_id: string, name?: unknown, duration_ms: number, is_error: boolean }`
 - `sdk-complete`: `{ status: "success" | "error", summary: unknown }`
+
+Provider status:
+- `azure-devops-status`: Emitted after any Azure DevOps credential mutation (PUT, PATCH, DELETE) or reconciliation. Payload:
+  ```jsonc
+  {
+    "issue_ref": "owner/repo#123",
+    "worktree_present": true,
+    "configured": true,
+    "organization": "https://dev.azure.com/myorg",
+    "project": "MyProject",
+    "has_pat": true,
+    "pat_last_updated_at": "2026-02-06T12:00:00.000Z",
+    "pat_env_var_name": "AZURE_DEVOPS_EXT_PAT",
+    "sync_status": "in_sync",
+    "last_attempt_at": "2026-02-06T12:00:00.000Z",
+    "last_success_at": "2026-02-06T12:00:00.000Z",
+    "last_error": null,
+    "operation": "put"               // "put" | "patch" | "delete" | "reconcile" | "auto_reconcile"
+  }
+  ```
+- `issue-ingest-status`: Emitted after a provider-aware issue create or init-from-existing operation. Payload:
+  ```jsonc
+  {
+    "issue_ref": "owner/repo#123",   // null if issue not yet selected
+    "provider": "github",            // "github" or "azure_devops"
+    "mode": "create",                // "create" or "init_existing"
+    "outcome": "success",            // "success" | "partial" | "error"
+    "remote_id": "123",              // string or omitted
+    "remote_url": "https://...",     // string or omitted
+    "warnings": [],
+    "auto_select": { "requested": true, "ok": true },
+    "auto_run": { "requested": false, "ok": false },
+    "error": { "code": "...", "message": "..." },  // present only when outcome is "error"
+    "occurred_at": "2026-02-06T12:00:00.000Z"
+  }
+  ```
+- `sonar-token-status`: Emitted after sonar token mutations or reconciliation. Same pattern as `azure-devops-status`.
 
 Diagnostics:
 - `viewer-error`: `{ source: "poller", message: string, stack?: string }`

@@ -26,6 +26,9 @@ importers:
       eslint:
         specifier: ^9.39.2
         version: 9.39.2
+      jsdom:
+        specifier: ^28.0.0
+        version: 28.0.0
       lefthook:
         specifier: ^2.0.16
         version: 2.0.16

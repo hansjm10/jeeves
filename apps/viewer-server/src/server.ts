@@ -1298,10 +1298,16 @@ export async function buildServer(config: ViewerServerConfig) {
             pat: azurePat,
           });
         } catch {
-          // Hierarchy fetch failure is partial if remote already created/resolved
-          warnings.push('Failed to fetch Azure hierarchy. Hierarchy data is unavailable.');
           if (mode === 'create') {
+            // Remote item was just created by this request — partial success
+            warnings.push('Failed to fetch Azure hierarchy. Hierarchy data is unavailable.');
             outcome = 'partial';
+          } else {
+            // init_existing: no remote mutation happened — this is an error
+            throw {
+              status: 500,
+              body: { ok: false, error: 'Failed to fetch Azure hierarchy.', code: 'hierarchy_fetch_failed' },
+            };
           }
         }
       }

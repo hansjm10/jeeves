@@ -5986,3 +5986,162 @@ describe('provider operation serialization', () => {
     await app.close();
   });
 });
+
+// ============================================================================
+// Ingest hierarchy failure semantics
+// ============================================================================
+
+describe('ingest hierarchy failure semantics', () => {
+  async function setupServerWithIssue(prefix: string, overrides?: {
+    fetchAzureHierarchy?: Parameters<typeof buildServer>[0]['fetchAzureHierarchy'];
+    lookupExistingIssue?: Parameters<typeof buildServer>[0]['lookupExistingIssue'];
+    createProviderIssue?: Parameters<typeof buildServer>[0]['createProviderIssue'];
+  }) {
+    const dataDir = await makeTempDir(`jeeves-vs-${prefix}-`);
+    const repoRoot = await makeTempDir(`jeeves-vs-repo-${prefix}-`);
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueRef = `${owner}/${repo}#42`;
+    const stateDir = getIssueStateDir(owner, repo, 42, dataDir);
+    const worktreeDir = getWorktreePath(owner, repo, 42, dataDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(worktreeDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await git(['init'], { cwd: worktreeDir });
+
+    const server = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueRef,
+      providerOperationLockTimeoutMs: 500,
+      createProviderIssue: overrides?.createProviderIssue ?? (async () => ({
+        id: '99',
+        url: 'https://dev.azure.com/testorg/testproj/_workitems/edit/99',
+        title: 'Test Work Item',
+        kind: 'work_item' as const,
+      })),
+      lookupExistingIssue: overrides?.lookupExistingIssue ?? (async () => ({
+        id: '77',
+        url: 'https://dev.azure.com/testorg/testproj/_workitems/edit/77',
+        title: 'Existing Work Item',
+        kind: 'work_item' as const,
+      })),
+      fetchAzureHierarchy: overrides?.fetchAzureHierarchy,
+    });
+
+    return { ...server, dataDir, stateDir, worktreeDir, issueRef, owner, repo };
+  }
+
+  it('init-from-existing with Azure hierarchy failure returns error', async () => {
+    const { app, stateDir } = await setupServerWithIssue('hierarchy-init-err', {
+      fetchAzureHierarchy: async () => { throw new Error('hierarchy fetch failed'); },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/init-from-existing',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        provider: 'azure_devops',
+        repo: 'testorg/testrepo',
+        existing: { id: 77 },
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj' },
+      },
+    });
+
+    expect(res.statusCode).toBe(500);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe('hierarchy_fetch_failed');
+    expect(body.error).toBe('Failed to fetch Azure hierarchy.');
+
+    // Journal should be finalized as ingest.done_error
+    const journal = await readJournal(stateDir);
+    expect(journal).not.toBeNull();
+    expect(journal!.kind).toBe('ingest');
+    expect(journal!.completed_at).not.toBeNull();
+    expect(journal!.state).toBe('ingest.done_error');
+
+    await app.close();
+  });
+
+  it('create with Azure hierarchy failure returns partial with remote reference and warning', async () => {
+    const { app } = await setupServerWithIssue('hierarchy-create-partial', {
+      fetchAzureHierarchy: async () => { throw new Error('hierarchy fetch failed'); },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/create',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        provider: 'azure_devops',
+        repo: 'testorg/testrepo',
+        title: 'Test Work Item',
+        body: 'Body text',
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj', work_item_type: 'Task' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.outcome).toBe('partial');
+    expect(body.mode).toBe('create');
+
+    // Remote reference should be preserved
+    expect(body.remote).toBeTruthy();
+    const remote = body.remote as Record<string, unknown>;
+    expect(remote.id).toBe('99');
+    expect(remote.url).toBe('https://dev.azure.com/testorg/testproj/_workitems/edit/99');
+
+    // Warning should be present
+    expect(Array.isArray(body.warnings)).toBe(true);
+    const warnings = body.warnings as string[];
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.some((w: string) => w.includes('hierarchy'))).toBe(true);
+
+    await app.close();
+  });
+
+  it('init-from-existing with Azure hierarchy success returns success with hierarchy', async () => {
+    const { app } = await setupServerWithIssue('hierarchy-init-ok', {
+      fetchAzureHierarchy: async () => ({
+        parent: { id: '10', url: 'https://dev.azure.com/testorg/testproj/_workitems/edit/10', title: 'Parent Epic' },
+        children: [],
+      }),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/issues/init-from-existing',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        provider: 'azure_devops',
+        repo: 'testorg/testrepo',
+        existing: { id: 77 },
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj' },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.outcome).toBe('success');
+    expect(body.mode).toBe('init_existing');
+
+    // Hierarchy should be present
+    expect(body.hierarchy).toBeTruthy();
+    const hierarchy = body.hierarchy as Record<string, unknown>;
+    expect(hierarchy.parent).toBeTruthy();
+    const parent = hierarchy.parent as Record<string, unknown>;
+    expect(parent.id).toBe('10');
+    expect(parent.title).toBe('Parent Epic');
+
+    await app.close();
+  });
+});

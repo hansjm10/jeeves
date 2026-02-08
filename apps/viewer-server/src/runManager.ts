@@ -1441,7 +1441,9 @@ export class RunManager {
       });
     }
 
-    const allowedKeys = new Set(PHASE_ALLOWED_STATUS_UPDATES[params.phase] ?? []);
+    const allowedKeys = new Set<TransitionStatusField>(
+      PHASE_ALLOWED_STATUS_UPDATES[params.phase] ?? TRANSITION_STATUS_FIELDS,
+    );
     const filtered: TransitionStatusUpdates = {};
     const ignoredStatusKeys: string[] = [];
     for (const [key, value] of Object.entries(claimedStatusUpdates)) {
@@ -1478,9 +1480,9 @@ export class RunManager {
     if (hasOwn(params.issueBeforeIteration, 'phase')) issueAfterIteration.phase = params.issueBeforeIteration.phase;
     else delete issueAfterIteration.phase;
 
-    // Failed iterations skip workflow-switch reconciliation, so restore workflow too
-    // to avoid carrying an invalid workflow/phase combination into the next loop.
-    if (params.exitCode !== 0) {
+    // Failed iterations and stop-requested iterations skip workflow-switch reconciliation,
+    // so restore workflow too to avoid persisting an invalid workflow/phase combination.
+    if (params.exitCode !== 0 || this.stopRequested) {
       if (hasOwn(params.issueBeforeIteration, 'workflow')) issueAfterIteration.workflow = params.issueBeforeIteration.workflow;
       else delete issueAfterIteration.workflow;
     }

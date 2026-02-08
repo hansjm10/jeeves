@@ -1749,6 +1749,83 @@ describe('RunManager quick-fix workflow switching', () => {
     expect(rm.getStatus().last_error).toContain('runner exited with code 17');
     expect(rm.getStatus().last_error).not.toContain('Unknown phase');
   });
+
+  it('restores workflow on stop-requested successful exit from a workflow-switching phase', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-switch-stop-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-switch-stop-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 791;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_handoff', workflow: 'quick-fix', branch: 'issue/791', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let wroteSwitch = false;
+    const calls: string[][] = [];
+    const spawn = ((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      const phaseIdx = args.findIndex((a) => a === '--phase');
+      const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
+      if (phase === 'design_handoff' && !wroteSwitch) {
+        wroteSwitch = true;
+        // Simulate a successful phase writing a workflow switch before stop skips reconciliation.
+        void fs.writeFile(
+          path.join(stateDir, 'issue.json'),
+          JSON.stringify(
+            { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_handoff', workflow: 'default', branch: 'issue/791', notes: '' },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      }
+      return makeFakeChild(0, 250);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 3, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await new Promise((r) => setTimeout(r, 40));
+    await rm.stop({ reason: 'manual stop after workflow switch write' });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.workflow).toBe('quick-fix');
+    expect(updatedIssue?.phase).toBe('design_handoff');
+
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(rm.getStatus().last_error ?? '').not.toContain('Unknown phase');
+  });
 });
 
 describe('RunManager orchestrator-owned transition flags', () => {
@@ -1960,6 +2037,116 @@ describe('RunManager orchestrator-owned transition flags', () => {
     };
     expect(report.source).toBe('agent_file');
     expect(report.ignoredStatusKeys).toContain('designApproved');
+  });
+
+  it('commits transition updates for custom phase names', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-custom-phase-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-custom-phase-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-custom-phase-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-custom-phase-status-update';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: custom_review',
+        '',
+        'phases:',
+        '  custom_review:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '    transitions:',
+        '      - to: complete',
+        '        when: status.reviewClean == true',
+        '  complete:',
+        '    type: terminal',
+        '    transitions: []',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 9204;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'custom_review',
+          workflow: workflowName,
+          branch: 'issue/9204',
+          notes: '',
+          status: { reviewClean: false, reviewNeedsChanges: true },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify(
+            {
+              schemaVersion: 1,
+              phase: 'custom_review',
+              statusUpdates: {
+                reviewClean: true,
+                reviewNeedsChanges: false,
+              },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.phase).toBe('complete');
+    const status = (updatedIssue?.status ?? {}) as Record<string, unknown>;
+    expect(status.reviewClean).toBe(true);
+    expect(status.reviewNeedsChanges).toBe(false);
+
+    const report = JSON.parse(await fs.readFile(path.join(stateDir, 'phase-report.json'), 'utf-8')) as {
+      committedStatusUpdates?: Record<string, unknown>;
+      ignoredStatusKeys?: string[];
+    };
+    expect(report.committedStatusUpdates?.reviewClean).toBe(true);
+    expect(report.ignoredStatusKeys ?? []).not.toContain('reviewClean');
+    expect(rm.getStatus().completion_reason).toBe('reached terminal phase: complete');
   });
 
   it('preserves single CI failure flags from fix_ci phase-report updates', async () => {

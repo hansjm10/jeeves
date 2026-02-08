@@ -192,7 +192,12 @@ feat(task): implement validation for user input (T3)
 
 If commit fails (lint, pre-commit hooks, etc.):
 
-Set status.commitFailed = true in .jeeves/issue.json
+Write `.jeeves/phase-report.json` with:
+- `schemaVersion: 1`
+- `phase: "implement_task"`
+- `outcome: "commit_failed"`
+- `statusUpdates.commitFailed = true`
+- `statusUpdates.pushFailed = false`
 
 Write error details to .jeeves/ci-error.txt
 
@@ -208,7 +213,12 @@ git push -u origin HEAD
 
 If push fails:
 
-Set status.pushFailed = true in .jeeves/issue.json
+Write `.jeeves/phase-report.json` with:
+- `schemaVersion: 1`
+- `phase: "implement_task"`
+- `outcome: "push_failed"`
+- `statusUpdates.commitFailed = false`
+- `statusUpdates.pushFailed = true`
 
 Write error details to .jeeves/ci-error.txt
 

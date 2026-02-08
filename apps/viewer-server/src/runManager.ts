@@ -121,6 +121,160 @@ function validateQuick(value: unknown): boolean | null {
   throw new Error('Invalid quick: must be boolean');
 }
 
+const PHASE_REPORT_FILE = 'phase-report.json';
+
+const TRANSITION_STATUS_FIELDS = [
+  'designApproved',
+  'designNeedsChanges',
+  'taskPassed',
+  'taskFailed',
+  'hasMoreTasks',
+  'allTasksComplete',
+  'reviewClean',
+  'reviewNeedsChanges',
+  'preCheckPassed',
+  'preCheckFailed',
+  'implementationComplete',
+  'missingWork',
+  'needsDesign',
+  'handoffComplete',
+  'prCreated',
+  'commitFailed',
+  'pushFailed',
+] as const;
+
+type TransitionStatusField = (typeof TRANSITION_STATUS_FIELDS)[number];
+type TransitionStatusUpdates = Partial<Record<TransitionStatusField, boolean>>;
+
+const PHASE_ALLOWED_STATUS_UPDATES: Record<string, readonly TransitionStatusField[]> = {
+  design_review: ['designApproved', 'designNeedsChanges'],
+  design_edit: ['designNeedsChanges'],
+  task_spec_check: ['taskPassed', 'taskFailed', 'hasMoreTasks', 'allTasksComplete'],
+  implement_task: ['commitFailed', 'pushFailed'],
+  code_review: ['reviewClean', 'reviewNeedsChanges'],
+  code_fix: ['reviewNeedsChanges'],
+  pre_implementation_check: ['preCheckPassed', 'preCheckFailed'],
+  completeness_verification: ['implementationComplete', 'missingWork', 'allTasksComplete'],
+  quick_fix: ['implementationComplete', 'needsDesign'],
+  design_handoff: ['handoffComplete', 'needsDesign'],
+  prepare_pr: ['prCreated'],
+  fix_ci: ['commitFailed', 'pushFailed'],
+};
+
+function hasOwn(obj: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function getStatusRecord(issueJson: Record<string, unknown>): Record<string, unknown> {
+  const status = issueJson.status;
+  if (isPlainRecord(status)) return status;
+  const next: Record<string, unknown> = {};
+  issueJson.status = next;
+  return next;
+}
+
+function copyStatusFieldFromSource(params: {
+  target: Record<string, unknown>;
+  source: Record<string, unknown>;
+  key: TransitionStatusField;
+}): void {
+  const { target, source, key } = params;
+  if (hasOwn(source, key)) target[key] = source[key];
+  else delete target[key];
+}
+
+function extractBooleanStatusUpdates(
+  statusLike: unknown,
+  allowedKeys?: ReadonlySet<TransitionStatusField>,
+): TransitionStatusUpdates {
+  if (!isPlainRecord(statusLike)) return {};
+  const out: TransitionStatusUpdates = {};
+  for (const key of TRANSITION_STATUS_FIELDS) {
+    if (allowedKeys && !allowedKeys.has(key)) continue;
+    const value = statusLike[key];
+    if (typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+function inferStatusUpdatesFromIssueDiff(params: {
+  beforeIssue: Record<string, unknown>;
+  afterIssue: Record<string, unknown>;
+}): TransitionStatusUpdates {
+  const beforeStatus = isPlainRecord(params.beforeIssue.status) ? params.beforeIssue.status : {};
+  const afterStatus = isPlainRecord(params.afterIssue.status) ? params.afterIssue.status : {};
+  const out: TransitionStatusUpdates = {};
+  for (const key of TRANSITION_STATUS_FIELDS) {
+    const beforeVal = beforeStatus[key];
+    const afterVal = afterStatus[key];
+    if (typeof afterVal === 'boolean' && afterVal !== beforeVal) out[key] = afterVal;
+  }
+  return out;
+}
+
+function normalizePhaseStatusUpdates(
+  phase: string,
+  updates: TransitionStatusUpdates,
+): TransitionStatusUpdates {
+  const next: TransitionStatusUpdates = { ...updates };
+
+  if (phase === 'design_review') {
+    if (next.designApproved === true) next.designNeedsChanges = false;
+    if (next.designNeedsChanges === true) next.designApproved = false;
+  }
+
+  if (phase === 'code_review') {
+    if (next.reviewClean === true) next.reviewNeedsChanges = false;
+    if (next.reviewNeedsChanges === true) next.reviewClean = false;
+  }
+
+  if (phase === 'pre_implementation_check') {
+    if (next.preCheckPassed === true) next.preCheckFailed = false;
+    if (next.preCheckFailed === true) next.preCheckPassed = false;
+  }
+
+  if (phase === 'task_spec_check') {
+    if (next.taskFailed === true) {
+      next.taskPassed = false;
+      next.hasMoreTasks = true;
+      next.allTasksComplete = false;
+    }
+    if (next.allTasksComplete === true) {
+      next.taskPassed = true;
+      next.taskFailed = false;
+      next.hasMoreTasks = false;
+    }
+    if (next.taskPassed === true && next.hasMoreTasks === true) {
+      next.taskFailed = false;
+      next.allTasksComplete = false;
+    }
+  }
+
+  if (phase === 'completeness_verification') {
+    if (next.implementationComplete === true) next.missingWork = false;
+    if (next.missingWork === true) {
+      next.implementationComplete = false;
+      next.allTasksComplete = false;
+    }
+  }
+
+  if (phase === 'quick_fix') {
+    if (next.implementationComplete === true) next.needsDesign = false;
+    if (next.needsDesign === true) next.implementationComplete = false;
+  }
+
+  if (phase === 'design_handoff') {
+    if (next.handoffComplete === true) next.needsDesign = true;
+  }
+
+  if (phase === 'fix_ci') {
+    if (next.commitFailed === false) next.pushFailed = false;
+    if (next.pushFailed === false) next.commitFailed = false;
+  }
+
+  return next;
+}
+
 export class RunManager {
   private readonly promptsDir: string;
   private readonly workflowsDir: string;
@@ -666,8 +820,8 @@ export class RunManager {
 	            );
 	          }
 	        }
-	        const engine = new WorkflowEngine(workflow);
-	        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
+        const engine = new WorkflowEngine(workflow);
+        const effectiveProvider = mapProvider(workflow.phases[currentPhase]?.provider ?? workflow.defaultProvider ?? params.provider);
 
         // Compute effective model: phase.model ?? workflow.defaultModel ?? (provider default = undefined)
         const effectiveModel = getEffectiveModel(workflow, currentPhase);
@@ -690,6 +844,9 @@ export class RunManager {
           this.broadcast('run', { run: this.status });
           break;
         }
+
+        const issueBeforeIteration = JSON.parse(JSON.stringify(issueJson)) as Record<string, unknown>;
+        await this.clearPhaseReportFile();
 
         const lastRunLog = path.join(this.stateDir!, 'last-run.log');
         let lastSize = 0;
@@ -877,6 +1034,15 @@ export class RunManager {
         this.status = { ...this.status, returncode: exitCode };
         this.broadcast('run', { run: this.status });
 
+        const phaseCommitResult = !parallelEnabled
+          ? await this.commitOrchestratorOwnedPhaseState({
+              phase: currentPhase,
+              issueBeforeIteration,
+              exitCode,
+              viewerLogPath,
+            })
+          : null;
+
         await this.archiveIteration({
           iteration,
           workflow: workflowName,
@@ -886,6 +1052,9 @@ export class RunManager {
           started_at: iterStartedAt,
           ended_at: nowIso(),
           exit_code: exitCode,
+          phase_report_source: phaseCommitResult?.source ?? null,
+          phase_report_committed_fields: Object.keys(phaseCommitResult?.committedStatusUpdates ?? {}).sort(),
+          phase_report_ignored_fields: (phaseCommitResult?.ignoredStatusKeys ?? []).slice(),
         });
 
         if (exitCode !== 0) {
@@ -1157,6 +1326,207 @@ export class RunManager {
     }
   }
 
+  private async clearPhaseReportFile(): Promise<void> {
+    if (!this.stateDir) return;
+    await fs.rm(path.join(this.stateDir, PHASE_REPORT_FILE), { force: true }).catch(() => void 0);
+  }
+
+  private parsePhaseReportFile(
+    raw: string,
+    expectedPhase: string,
+  ): {
+    statusUpdates: TransitionStatusUpdates;
+    outcome: string | null;
+    reasons: string[];
+    evidenceRefs: string[];
+    errors: string[];
+  } {
+    const errors: string[] = [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return {
+        statusUpdates: {},
+        outcome: null,
+        reasons: [],
+        evidenceRefs: [],
+        errors: ['phase-report.json is not valid JSON'],
+      };
+    }
+
+    if (!isPlainRecord(parsed)) {
+      return {
+        statusUpdates: {},
+        outcome: null,
+        reasons: [],
+        evidenceRefs: [],
+        errors: ['phase-report.json must be a JSON object'],
+      };
+    }
+
+    if (parsed.schemaVersion !== undefined && parsed.schemaVersion !== 1) {
+      errors.push(`phase-report.json schemaVersion=${String(parsed.schemaVersion)} is unsupported (expected 1)`);
+    }
+
+    if (typeof parsed.phase === 'string' && parsed.phase.trim() && parsed.phase.trim() !== expectedPhase) {
+      errors.push(`phase-report.json phase='${parsed.phase}' does not match current phase '${expectedPhase}'`);
+    }
+
+    let statusUpdates: TransitionStatusUpdates = {};
+    if (hasOwn(parsed, 'statusUpdates')) {
+      statusUpdates = extractBooleanStatusUpdates(parsed.statusUpdates);
+      if (!isPlainRecord(parsed.statusUpdates)) {
+        errors.push('phase-report.json.statusUpdates must be an object when provided');
+      }
+    }
+
+    const outcome = typeof parsed.outcome === 'string' && parsed.outcome.trim()
+      ? parsed.outcome.trim()
+      : null;
+
+    const reasons = Array.isArray(parsed.reasons)
+      ? parsed.reasons.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      : [];
+
+    const evidenceRefs = Array.isArray(parsed.evidenceRefs)
+      ? parsed.evidenceRefs.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      : [];
+
+    return { statusUpdates, outcome, reasons, evidenceRefs, errors };
+  }
+
+  private async commitOrchestratorOwnedPhaseState(params: {
+    phase: string;
+    issueBeforeIteration: Record<string, unknown>;
+    exitCode: number;
+    viewerLogPath: string;
+  }): Promise<{
+    source: 'agent_file' | 'inferred';
+    claimedStatusUpdates: TransitionStatusUpdates;
+    committedStatusUpdates: TransitionStatusUpdates;
+    ignoredStatusKeys: string[];
+    validationErrors: string[];
+  } | null> {
+    if (!this.stateDir) return null;
+
+    const issueAfterIteration = await readIssueJson(this.stateDir);
+    if (!issueAfterIteration) {
+      await this.appendViewerLog(params.viewerLogPath, '[PHASE_REPORT] issue.json missing after phase run; skipping orchestrator commit');
+      return null;
+    }
+
+    const beforeStatus = isPlainRecord(params.issueBeforeIteration.status)
+      ? params.issueBeforeIteration.status
+      : {};
+    const afterIssueBeforeCommit = JSON.stringify(issueAfterIteration);
+
+    const reportPath = path.join(this.stateDir, PHASE_REPORT_FILE);
+    const reportRaw = await fs.readFile(reportPath, 'utf-8').catch(() => null);
+
+    let source: 'agent_file' | 'inferred' = 'inferred';
+    let claimedStatusUpdates: TransitionStatusUpdates = {};
+    let outcome: string | null = null;
+    let reasons: string[] = [];
+    let evidenceRefs: string[] = [];
+    const validationErrors: string[] = [];
+
+    if (reportRaw) {
+      source = 'agent_file';
+      const parsed = this.parsePhaseReportFile(reportRaw, params.phase);
+      claimedStatusUpdates = parsed.statusUpdates;
+      outcome = parsed.outcome;
+      reasons = parsed.reasons;
+      evidenceRefs = parsed.evidenceRefs;
+      validationErrors.push(...parsed.errors);
+    } else {
+      claimedStatusUpdates = inferStatusUpdatesFromIssueDiff({
+        beforeIssue: params.issueBeforeIteration,
+        afterIssue: issueAfterIteration,
+      });
+    }
+
+    const allowedKeys = new Set(PHASE_ALLOWED_STATUS_UPDATES[params.phase] ?? []);
+    const filtered: TransitionStatusUpdates = {};
+    const ignoredStatusKeys: string[] = [];
+    for (const [key, value] of Object.entries(claimedStatusUpdates)) {
+      const typedKey = key as TransitionStatusField;
+      if (!allowedKeys.has(typedKey)) {
+        ignoredStatusKeys.push(key);
+        continue;
+      }
+      if (typeof value === 'boolean') filtered[typedKey] = value;
+    }
+
+    let committedStatusUpdates = normalizePhaseStatusUpdates(params.phase, filtered);
+    const committedFiltered: TransitionStatusUpdates = {};
+    for (const [key, value] of Object.entries(committedStatusUpdates)) {
+      const typedKey = key as TransitionStatusField;
+      if (!allowedKeys.has(typedKey)) {
+        ignoredStatusKeys.push(key);
+        continue;
+      }
+      committedFiltered[typedKey] = value;
+    }
+    committedStatusUpdates = committedFiltered;
+
+    if (params.exitCode !== 0 && Object.keys(committedStatusUpdates).length > 0) {
+      validationErrors.push(`Ignored status updates because phase exited non-zero (exitCode=${params.exitCode})`);
+      committedStatusUpdates = {};
+    }
+
+    const nextStatus = getStatusRecord(issueAfterIteration);
+    for (const key of TRANSITION_STATUS_FIELDS) {
+      copyStatusFieldFromSource({ target: nextStatus, source: beforeStatus, key });
+    }
+
+    if (hasOwn(params.issueBeforeIteration, 'phase')) issueAfterIteration.phase = params.issueBeforeIteration.phase;
+    else delete issueAfterIteration.phase;
+
+    for (const [key, value] of Object.entries(committedStatusUpdates)) {
+      nextStatus[key] = value;
+    }
+
+    const afterIssueAfterCommit = JSON.stringify(issueAfterIteration);
+    if (afterIssueAfterCommit !== afterIssueBeforeCommit) {
+      await writeIssueJson(this.stateDir, issueAfterIteration);
+    }
+
+    const auditReport: Record<string, unknown> = {
+      schemaVersion: 1,
+      phase: params.phase,
+      generatedAt: nowIso(),
+      source,
+      exitCode: params.exitCode,
+      claimedStatusUpdates,
+      committedStatusUpdates,
+      ignoredStatusKeys: Array.from(new Set(ignoredStatusKeys)).sort(),
+      validationErrors,
+      outcome,
+      reasons,
+      evidenceRefs,
+    };
+    await writeJsonAtomic(reportPath, auditReport);
+
+    const committedKeys = Object.keys(committedStatusUpdates);
+    const ignoredKeys = Array.from(new Set(ignoredStatusKeys)).sort();
+    await this.appendViewerLog(
+      params.viewerLogPath,
+      `[PHASE_REPORT] source=${source} committed=[${committedKeys.join(',') || 'none'}] ignored=[${ignoredKeys.join(',') || 'none'}]`,
+    );
+    for (const error of validationErrors) {
+      await this.appendViewerLog(params.viewerLogPath, `[PHASE_REPORT] warning: ${error}`);
+    }
+
+    return {
+      source,
+      claimedStatusUpdates,
+      committedStatusUpdates,
+      ignoredStatusKeys: ignoredKeys,
+      validationErrors,
+    };
+  }
+
   private async persistLastRunStatus(): Promise<void> {
     if (!this.stateDir) return;
     const outPath = path.join(this.stateDir, 'viewer-run-status.json');
@@ -1181,6 +1551,9 @@ export class RunManager {
     started_at: string;
     ended_at: string;
     exit_code: number;
+    phase_report_source?: string | null;
+    phase_report_committed_fields?: string[];
+    phase_report_ignored_fields?: string[];
   }): Promise<void> {
     if (!this.stateDir || !this.runDir) return;
     const iterDir = path.join(this.runDir, 'iterations', String(params.iteration).padStart(3, '0'));
@@ -1196,6 +1569,7 @@ export class RunManager {
     copyIfExists(path.join(this.stateDir, 'issue.json'), 'issue.json');
     copyIfExists(path.join(this.stateDir, 'tasks.json'), 'tasks.json');
     copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
+    copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
     await Promise.allSettled(copies);
 
     await this.captureGitDebug(iterDir).catch(() => void 0);

@@ -212,28 +212,36 @@ Anything you don’t want to block on must go under “Optional Suggestions.”
 
 <completion>
 
-Update .jeeves/issue.json:
+Do NOT directly set `reviewNeedsChanges` or `reviewClean` in `.jeeves/issue.json`.
+
+Write `.jeeves/phase-report.json`:
 
 If any issues found:
-
+```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "code_review",
+  "outcome": "needs_changes",
+  "statusUpdates": {
     "reviewNeedsChanges": true,
     "reviewClean": false
   }
 }
-
+```
 
 If zero issues found:
-
+```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "code_review",
+  "outcome": "clean",
+  "statusUpdates": {
     "reviewNeedsChanges": false,
     "reviewClean": true
   }
 }
+```
 
-
-Also append a progress summary to .jeeves/progress.txt.
+Also append a progress summary to `.jeeves/progress.txt`.
 
 </completion>

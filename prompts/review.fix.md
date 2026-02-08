@@ -97,10 +97,13 @@ Before fixing each issue, think through:
 </thinking_guidance>
 
 <completion>
-After addressing all Critical and High issues, update `.jeeves/issue.json`:
+After addressing all Critical and High issues, write `.jeeves/phase-report.json`:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "code_fix",
+  "outcome": "blocking_issues_addressed",
+  "statusUpdates": {
     "reviewNeedsChanges": false
   }
 }

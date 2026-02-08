@@ -1674,6 +1674,218 @@ describe('RunManager quick-fix workflow switching', () => {
   });
 });
 
+describe('RunManager orchestrator-owned transition flags', () => {
+  it('restores protected fields from issue.json writes and commits inferred allowed updates', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-protect-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-protect-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 9201;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'design_review',
+          workflow: 'default',
+          branch: 'issue/9201',
+          notes: '',
+          status: { designApproved: false, designNeedsChanges: true, reviewClean: false },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'issue.json'),
+          JSON.stringify(
+            {
+              repo: `${owner}/${repo}`,
+              issue: { number: issueNumber },
+              phase: 'complete',
+              workflow: 'default',
+              branch: 'issue/9201',
+              notes: '',
+              status: { designApproved: true, designNeedsChanges: false, reviewClean: true },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.phase).toBe('task_decomposition');
+    const status = (updatedIssue?.status ?? {}) as Record<string, unknown>;
+    expect(status.designApproved).toBe(true);
+    expect(status.designNeedsChanges).toBe(false);
+    expect(status.reviewClean).toBe(false); // disallowed in design_review, restored from pre-iteration state
+
+    const phaseReportPath = path.join(stateDir, 'phase-report.json');
+    const report = JSON.parse(await fs.readFile(phaseReportPath, 'utf-8')) as {
+      source: string;
+      claimedStatusUpdates?: Record<string, unknown>;
+      committedStatusUpdates?: Record<string, unknown>;
+      ignoredStatusKeys?: string[];
+    };
+    expect(report.source).toBe('inferred');
+    expect(report.claimedStatusUpdates?.designApproved).toBe(true);
+    expect(report.committedStatusUpdates?.designApproved).toBe(true);
+    expect(report.ignoredStatusKeys).toContain('reviewClean');
+
+    const runsDir = path.join(stateDir, '.runs');
+    const runEntries = await fs.readdir(runsDir, { withFileTypes: true });
+    const runIds = runEntries.filter((e) => e.isDirectory()).map((e) => e.name);
+    expect(runIds.length).toBeGreaterThan(0);
+    const archivedReport = path.join(runsDir, runIds[0], 'iterations', '001', 'phase-report.json');
+    const archivedExists = await fs
+      .stat(archivedReport)
+      .then((s) => s.isFile())
+      .catch(() => false);
+    expect(archivedExists).toBe(true);
+  });
+
+  it('uses explicit phase-report.json and ignores non-phase fields', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-protect-report-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-protect-report-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 9202;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'code_review',
+          workflow: 'default',
+          branch: 'issue/9202',
+          notes: '',
+          status: { reviewClean: false, reviewNeedsChanges: true, designApproved: false },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify(
+            {
+              schemaVersion: 1,
+              phase: 'code_review',
+              outcome: 'clean',
+              statusUpdates: {
+                reviewClean: true,
+                reviewNeedsChanges: false,
+                designApproved: true,
+              },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'issue.json'),
+          JSON.stringify(
+            {
+              repo: `${owner}/${repo}`,
+              issue: { number: issueNumber },
+              phase: 'complete',
+              workflow: 'default',
+              branch: 'issue/9202',
+              notes: '',
+              status: { reviewClean: true, reviewNeedsChanges: false, designApproved: true },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.phase).toBe('complete');
+    const status = (updatedIssue?.status ?? {}) as Record<string, unknown>;
+    expect(status.reviewClean).toBe(true);
+    expect(status.reviewNeedsChanges).toBe(false);
+    expect(status.designApproved).toBe(false); // disallowed in code_review, restored
+
+    const report = JSON.parse(await fs.readFile(path.join(stateDir, 'phase-report.json'), 'utf-8')) as {
+      source: string;
+      ignoredStatusKeys?: string[];
+    };
+    expect(report.source).toBe('agent_file');
+    expect(report.ignoredStatusKeys).toContain('designApproved');
+  });
+});
+
 describe('RunManager max_iterations handling', () => {
   // Helper to create a minimal RunManager setup for testing max_iterations behavior
   async function setupTestRun(issueNumber: number) {

@@ -28,11 +28,14 @@ You are escalating a change that started as a quick fix into the full design-fir
 
 2. Update `.jeeves/issue.json` to hand off to the default workflow:
    - Set `workflow = "default"`
-   - Set `phase = "design_classify"`
-   - Set `status.handoffComplete = true`
-   - Keep `status.needsDesign = true` (so it's explicit why we handed off)
+   - Do NOT set `phase` directly
+   - Keep `status.needsDesign` context in the phase report (below)
 
-3. Append to `.jeeves/progress.txt`:
+3. Write `.jeeves/phase-report.json`:
+   - `handoffComplete = true`
+   - `needsDesign = true`
+
+4. Append to `.jeeves/progress.txt`:
    - Why the work exceeded quick-fix scope
    - What work is already done (if any)
    - Next steps for the design phases
@@ -42,13 +45,20 @@ You are escalating a change that started as a quick fix into the full design-fir
 Update `.jeeves/issue.json`:
 ```json
 {
-  "workflow": "default",
-  "phase": "design_classify",
-  "status": {
+  "workflow": "default"
+}
+```
+
+Write `.jeeves/phase-report.json`:
+```json
+{
+  "schemaVersion": 1,
+  "phase": "design_handoff",
+  "outcome": "handoff_complete",
+  "statusUpdates": {
     "handoffComplete": true,
     "needsDesign": true
   }
 }
 ```
 </completion>
-

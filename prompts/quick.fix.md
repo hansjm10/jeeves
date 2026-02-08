@@ -56,10 +56,13 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 5. Decide completion vs escalation
    - If the change is complete and verified:
-     - Update `.jeeves/issue.json.status.implementationComplete = true`
-     - Update `.jeeves/issue.json.status.needsDesign = false`
+     - Write `.jeeves/phase-report.json` with:
+       - `implementationComplete = true`
+       - `needsDesign = false`
    - If scope grew beyond a quick fix:
-     - Update `.jeeves/issue.json.status.needsDesign = true`
+     - Write `.jeeves/phase-report.json` with:
+       - `implementationComplete = false`
+       - `needsDesign = true`
      - Briefly explain why in `.jeeves/progress.txt`
 
 6. Append progress
@@ -68,7 +71,6 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 <completion>
 This phase is complete when exactly one is true:
-- `.jeeves/issue.json.status.implementationComplete == true`
-- `.jeeves/issue.json.status.needsDesign == true`
+- `.jeeves/phase-report.json.statusUpdates.implementationComplete == true`
+- `.jeeves/phase-report.json.statusUpdates.needsDesign == true`
 </completion>
-

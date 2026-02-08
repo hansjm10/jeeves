@@ -6,7 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
@@ -4265,4 +4265,76 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     expect(viewerLog).toContain('[STOP]');
     expect(viewerLog).toContain('skipping phase transition');
   }, 30000);
+
+  it('drains queued viewer-log writes before truncating viewer-run.log for a new run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-log-drain-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-log-drain-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 777;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'hello',
+          workflow: 'fixture-trivial',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+    await rm.setIssue(issueRef);
+
+    const viewerLogPath = path.join(stateDir, 'viewer-run.log');
+    const originalAppendFile = fs.appendFile.bind(fs);
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockImplementation(async (...args: Parameters<typeof fs.appendFile>) => {
+      const [filePath, data] = args;
+      if (filePath === viewerLogPath && String(data).includes('[PREVIOUS-RUN-LINE]')) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return originalAppendFile(...args);
+    });
+
+    const pendingPreviousRunWrite = (rm as unknown as {
+      appendViewerLog: (path: string, line: string) => Promise<void>;
+    }).appendViewerLog(viewerLogPath, '[PREVIOUS-RUN-LINE]');
+
+    try {
+      await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+      await waitFor(() => rm.getStatus().running === false, 5000);
+      await pendingPreviousRunWrite;
+    } finally {
+      appendSpy.mockRestore();
+    }
+
+    const viewerLog = await fs.readFile(viewerLogPath, 'utf-8');
+    expect(viewerLog).not.toContain('[PREVIOUS-RUN-LINE]');
+  }, 10000);
 });

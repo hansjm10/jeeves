@@ -118,8 +118,10 @@ export async function writeWorkflowToStore(params: {
   createIfMissing: boolean;
 }): Promise<void> {
   const { dataDir, workflowsDir, name, yaml } = params;
-  upsertWorkflowInDb(dataDir, name, yaml);
   const workflowPath = path.resolve(workflowsDir, `${name}.yaml`);
+  const existing = await fs.lstat(workflowPath).catch(() => null);
+  if (existing?.isSymbolicLink()) throw new Error('Refusing to write to a symlink.');
+  upsertWorkflowInDb(dataDir, name, yaml);
   await fs.mkdir(path.dirname(workflowPath), { recursive: true });
   await fs.writeFile(workflowPath, yaml, 'utf-8');
 }

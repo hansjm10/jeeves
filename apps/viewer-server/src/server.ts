@@ -720,8 +720,11 @@ export async function buildServer(config: ViewerServerConfig) {
   }
 
   function resolveCurrentRunId(stateDir: string | null): string | null {
-    const statusRunId = runManager.getStatus().run_id;
-    if (typeof statusRunId === 'string' && statusRunId.trim().length > 0) return statusRunId.trim();
+    const runStatus = runManager.getStatus();
+    const statusRunId = runStatus.run_id;
+    if (runStatus.running && typeof statusRunId === 'string' && statusRunId.trim().length > 0) {
+      return statusRunId.trim();
+    }
     if (!stateDir) return null;
     return getLatestRunIdForStateDir(dataDir, stateDir);
   }

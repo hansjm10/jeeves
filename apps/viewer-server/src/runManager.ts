@@ -421,6 +421,7 @@ export class RunManager {
 
     const viewerLogPath = path.join(this.stateDir, 'viewer-run.log');
     await fs.mkdir(path.dirname(viewerLogPath), { recursive: true });
+    await this.viewerLogWriteQueue.catch(() => void 0);
     await fs.writeFile(viewerLogPath, '', 'utf-8');
     this.viewerLogWriteQueue = Promise.resolve();
 
@@ -634,21 +635,25 @@ export class RunManager {
 
   private async appendViewerLog(viewerLogPath: string, line: string): Promise<void> {
     const runId = this.runId;
-    this.viewerLogWriteQueue = this.viewerLogWriteQueue.then(async () => {
-      await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
-      if (!runId || !this.dbTelemetryEnabled()) return;
-      try {
-        appendRunLogLine({
-          dataDir: this.dataDir,
-          runId,
-          scope: 'viewer',
-          stream: 'log',
-          line,
-        });
-      } catch {
-        // ignore telemetry persistence failures; they should not block runs
-      }
-    });
+    const queuedWrite = this.viewerLogWriteQueue
+      .catch(() => void 0)
+      .then(async () => {
+        await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
+        if (!runId || !this.dbTelemetryEnabled()) return;
+        try {
+          appendRunLogLine({
+            dataDir: this.dataDir,
+            runId,
+            scope: 'viewer',
+            stream: 'log',
+            line,
+          });
+        } catch {
+          // ignore telemetry persistence failures; they should not block runs
+        }
+      });
+    this.viewerLogWriteQueue = queuedWrite;
+    await queuedWrite;
   }
 
   private async spawnRunner(args: string[], viewerLogPath: string, options?: { model?: string; permissionMode?: string }): Promise<number> {
@@ -1239,10 +1244,7 @@ export class RunManager {
       this.broadcast('run', { run: this.status });
       if (this.status.viewer_log_file) await this.appendViewerLog(this.status.viewer_log_file, `[ERROR] ${msg}`);
     } finally {
-      await Promise.race([
-        this.viewerLogWriteQueue.catch(() => void 0),
-        new Promise<void>((resolve) => setTimeout(resolve, 250)),
-      ]);
+      await this.viewerLogWriteQueue.catch(() => void 0);
       this.proc = null;
       if (this.stopReason && !this.status.completion_reason && !this.status.completed_via_promise && !this.status.completed_via_state) {
         this.status = { ...this.status, completion_reason: this.stopReason };

@@ -14,6 +14,7 @@ import { readIssueJson } from './issueJson.js';
 import { readAzureDevopsSecret } from './azureDevopsSecret.js';
 import { ProviderAdapterError } from './providerIssueAdapter.js';
 import { acquireLock, readJournal, releaseLock, generateOperationId } from './providerOperationJournal.js';
+import { appendRunLogLine, upsertRunSession } from './sqliteStorage.js';
 import { buildServer } from './server.js';
 import { installStateDbFsShim } from './testStateDbShim.js';
 
@@ -708,6 +709,74 @@ describe('viewer-server', () => {
     expect(parsed.start).toBe('start');
     expect(parsed.phases.start.prompt).toBe('do it');
 
+    await app.close();
+  });
+
+  it('PUT /api/workflows/:name rejects writes when workflow file is a symlink', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-put-symlink-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-put-symlink-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const outsideTarget = path.join(repoRoot, 'outside-target.yaml');
+    await fs.writeFile(outsideTarget, 'outside-original\n', 'utf-8');
+    await fs.symlink(outsideTarget, path.join(workflowsDir, 'linked.yaml'));
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/workflows/linked',
+      remoteAddress: '127.0.0.1',
+      payload: {
+        workflow: {
+          workflow: { name: 'linked', version: 1, start: 'start' },
+          phases: {
+            start: { type: 'execute', prompt: 'test', transitions: [{ to: 'complete' }] },
+            complete: { type: 'terminal', transitions: [] },
+          },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    await expect(fs.readFile(outsideTarget, 'utf-8')).resolves.toBe('outside-original\n');
+    await app.close();
+  });
+
+  it('POST /api/workflows rejects writes when workflow file is a symlink', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-workflow-post-symlink-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-workflow-post-symlink-');
+    const workflowsDir = path.join(repoRoot, 'workflows');
+    await fs.mkdir(workflowsDir, { recursive: true });
+
+    const outsideTarget = path.join(repoRoot, 'outside-create-target.yaml');
+    await fs.writeFile(outsideTarget, 'outside-create-original\n', 'utf-8');
+    await fs.symlink(outsideTarget, path.join(workflowsDir, 'linked-create.yaml'));
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/workflows',
+      remoteAddress: '127.0.0.1',
+      payload: { name: 'linked-create' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    await expect(fs.readFile(outsideTarget, 'utf-8')).resolves.toBe('outside-create-original\n');
     await app.close();
   });
 
@@ -4012,6 +4081,126 @@ describe('sonar-token endpoints', () => {
     await app.close();
   });
 
+  it('/api/issues/select refreshes run snapshots by selected issue when prior run_id is stale', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-select-run-snapshot-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-select-run-snapshot-');
+    const owner = 'testorg';
+    const repo = 'testrepo';
+    const issueARef = `${owner}/${repo}#42`;
+    const issueBRef = `${owner}/${repo}#43`;
+    const stateDirA = getIssueStateDir(owner, repo, 42, dataDir);
+    const stateDirB = getIssueStateDir(owner, repo, 43, dataDir);
+    const worktreeA = getWorktreePath(owner, repo, 42, dataDir);
+    const worktreeB = getWorktreePath(owner, repo, 43, dataDir);
+
+    await fs.mkdir(stateDirA, { recursive: true });
+    await fs.mkdir(stateDirB, { recursive: true });
+    await fs.mkdir(worktreeA, { recursive: true });
+    await fs.mkdir(worktreeB, { recursive: true });
+    await fs.writeFile(path.join(stateDirA, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    await fs.writeFile(path.join(stateDirB, 'issue.json'), JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot,
+      initialIssue: issueARef,
+    });
+
+    const runStartRes = await app.inject({
+      method: 'POST',
+      url: '/api/run',
+      remoteAddress: '127.0.0.1',
+      payload: { workflow: 'missing-workflow', max_iterations: 1 },
+    });
+    expect(runStartRes.statusCode).toBe(200);
+
+    const deadline = Date.now() + 5000;
+    let lastRunStatus: { running: boolean; run_id: string | null } = { running: true, run_id: null };
+    while (Date.now() < deadline) {
+      const statusRes = await app.inject({ method: 'GET', url: '/api/run' });
+      const statusBody = statusRes.json() as { run: { running: boolean; run_id: string | null } };
+      lastRunStatus = statusBody.run;
+      if (!lastRunStatus.running) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(lastRunStatus.running).toBe(false);
+    expect(typeof lastRunStatus.run_id).toBe('string');
+    expect(lastRunStatus.run_id).toBeTruthy();
+
+    const issueBRunId = 'run-b-snapshot';
+    upsertRunSession({
+      dataDir,
+      runId: issueBRunId,
+      stateDir: stateDirB,
+      issueRef: issueBRef,
+      startedAt: '2026-02-01T00:00:00.000Z',
+      endedAt: '2026-02-01T00:10:00.000Z',
+      status: { running: false },
+      archiveMeta: {},
+    });
+    appendRunLogLine({
+      dataDir,
+      runId: issueBRunId,
+      scope: 'canonical',
+      stream: 'log',
+      line: 'B-CANONICAL',
+      ts: '2026-02-01T00:01:00.000Z',
+    });
+    appendRunLogLine({
+      dataDir,
+      runId: issueBRunId,
+      scope: 'viewer',
+      stream: 'log',
+      line: 'B-VIEWER',
+      ts: '2026-02-01T00:01:01.000Z',
+    });
+
+    await app.listen({ port: 0 });
+    const actualAddress = app.server.address();
+    const actualPort = typeof actualAddress === 'object' && actualAddress ? actualAddress.port : 0;
+
+    const receivedEvents: { event: string; data: unknown }[] = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
+    await new Promise<void>((resolve) => {
+      ws.on('open', resolve);
+    });
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
+      receivedEvents.push(msg);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    receivedEvents.length = 0;
+
+    const selectRes = await app.inject({
+      method: 'POST',
+      url: '/api/issues/select',
+      remoteAddress: '127.0.0.1',
+      payload: { issue_ref: issueBRef },
+    });
+    expect(selectRes.statusCode).toBe(200);
+
+    await waitFor(() => {
+      const hasCanonical = receivedEvents.some((event) => {
+        if (event.event !== 'logs') return false;
+        const lines = (event.data as { lines?: unknown })?.lines;
+        return Array.isArray(lines) && lines.includes('B-CANONICAL');
+      });
+      const hasViewer = receivedEvents.some((event) => {
+        if (event.event !== 'viewer-logs') return false;
+        const lines = (event.data as { lines?: unknown })?.lines;
+        return Array.isArray(lines) && lines.includes('B-VIEWER');
+      });
+      return hasCanonical && hasViewer;
+    }, 5000);
+
+    ws.close();
+    await app.close();
+  });
+
   it('/api/init/issue triggers auto-reconcile and emits sonar-token-status', async () => {
     const dataDir = await makeTempDir('jeeves-vs-init-autoreconcile-');
     const owner = 'testorg';
@@ -4450,6 +4639,72 @@ describe('sonar-token endpoints', () => {
   // ============================================================================
 
   describe('startup reconcile/cleanup', () => {
+    it('imports legacy filesystem state into DB on startup and restores selected issue', async () => {
+      uninstallFsShim?.();
+      uninstallFsShim = null;
+
+      const dataDir = await makeTempDir('jeeves-vs-startup-legacy-import-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-startup-legacy-import-');
+      const owner = 'legacy';
+      const repo = 'sample';
+      const issueNumber = 7;
+      const issueRef = `${owner}/${repo}#${issueNumber}`;
+      const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(stateDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify({
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber, title: 'Legacy bootstrap issue' },
+          workflow: 'default',
+          phase: 'design',
+          branch: `issue/${issueNumber}`,
+        }),
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(stateDir, 'tasks.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          tasks: [{ id: 'T1', title: 'Bootstrap task', status: 'pending' }],
+        }),
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(dataDir, 'active-issue.json'),
+        JSON.stringify({ issue_ref: issueRef, saved_at: '2026-02-01T00:00:00.000Z' }),
+        'utf-8',
+      );
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot,
+      });
+
+      const issuesRes = await app.inject({ method: 'GET', url: '/api/issues' });
+      expect(issuesRes.statusCode).toBe(200);
+      const issuesBody = issuesRes.json() as {
+        count: number;
+        issues: { owner: string; repo: string; issue_number: number }[];
+      };
+      expect(issuesBody.count).toBe(1);
+      expect(
+        issuesBody.issues.some((item) => item.owner === owner && item.repo === repo && item.issue_number === issueNumber),
+      ).toBe(true);
+
+      const stateRes = await app.inject({ method: 'GET', url: '/api/state' });
+      expect(stateRes.statusCode).toBe(200);
+      const stateBody = stateRes.json() as { issue_ref?: string };
+      expect(stateBody.issue_ref).toBe(issueRef);
+      expect(await loadActiveIssue(dataDir)).toBe(issueRef);
+
+      await app.close();
+    });
+
     it('runs reconcile on startup and creates .env.jeeves when token exists', async () => {
       const dataDir = await makeTempDir('jeeves-vs-startup-reconcile-');
       const repoRoot = await makeTempDir('jeeves-vs-repo-startup-reconcile-');

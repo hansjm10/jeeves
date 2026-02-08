@@ -4,7 +4,6 @@ import path from 'node:path';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import {
-  listIssueStates,
   loadWorkflowByName,
   parseWorkflowObject,
   parseWorkflowYaml,
@@ -17,14 +16,26 @@ import {
 } from '@jeeves/core';
 import Fastify from 'fastify';
 
-import { loadActiveIssue, saveActiveIssue } from './activeIssue.js';
+import { clearActiveIssue, loadActiveIssue, saveActiveIssue } from './activeIssue.js';
+import {
+  cachePromptInStore,
+  cacheWorkflowInStore,
+  listPromptIdsFromStore,
+  listWorkflowNamesFromStore,
+  readPromptFromStore,
+  readWorkflowYamlFromStore,
+  writePromptToStore,
+  writeWorkflowToStore,
+} from './contentStore.js';
 import { EventHub } from './eventHub.js';
 import { CreateGitHubIssueError, createGitHubIssue as defaultCreateGitHubIssue } from './githubIssueCreate.js';
 import { initIssue } from './init.js';
 import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
-import { readIssueJson, writeIssueJson } from './issueJson.js';
+import { listIssueJsonStates, readIssueJson, readIssueJsonUpdatedAtMs, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
+import { getDbHealth, runDbBackup, runDbIntegrityCheck, runDbVacuum } from './sqliteStorage.js';
+import { reconcileStartupState } from './startupReconcile.js';
 import { reconcileAzureDevopsToWorktree } from './azureDevopsReconcile.js';
 import { readAzureDevopsSecret, writeAzureDevopsSecret, deleteAzureDevopsSecret, AzureDevopsSecretReadError } from './azureDevopsSecret.js';
 import {
@@ -74,7 +85,6 @@ import {
 import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
-import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import {
   cleanupStaleArtifacts,
   detectRecovery,
@@ -331,31 +341,6 @@ async function ensureNoSymlinkParents(baseDir: string, relPath: string): Promise
       throw new Error('Refusing to traverse symlinked path segment.');
     }
   }
-}
-
-async function listPromptIds(promptsDir: string): Promise<string[]> {
-  const baseDir = path.resolve(promptsDir);
-
-  async function walk(dir: string, prefix: string): Promise<string[]> {
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    const results: string[] = [];
-    for (const e of entries) {
-      if (e.isSymbolicLink()) continue;
-      const rel = prefix ? `${prefix}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        results.push(...(await walk(path.join(dir, e.name), rel)));
-        continue;
-      }
-      if (e.isFile() && e.name.endsWith('.md')) {
-        results.push(normalizePromptId(rel));
-      }
-    }
-    return results;
-  }
-
-  const ids = await walk(baseDir, '');
-  ids.sort((a, b) => a.localeCompare(b));
-  return ids;
 }
 
 async function resolvePromptPathForRead(promptsDir: string, promptId: string): Promise<string> {
@@ -725,21 +710,20 @@ export async function buildServer(config: ViewerServerConfig) {
   let warnedMissingWorkerArtifactsRunId = false;
 
   async function readIssueJsonCached(stateDir: string): Promise<Record<string, unknown> | null> {
-    const issuePath = path.join(stateDir, 'issue.json');
-    const stat = await fs.stat(issuePath).catch(() => null);
-    if (!stat || !stat.isFile()) {
+    const updatedAtMs = await readIssueJsonUpdatedAtMs(stateDir);
+    if (updatedAtMs <= 0) {
       cachedIssueJsonStateDir = stateDir;
       cachedIssueJsonMtimeMs = 0;
       cachedIssueJson = null;
       return null;
     }
 
-    if (cachedIssueJsonStateDir === stateDir && stat.mtimeMs === cachedIssueJsonMtimeMs) {
+    if (cachedIssueJsonStateDir === stateDir && updatedAtMs === cachedIssueJsonMtimeMs) {
       return cachedIssueJson;
     }
 
     cachedIssueJsonStateDir = stateDir;
-    cachedIssueJsonMtimeMs = stat.mtimeMs;
+    cachedIssueJsonMtimeMs = updatedAtMs;
     cachedIssueJson = await readIssueJson(stateDir);
     return cachedIssueJson;
   }
@@ -817,19 +801,10 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   }
   if (!runManager.getIssue().issueRef) {
-    const issues = await listIssueStates(dataDir);
+    const issues = await listIssueJsonStates(dataDir);
     if (issues.length) {
-      const mtimes = await Promise.all(
-        issues.map(async (i) => ({
-          issue: i,
-          mtime: await fs
-            .stat(i.stateDir)
-            .then((st) => st.mtimeMs)
-            .catch(() => 0),
-        })),
-      );
-      mtimes.sort((a, b) => a.mtime - b.mtime);
-      const latest = mtimes[mtimes.length - 1]?.issue ?? null;
+      issues.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+      const latest = issues[issues.length - 1] ?? null;
       if (latest) {
         const ref = `${latest.owner}/${latest.repo}#${latest.issueNumber}`;
         try {
@@ -840,6 +815,20 @@ export async function buildServer(config: ViewerServerConfig) {
         }
       }
     }
+  }
+
+  try {
+    await reconcileStartupState({
+      dataDir,
+      promptsDir,
+      workflowsDir,
+      selectedStateDir: runManager.getIssue().stateDir,
+    });
+  } catch (err) {
+    console.error(
+      'Startup state reconciliation failed (non-fatal):',
+      err instanceof Error ? err.message : String(err),
+    );
   }
 
   await refreshFileTargets();
@@ -993,8 +982,71 @@ export async function buildServer(config: ViewerServerConfig) {
 
   app.get('/api/run', async () => ({ run: runManager.getStatus() }));
 
+  app.get('/api/db/health', async () => {
+    try {
+      const health = getDbHealth(dataDir);
+      return { ok: true, health };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  app.post('/api/db/integrity-check', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+
+    try {
+      const result = runDbIntegrityCheck(dataDir);
+      return reply.send({ ok: true, integrity: result });
+    } catch (err) {
+      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/db/vacuum', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot vacuum database while Jeeves is running.' });
+    }
+
+    try {
+      const result = runDbVacuum(dataDir);
+      return reply.send({ ok: true, vacuum: result });
+    } catch (err) {
+      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/db/backup', async (req, reply) => {
+    const gate = await requireMutatingAllowed(req);
+    if (!gate.ok) return reply.code(gate.status).send({ ok: false, error: gate.error });
+    if (runManager.getStatus().running) {
+      return reply.code(409).send({ ok: false, error: 'Cannot back up database while Jeeves is running.' });
+    }
+
+    const body = getBody(req);
+    const filenameRaw = parseOptionalString(body.filename);
+    if (filenameRaw && (filenameRaw.includes('/') || filenameRaw.includes('\\') || filenameRaw.includes('..'))) {
+      return reply.code(400).send({ ok: false, error: 'filename must be a simple file name' });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = filenameRaw && filenameRaw.endsWith('.db')
+      ? filenameRaw
+      : `${filenameRaw ?? `jeeves-backup-${timestamp}`}.db`;
+    const backupPath = path.join(dataDir, 'backups', fileName);
+
+    try {
+      const backup = await runDbBackup(dataDir, backupPath);
+      return reply.send({ ok: true, backup });
+    } catch (err) {
+      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
 	  app.get('/api/issues', async () => {
-	    const issues = await listIssueStates(dataDir);
+	    const issues = await listIssueJsonStates(dataDir);
 	    return {
 	      ok: true,
       issues: issues.map((i) => ({
@@ -1014,19 +1066,12 @@ export async function buildServer(config: ViewerServerConfig) {
 
 	  app.get('/api/workflows', async (_req, reply) => {
 	    const absWorkflowsDir = path.resolve(workflowsDir);
-	    try {
-	      const entries = await fs.readdir(absWorkflowsDir, { withFileTypes: true });
-	      const workflows = entries
-	        .filter((ent) => ent.isFile() && !ent.isSymbolicLink() && ent.name.endsWith('.yaml'))
-	        .map((ent) => ({ name: path.basename(ent.name, '.yaml') }))
-	        .sort((a, b) => a.name.localeCompare(b.name));
-	      return reply.send({ ok: true, workflows, workflows_dir: absWorkflowsDir });
-	    } catch (err) {
-	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
-	        return reply.send({ ok: true, workflows: [], workflows_dir: absWorkflowsDir });
-	      }
-	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
-	    }
+	    const names = await listWorkflowNamesFromStore(dataDir);
+	    return reply.send({
+	      ok: true,
+	      workflows: names.map((name) => ({ name })),
+	      workflows_dir: absWorkflowsDir,
+	    });
 	  });
 
 		  app.post('/api/workflows', async (req, reply) => {
@@ -1041,19 +1086,12 @@ export async function buildServer(config: ViewerServerConfig) {
 		    const info = getWorkflowNameParamInfo(nameRaw);
 		    if (!info || !isValidWorkflowName(info.name)) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
 
+		    const existing = await readWorkflowYamlFromStore(dataDir, info.name);
+		    if (existing !== null) return reply.code(409).send({ ok: false, error: 'workflow already exists' });
+
 		    const fromProvided = body.from !== undefined;
 		    const fromRaw = parseOptionalString(body.from);
 		    if (fromProvided && !fromRaw) return reply.code(400).send({ ok: false, error: 'from must be a string' });
-
-		    const absWorkflowsDir = path.resolve(workflowsDir);
-		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
-		    const rel = path.relative(absWorkflowsDir, resolved);
-		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
-		    }
-
-		    const existing = await fs.stat(resolved).catch(() => null);
-		    if (existing) return reply.code(409).send({ ok: false, error: 'workflow already exists' });
 
 		    try {
 		      const workflow =
@@ -1061,7 +1099,11 @@ export async function buildServer(config: ViewerServerConfig) {
 		          ? (() => {
 		              const fromInfo = getWorkflowNameParamInfo(fromRaw);
 		              if (!fromInfo || !isValidWorkflowName(fromInfo.name)) throw new Error('invalid workflow name');
-		              return loadWorkflowByName(fromInfo.name, { workflowsDir }).then((src) => ({ ...src, name: info.name }));
+		              return readWorkflowYamlFromStore(dataDir, fromInfo.name).then((yaml) => {
+		                if (yaml === null) throw Object.assign(new Error('workflow not found'), { code: 'ENOENT' });
+		                const parsed = parseWorkflowYaml(yaml, { sourceName: fromInfo.name });
+		                return { ...parsed, name: info.name };
+		              });
 		            })()
 		          : Promise.resolve(
 		              parseWorkflowObject(
@@ -1078,7 +1120,13 @@ export async function buildServer(config: ViewerServerConfig) {
 
 		      const resolvedWorkflow = await workflow;
 		      const yaml = toWorkflowYaml(resolvedWorkflow);
-		      await writeTextAtomicNew(resolved, yaml);
+		      await writeWorkflowToStore({
+		        dataDir,
+		        workflowsDir,
+		        name: info.name,
+		        yaml,
+		        createIfMissing: true,
+		      });
 		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(resolvedWorkflow) });
 		    } catch (err) {
 		      if (err && typeof err === 'object' && 'code' in err && err.code === 'EEXIST') {
@@ -1098,34 +1146,23 @@ export async function buildServer(config: ViewerServerConfig) {
 		    const info = getWorkflowNameParamInfo(raw);
 		    if (!info) return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
 
-	    const absWorkflowsDir = path.resolve(workflowsDir);
-	    const resolved = path.resolve(absWorkflowsDir, info.fileName);
-	    const rel = path.relative(absWorkflowsDir, resolved);
-	    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-	      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
-	    }
+		    let yaml = await readWorkflowYamlFromStore(dataDir, info.name);
+		    if (yaml === null) {
+		      const filePath = path.resolve(workflowsDir, info.fileName);
+		      const stat = await fs.lstat(filePath).catch(() => null);
+		      if (!stat || stat.isSymbolicLink()) {
+		        return reply.code(404).send({ ok: false, error: 'workflow not found' });
+		      }
+		      yaml = await fs.readFile(filePath, 'utf-8').catch(() => null);
+		      if (yaml === null) return reply.code(404).send({ ok: false, error: 'workflow not found' });
+		      await cacheWorkflowInStore(dataDir, info.name, yaml);
+		    }
 
-	    // Check for symlink before reading (security: prevent reading arbitrary files via symlink)
-	    const stat = await fs.lstat(resolved).catch(() => null);
-	    if (!stat || stat.isSymbolicLink()) {
-	      return reply.code(404).send({ ok: false, error: 'workflow not found' });
-	    }
-
-	    let yaml: string;
-	    try {
-	      yaml = await fs.readFile(resolved, 'utf-8');
-	    } catch (err) {
-	      if (err && typeof err === 'object' && 'code' in err && err.code === 'ENOENT') {
-	        return reply.code(404).send({ ok: false, error: 'workflow not found' });
-	      }
-	      return reply.code(500).send({ ok: false, error: err instanceof Error ? err.message : String(err) });
-	    }
-
-	    try {
-	      const workflow = parseWorkflowYaml(yaml, { sourceName: info.name });
-	      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
-	    } catch (err) {
-	      const mapped = errorToHttp(err);
+		    try {
+		      const workflow = parseWorkflowYaml(yaml, { sourceName: info.name });
+		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
+		    } catch (err) {
+		      const mapped = errorToHttp(err);
 		      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
 		    }
 		  });
@@ -1144,23 +1181,16 @@ export async function buildServer(config: ViewerServerConfig) {
 		    const rawWorkflow = body.workflow;
 		    if (rawWorkflow === undefined) return reply.code(400).send({ ok: false, error: 'workflow is required' });
 
-		    const absWorkflowsDir = path.resolve(workflowsDir);
-		    const resolved = path.resolve(absWorkflowsDir, info.fileName);
-		    const rel = path.relative(absWorkflowsDir, resolved);
-		    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-		      return reply.code(400).send({ ok: false, error: 'invalid workflow name' });
-		    }
-
-		    // Check for symlink before writing (security: prevent writing to arbitrary files via symlink)
-		    const stat = await fs.lstat(resolved).catch(() => null);
-		    if (stat?.isSymbolicLink()) {
-		      return reply.code(409).send({ ok: false, error: 'Refusing to write to a symlink.' });
-		    }
-
 		    try {
 		      const workflow = parseWorkflowObject(rawWorkflow, { sourceName: info.name });
 		      const yaml = toWorkflowYaml(workflow);
-		      await writeTextAtomic(resolved, yaml);
+		      await writeWorkflowToStore({
+		        dataDir,
+		        workflowsDir,
+		        name: info.name,
+		        yaml,
+		        createIfMissing: false,
+		      });
 		      return reply.send({ ok: true, name: info.name, yaml, workflow: toRawWorkflowJson(workflow) });
 		    } catch (err) {
 		      const mapped = errorToHttp(err);
@@ -1169,21 +1199,31 @@ export async function buildServer(config: ViewerServerConfig) {
 		  });
 
 		  app.get('/api/prompts', async () => {
-		    const ids = await listPromptIds(promptsDir);
+		    const ids = await listPromptIdsFromStore(dataDir);
 		    return { ok: true, prompts: ids.map((id) => ({ id })), count: ids.length };
 		  });
 
   app.get('/api/prompts/*', async (req, reply) => {
     const id = parseOptionalString((req.params as { '*': unknown } | undefined)?.['*']);
     if (!id) return reply.code(400).send({ ok: false, error: 'id is required' });
-    try {
-      const resolved = await resolvePromptPathForRead(promptsDir, id);
-      const content = await fs.readFile(resolved, 'utf-8');
-      return reply.send({ ok: true, id: normalizePromptId(id), content });
-    } catch (err) {
-      const mapped = errorToHttp(err);
-      return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+    const normalizedId = normalizePromptId(id);
+    if (!isSafePromptId(normalizedId) || !normalizedId.endsWith('.md')) {
+      return reply.code(400).send({ ok: false, error: 'Invalid prompt id.' });
     }
+
+    let content = await readPromptFromStore(dataDir, normalizedId);
+    if (content === null) {
+      try {
+        const resolved = await resolvePromptPathForRead(promptsDir, normalizedId);
+        content = await fs.readFile(resolved, 'utf-8');
+        await cachePromptInStore(dataDir, normalizedId, content);
+      } catch (err) {
+        const mapped = errorToHttp(err);
+        return reply.code(mapped.status).send({ ok: false, error: mapped.message });
+      }
+    }
+
+    return reply.send({ ok: true, id: normalizedId, content });
   });
 
   app.put('/api/prompts/*', async (req, reply) => {
@@ -1199,9 +1239,17 @@ export async function buildServer(config: ViewerServerConfig) {
     if (content === null) return reply.code(400).send({ ok: false, error: 'content is required' });
 
     try {
-      const resolved = await resolvePromptPathForWrite(promptsDir, id);
-      await writeTextAtomic(resolved, content);
-      return reply.send({ ok: true, id: normalizePromptId(id) });
+      const normalizedId = normalizePromptId(id);
+      const resolved = await resolvePromptPathForWrite(promptsDir, normalizedId);
+      const exists = await fs.stat(resolved).then(() => true).catch(() => false);
+      await writePromptToStore({
+        dataDir,
+        promptsDir,
+        id: normalizedId,
+        content,
+        createIfMissing: !exists,
+      });
+      return reply.send({ ok: true, id: normalizedId });
     } catch (err) {
       const mapped = errorToHttp(err);
       return reply.code(mapped.status).send({ ok: false, error: mapped.message });
@@ -1592,11 +1640,10 @@ export async function buildServer(config: ViewerServerConfig) {
           }
         } else {
           // Restore previous active issue (initIssue always writes active-issue.json)
-          const activeIssueFile = path.join(dataDir, 'active-issue.json');
           if (prevActiveIssue) {
             await saveActiveIssue(dataDir, prevActiveIssue);
           } else {
-            await fs.rm(activeIssueFile, { force: true }).catch(() => void 0);
+            await clearActiveIssue(dataDir);
           }
           autoSelectResult = { requested: false, ok: true };
         }
@@ -4335,6 +4382,13 @@ export async function buildServer(config: ViewerServerConfig) {
     const id = hub.addWsClient(socket);
     socket.on('close', () => hub.removeClient(id));
     hub.sendTo(id, 'state', await getStateSnapshot());
+    // Re-emit state on next tick so clients that attach `message` handlers right after
+    // `open` do not miss the initial snapshot due to event-listener timing races.
+    setTimeout(() => {
+      void getStateSnapshot()
+        .then((snapshot) => hub.sendTo(id, 'state', snapshot))
+        .catch(() => void 0);
+    }, 0);
     await refreshFileTargets();
     const logLines = await logTailer.getAllLines(logSnapshotLines);
     hub.sendTo(id, 'logs', { lines: logLines, reset: true });

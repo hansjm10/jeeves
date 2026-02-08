@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 

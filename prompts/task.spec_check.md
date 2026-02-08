@@ -180,8 +180,12 @@ Update task status in .jeeves/tasks.json
 
 Set task status → "passed"
 
-Update `.jeeves/issue.json.status.currentTaskId` only:
+Update `.jeeves/issue.json.status`:
 - Set `currentTaskId` to `<next_pending_task_id_or_current>`
+- Set `taskPassed` to `true`
+- Set `taskFailed` to `false`
+- Set `hasMoreTasks` to `<true|false>`
+- Set `allTasksComplete` to `<true|false>`
 
 Write `.jeeves/phase-report.json`:
 ```json
@@ -215,7 +219,12 @@ Write failure feedback to .jeeves/task-feedback.md:
 - <specific, actionable change required>
 
 
-Keep `.jeeves/issue.json.status.currentTaskId` unchanged.
+Update `.jeeves/issue.json.status`:
+- Keep `currentTaskId` unchanged
+- Set `taskPassed` to `false`
+- Set `taskFailed` to `true`
+- Set `hasMoreTasks` to `true`
+- Set `allTasksComplete` to `false`
 
 Write `.jeeves/phase-report.json`:
 ```json

@@ -14,7 +14,9 @@ You are a senior software architect running a deep research pass before detailed
 - Issue config: `.jeeves/issue.json` (issue number, repo, notes, designDocPath)
 - Progress log: `.jeeves/progress.txt`
 - Existing design document path from `.jeeves/issue.json.designDocPath`
-- GitHub issue details via `gh issue view <number> --repo <owner/repo>`
+- Issue details (provider-aware):
+  - GitHub: `gh issue view <number> --repo <owner/repo>`
+  - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
 </inputs>
 
 ---
@@ -28,8 +30,9 @@ You are a senior software architect running a deep research pass before detailed
    - Use `.jeeves/issue.json.designDocPath` if present
    - Otherwise use `docs/issue-<issueNumber>-design.md`
 3. Read `.jeeves/progress.txt`.
-4. Retrieve issue details with `gh issue view`.
-   - If this fails, continue using local context and note the failure.
+4. Resolve provider and retrieve issue details with the matching CLI:
+   - Provider resolution: `issue.source.provider` first; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub.
+   - If retrieval fails, continue using local context and note the failure.
 
 ### Step 2: Perform repository research
 

@@ -19,21 +19,23 @@ You create pull requests for completed implementations, supporting both GitHub a
 </inputs>
 
 <prerequisites>
-- **GitHub** (`issue.source.provider === 'github'` or no provider set): `gh` must be installed and authenticated (`gh auth login`).
-- **Azure DevOps** (`issue.source.provider === 'azure_devops'`): `az` CLI must be installed and authenticated (`az login`). The Azure DevOps PAT should be configured via the viewer's Azure settings (stored in `status.azureDevops`).
+- **GitHub**: `gh` must be installed and authenticated (`gh auth login`).
+- **Azure DevOps**: `az` CLI must be installed and authenticated (`az login`). The Azure DevOps PAT should be configured via the viewer's Azure settings (stored in `status.azureDevops`).
 </prerequisites>
 
 <instructions>
 1. Read `.jeeves/issue.json` to get:
    - `issue.number` or `issue.source.id` - the issue/work-item identifier
    - `branch` - the current branch name
-   - `issue.source.provider` - the provider (`'github'` or `'azure_devops'`). If absent, default to `'github'`.
+   - `issue.source.provider` - the provider (`'github'` or `'azure_devops'`), if present
    - `issue.repo` - the repository reference (e.g., `owner/repo`)
    - For Azure DevOps: also read `status.azureDevops.organization` and `status.azureDevops.project`
 
 2. Determine the provider:
-   - If `issue.source.provider` is `'azure_devops'`, follow the **Azure DevOps path**
-   - Otherwise (including when `issue.source` is not set), follow the **GitHub path**
+   - If `issue.source.provider` is set, use it.
+   - Otherwise, if `status.azureDevops.organization` and `status.azureDevops.project` are both present, use `'azure_devops'`.
+   - Otherwise, use `'github'`.
+   - Follow the matching provider path below.
 
 3. Check if PR already exists:
 
@@ -53,7 +55,10 @@ You create pull requests for completed implementations, supporting both GitHub a
      --status active \
      --output json
    ```
-   Where `<repoName>` is the repository name portion of `issue.repo` (after the `/`).
+   Where `<repoName>` is:
+   - If `issue.repo` is `owner/repo`, use `repo`
+   - If `issue.repo` is an Azure git URL ending in `/_git/<repo>`, use `<repo>`
+   - Otherwise use `issue.repo` as-is
    If an active PR is returned, skip to step 6.
 
 4. Prepare PR content:

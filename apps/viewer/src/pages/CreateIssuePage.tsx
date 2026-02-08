@@ -125,6 +125,7 @@ export function buildCreateProviderRequest(
     azureParentId?: string;
     azureOrganization?: string;
     azureProject?: string;
+    azurePat?: string;
     init: boolean;
     autoSelect: boolean;
     autoRun: boolean;
@@ -153,6 +154,7 @@ export function buildCreateProviderRequest(
         ...(options.azureParentId?.trim() ? { parent_id: Number(options.azureParentId.trim()) } : {}),
         ...(options.azureOrganization?.trim() ? { organization: options.azureOrganization.trim() } : {}),
         ...(options.azureProject?.trim() ? { project: options.azureProject.trim() } : {}),
+        ...(options.azurePat?.trim() ? { pat: options.azurePat.trim() } : {}),
       },
     } : {}),
     ...(options.init ? {
@@ -176,6 +178,7 @@ export function buildInitFromExistingRequest(
   options: {
     azureOrganization?: string;
     azureProject?: string;
+    azurePat?: string;
     azureFetchHierarchy?: boolean;
     init: boolean;
     autoSelect: boolean;
@@ -198,6 +201,7 @@ export function buildInitFromExistingRequest(
       azure: {
         ...(options.azureOrganization?.trim() ? { organization: options.azureOrganization.trim() } : {}),
         ...(options.azureProject?.trim() ? { project: options.azureProject.trim() } : {}),
+        ...(options.azurePat?.trim() ? { pat: options.azurePat.trim() } : {}),
         ...(options.azureFetchHierarchy !== undefined ? { fetch_hierarchy: options.azureFetchHierarchy } : {}),
       },
     } : {}),
@@ -254,6 +258,7 @@ export function CreateIssuePage() {
   const { pushToast } = useToast();
   const stream = useViewerStream();
   const runRunning = stream.state?.run.running ?? false;
+  const hasStoredAzurePat = stream.azureDevopsStatus?.has_pat ?? false;
 
   // Provider and mode
   const [issueProvider, setIssueProvider] = useState<IssueProvider>('github');
@@ -277,6 +282,7 @@ export function CreateIssuePage() {
   const [azureParentId, setAzureParentId] = useState('');
   const [azureOrganization, setAzureOrganization] = useState('');
   const [azureProject, setAzureProject] = useState('');
+  const [azurePat, setAzurePat] = useState('');
   const [azureFetchHierarchy, setAzureFetchHierarchy] = useState(false);
 
   // Init-from-existing
@@ -349,6 +355,9 @@ export function CreateIssuePage() {
     } else {
       if (!existingRef.trim()) return 'issue ID or URL is required';
     }
+    if (issueProvider === 'azure_devops' && !azurePat.trim() && !hasStoredAzurePat) {
+      return 'Azure DevOps PAT is required';
+    }
     if (runRunning && init)
       return 'Cannot init while Jeeves is running. Disable init or stop the run.';
     return null;
@@ -383,6 +392,7 @@ export function CreateIssuePage() {
             azureParentId,
             azureOrganization,
             azureProject,
+            azurePat,
             init,
             autoSelect,
             autoRun,
@@ -398,6 +408,7 @@ export function CreateIssuePage() {
           {
             azureOrganization,
             azureProject,
+            azurePat,
             azureFetchHierarchy: azureFetchHierarchy,
             init,
             autoSelect,
@@ -409,6 +420,7 @@ export function CreateIssuePage() {
       }
 
       setLastIngestResponse(response);
+      setAzurePat('');
 
       if (response.warnings.length > 0) {
         pushToast(`Completed with warnings: ${response.warnings.join(', ')}`);
@@ -810,6 +822,23 @@ export function CreateIssuePage() {
                       placeholder="MyProject (from settings if empty)"
                     />
                   </label>
+                  <label className="label">
+                    personal access token (PAT)
+                    <input
+                      className="input"
+                      type="password"
+                      value={azurePat}
+                      onChange={(e) => setAzurePat(e.target.value)}
+                      placeholder="Enter your Azure DevOps PAT"
+                      autoComplete="off"
+                    />
+                    {fieldErrors['azure.pat'] && (
+                      <span style={{ color: 'var(--color-accent-red)', fontSize: 12 }}>{fieldErrors['azure.pat']}</span>
+                    )}
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      Required for Azure DevOps create/init; stored with the issue when init is enabled.
+                    </span>
+                  </label>
                 </>
               )}
             </>
@@ -849,6 +878,23 @@ export function CreateIssuePage() {
                       onChange={(e) => setAzureProject(e.target.value)}
                       placeholder="MyProject (from settings if empty)"
                     />
+                  </label>
+                  <label className="label">
+                    personal access token (PAT)
+                    <input
+                      className="input"
+                      type="password"
+                      value={azurePat}
+                      onChange={(e) => setAzurePat(e.target.value)}
+                      placeholder="Enter your Azure DevOps PAT"
+                      autoComplete="off"
+                    />
+                    {fieldErrors['azure.pat'] && (
+                      <span style={{ color: 'var(--color-accent-red)', fontSize: 12 }}>{fieldErrors['azure.pat']}</span>
+                    )}
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      Required for Azure DevOps init; stored with the issue when init is enabled.
+                    </span>
                   </label>
                   <label
                     className="label"

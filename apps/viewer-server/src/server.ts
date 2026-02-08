@@ -1231,6 +1231,7 @@ export async function buildServer(config: ViewerServerConfig) {
     azure?: {
       organization?: string;
       project?: string;
+      pat?: string;
       work_item_type?: 'User Story' | 'Bug' | 'Task';
       parent_id?: number;
       area_path?: string;
@@ -1239,7 +1240,7 @@ export async function buildServer(config: ViewerServerConfig) {
     };
     // For init_existing mode
     existing?: { id?: number | string; url?: string };
-    azureInitOptions?: { organization?: string; project?: string; fetch_hierarchy?: boolean };
+    azureInitOptions?: { organization?: string; project?: string; pat?: string; fetch_hierarchy?: boolean };
     // Shared optional params
     init?: { branch?: string; workflow?: string; phase?: string; design_doc?: string; force?: boolean };
     auto_select?: boolean;
@@ -1299,19 +1300,36 @@ export async function buildServer(config: ViewerServerConfig) {
       const azureOpts = mode === 'create' ? params.azure : params.azureInitOptions;
       azureOrg = azureOpts?.organization;
       azureProject = azureOpts?.project;
+      azurePat = azureOpts?.pat;
 
       // If org/project not provided in request, try to read from stored Azure credentials
-      if (currentIssue.stateDir && (!azureOrg || !azureProject)) {
+      if (currentIssue.stateDir && (!azureOrg || !azureProject || !azurePat)) {
         try {
           const secret = await readAzureDevopsSecret(currentIssue.stateDir);
           if (secret.exists) {
             if (!azureOrg) azureOrg = secret.data.organization;
             if (!azureProject) azureProject = secret.data.project;
-            azurePat = secret.data.pat;
+            if (!azurePat) azurePat = secret.data.pat;
           }
         } catch {
           // Non-fatal: proceed without stored credentials
         }
+      }
+
+      if (!azureOrg || !azureProject || !azurePat) {
+        const fieldErrors: Record<string, string> = {};
+        if (!azureOrg) fieldErrors['azure.organization'] = 'Organization is required for Azure DevOps.';
+        if (!azureProject) fieldErrors['azure.project'] = 'Project is required for Azure DevOps.';
+        if (!azurePat) fieldErrors['azure.pat'] = 'PAT is required for Azure DevOps.';
+        throw {
+          status: 400,
+          body: {
+            ok: false,
+            error: 'Validation failed.',
+            code: 'validation_failed',
+            field_errors: fieldErrors,
+          },
+        };
       }
     }
 
@@ -1494,6 +1512,60 @@ export async function buildServer(config: ViewerServerConfig) {
           warnings.push(msg);
           outcome = 'partial';
           if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { init_completed: true }).catch(() => void 0);
+        }
+
+        // Persist Azure credentials + sync worktree when init creates the issue
+        if (provider === 'azure_devops' && azureOrg && azureProject && azurePat) {
+          try {
+            const now = new Date().toISOString();
+            await writeAzureDevopsSecret(initRes.state_dir, azureOrg, azureProject, azurePat);
+
+            await updateAzureDevopsStatusInIssueJson(initRes.state_dir, {
+              organization: azureOrg,
+              project: azureProject,
+              pat_last_updated_at: now,
+            });
+
+            let syncStatus: AzureDevopsSyncStatus = 'never_attempted';
+            let lastError: string | null = null;
+
+            if (initRes.work_dir) {
+              try {
+                const reconcileResult = await reconcileAzureDevopsToWorktree({
+                  worktreeDir: initRes.work_dir,
+                  hasSecret: true,
+                  pat: azurePat,
+                });
+                syncStatus = reconcileResult.sync_status;
+                lastError = reconcileResult.last_error;
+                warnings.push(...reconcileResult.warnings);
+              } catch (err) {
+                syncStatus = 'failed_exclude';
+                lastError = sanitizeErrorForUi(err);
+              }
+
+              await updateAzureDevopsStatusInIssueJson(initRes.state_dir, {
+                sync_status: syncStatus,
+                last_attempt_at: now,
+                last_success_at: syncStatus === 'in_sync' ? now : null,
+                last_error: lastError,
+              });
+            } else {
+              syncStatus = 'deferred_worktree_absent';
+              await updateAzureDevopsStatusInIssueJson(initRes.state_dir, {
+                sync_status: syncStatus,
+                last_attempt_at: now,
+                last_error: null,
+              });
+            }
+
+            const status = await buildAzureDevopsStatus(initRes.issue_ref, initRes.state_dir, initRes.work_dir);
+            emitAzureDevopsStatus(status, 'ingest');
+          } catch (err) {
+            const safeMessage = sanitizePatFromMessage(sanitizeErrorForUi(err), azurePat);
+            warnings.push(`Azure DevOps credentials were not saved or synced: ${safeMessage}`);
+            outcome = 'partial';
+          }
         }
 
         // Auto-select

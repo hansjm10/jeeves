@@ -130,6 +130,47 @@ describe('spawnCliCommand', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('some error');
   });
+
+  it('retries via cmd.exe on Windows after ENOENT', async () => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const spawn = ((cmd: string, args: readonly string[]) => {
+      calls.push({ cmd, args: [...args] });
+      const behavior: SpawnBehavior = calls.length === 1
+        ? { enoent: true }
+        : { stdout: '{"ok":true}', exitCode: 0 };
+      return createFakeSpawn(behavior)(cmd, args as string[], {} as never);
+    }) as unknown as typeof spawnType;
+
+    const result = await spawnCliCommand('az', ['version'], {
+      spawnImpl: spawn,
+      platform: 'win32',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('{"ok":true}');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.cmd).toBe('az');
+    expect(calls[1]?.cmd.toLowerCase()).toContain('cmd');
+    expect(calls[1]?.args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+  });
+
+  it('does not retry via cmd.exe on non-Windows platforms', async () => {
+    const calls: string[] = [];
+    const spawn = ((cmd: string, args: readonly string[]) => {
+      calls.push(cmd);
+      return createFakeSpawn({ enoent: true })(cmd, args as string[], {} as never);
+    }) as unknown as typeof spawnType;
+
+    const result = await spawnCliCommand('az', ['version'], {
+      spawnImpl: spawn,
+      platform: 'linux',
+    });
+
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe('az');
+  });
 });
 
 // ============================================================================

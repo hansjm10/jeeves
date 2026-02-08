@@ -283,6 +283,7 @@ describe('buildCreateProviderRequest', () => {
         azureParentId: '123',
         azureOrganization: 'https://dev.azure.com/myorg',
         azureProject: 'MyProject',
+        azurePat: 'pat-123',
       });
       expect(result.provider).toBe('azure_devops');
       expect(result.azure).toBeDefined();
@@ -293,6 +294,7 @@ describe('buildCreateProviderRequest', () => {
       expect(result.azure?.parent_id).toBe(123);
       expect(result.azure?.organization).toBe('https://dev.azure.com/myorg');
       expect(result.azure?.project).toBe('MyProject');
+      expect(result.azure?.pat).toBe('pat-123');
     });
 
     it('omits empty azure fields', () => {
@@ -373,6 +375,7 @@ describe('buildInitFromExistingRequest', () => {
       ...baseOptions,
       azureOrganization: 'https://dev.azure.com/myorg',
       azureProject: 'MyProject',
+      azurePat: 'pat-xyz',
       azureFetchHierarchy: true,
     });
     expect(result.provider).toBe('azure_devops');
@@ -380,6 +383,7 @@ describe('buildInitFromExistingRequest', () => {
     expect(result.azure).toBeDefined();
     expect(result.azure?.organization).toBe('https://dev.azure.com/myorg');
     expect(result.azure?.project).toBe('MyProject');
+    expect(result.azure?.pat).toBe('pat-xyz');
     expect(result.azure?.fetch_hierarchy).toBe(true);
   });
 

@@ -134,6 +134,7 @@ export type ReconcileAzureDevopsRequest = Readonly<{
 export type AzureCreateOptions = Readonly<{
   organization?: string;
   project?: string;
+  pat?: string;
   work_item_type?: AzureWorkItemType;
   parent_id?: number;
   area_path?: string;
@@ -194,6 +195,7 @@ export type ExistingItemRef = Readonly<{
 export type AzureInitFromExistingOptions = Readonly<{
   organization?: string;
   project?: string;
+  pat?: string;
   fetch_hierarchy?: boolean;
 }>;
 

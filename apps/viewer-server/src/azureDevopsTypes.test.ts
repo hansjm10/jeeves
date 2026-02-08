@@ -1061,6 +1061,16 @@ describe('validateAzureCreateOptions', () => {
     expect(errors['azure.iteration_path']).toBeDefined();
   });
 
+  it('validates pat', () => {
+    const errors: Record<string, string> = {};
+    validateAzureCreateOptions(
+      { work_item_type: 'Bug', pat: 'bad\npat' },
+      true,
+      errors,
+    );
+    expect(errors['azure.pat']).toBeDefined();
+  });
+
   it('validates tags', () => {
     const errors: Record<string, string> = {};
     validateAzureCreateOptions(
@@ -1515,6 +1525,15 @@ describe('validateAzureInitFromExistingOptions', () => {
       fieldErrors,
     );
     expect(fieldErrors['azure.fetch_hierarchy']).toBeDefined();
+  });
+
+  it('validates pat', () => {
+    const fieldErrors: Record<string, string> = {};
+    validateAzureInitFromExistingOptions(
+      { pat: 'bad\npat' },
+      fieldErrors,
+    );
+    expect(fieldErrors['azure.pat']).toBeDefined();
   });
 });
 

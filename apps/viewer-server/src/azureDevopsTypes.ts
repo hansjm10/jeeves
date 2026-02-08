@@ -145,6 +145,7 @@ export type ReconcileAzureDevopsRequest = Readonly<{
 export type AzureCreateOptions = Readonly<{
   organization?: string;
   project?: string;
+  pat?: string;
   work_item_type?: AzureWorkItemType;
   parent_id?: number;
   area_path?: string;
@@ -205,6 +206,7 @@ export type ExistingItemRef = Readonly<{
 export type AzureInitFromExistingOptions = Readonly<{
   organization?: string;
   project?: string;
+  pat?: string;
   fetch_hierarchy?: boolean; // default true
 }>;
 
@@ -1382,6 +1384,15 @@ export function validateAzureInitFromExistingOptions(
     }
   }
 
+  if ('pat' in obj && obj.pat !== undefined) {
+    const r = validatePat(obj.pat);
+    if (!r.valid) {
+      fieldErrors['azure.pat'] = r.error;
+    } else {
+      result.pat = r.value;
+    }
+  }
+
   if ('fetch_hierarchy' in obj && obj.fetch_hierarchy !== undefined) {
     const r = validateBoolean(obj.fetch_hierarchy, 'azure.fetch_hierarchy');
     if (!r.valid) {
@@ -1832,6 +1843,15 @@ export function validateAzureCreateOptions(
       fieldErrors['azure.project'] = r.error;
     } else {
       result.project = r.value;
+    }
+  }
+
+  if ('pat' in obj && obj.pat !== undefined) {
+    const r = validatePat(obj.pat);
+    if (!r.valid) {
+      fieldErrors['azure.pat'] = r.error;
+    } else {
+      result.pat = r.value;
     }
   }
 

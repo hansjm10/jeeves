@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
 import { readIssueJson } from './issueJson.js';
+import { readAzureDevopsSecret } from './azureDevopsSecret.js';
 import { ProviderAdapterError } from './providerIssueAdapter.js';
 import { acquireLock, readJournal, releaseLock, generateOperationId } from './providerOperationJournal.js';
 import { buildServer } from './server.js';
@@ -1427,6 +1428,39 @@ describe('viewer-server', () => {
       await app.close();
     });
 
+    it('returns 400 when Azure PAT is missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-azure-missing-pat-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'azure_devops',
+          repo: 'o/r',
+          title: 'Test',
+          body: 'Body',
+          azure: { organization: 'https://dev.azure.com/o', project: 'r', work_item_type: 'Task' },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('validation_failed');
+      const fieldErrors = body.field_errors as Record<string, string>;
+      expect(fieldErrors['azure.pat']).toBeTruthy();
+
+      await app.close();
+    });
+
     it('returns IngestResponse with init result when init is requested', async () => {
       const dataDir = await makeTempDir('jeeves-vs-data-provider-create-init-');
       await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
@@ -1473,6 +1507,57 @@ describe('viewer-server', () => {
       const autoSelect = body.auto_select as Record<string, unknown>;
       expect(autoSelect.requested).toBe(true);
       expect(autoSelect.ok).toBe(true);
+
+      await app.close();
+    });
+
+    it('persists Azure PAT and syncs worktree when init is requested', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-create-azure-init-pat-');
+      await ensureLocalRepoClone({ dataDir, owner: 'o', repo: 'r' });
+
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+        createProviderIssue: async () => ({
+          id: '99',
+          url: 'https://dev.azure.com/o/r/_workitems/edit/99',
+          title: 'Azure Init',
+          kind: 'work_item' as const,
+        }),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/create',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'azure_devops',
+          repo: 'o/r',
+          title: 'Azure Init',
+          body: 'Body',
+          init: {},
+          azure: {
+            organization: 'https://dev.azure.com/o',
+            project: 'r',
+            pat: 'pat-xyz',
+            work_item_type: 'Task',
+          },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const stateDir = getIssueStateDir('o', 'r', 99, dataDir);
+      const secret = await readAzureDevopsSecret(stateDir);
+      expect(secret.exists).toBe(true);
+      if (!secret.exists) throw new Error('expected Azure secret to exist');
+      expect(secret.data.pat).toBe('pat-xyz');
+
+      const worktreeDir = getWorktreePath('o', 'r', 99, dataDir);
+      const envContent = await fs.readFile(path.join(worktreeDir, '.env.jeeves'), 'utf-8');
+      expect(envContent).toContain('AZURE_DEVOPS_EXT_PAT="pat-xyz"');
 
       await app.close();
     });
@@ -1585,7 +1670,7 @@ describe('viewer-server', () => {
           provider: 'azure_devops',
           repo: 'o/r',
           existing: { url: 'https://dev.azure.com/o/r/_workitems/edit/77?view=all' },
-          azure: { organization: 'https://dev.azure.com/o', project: 'r', fetch_hierarchy: false },
+          azure: { organization: 'https://dev.azure.com/o', project: 'r', pat: 'pat-123', fetch_hierarchy: false },
         },
       });
       expect(res.statusCode).toBe(200);
@@ -1641,6 +1726,38 @@ describe('viewer-server', () => {
       expect(body.ok).toBe(false);
       expect(body.code).toBe('unsupported_provider');
       expect(body.error).toContain('bitbucket');
+
+      await app.close();
+    });
+
+    it('returns 400 when Azure PAT is missing', async () => {
+      const dataDir = await makeTempDir('jeeves-vs-data-provider-init-existing-azure-missing-pat-');
+      const { app } = await buildServer({
+        host: '127.0.0.1',
+        port: 0,
+        allowRemoteRun: false,
+        dataDir,
+        repoRoot: path.resolve(process.cwd()),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/issues/init-from-existing',
+        remoteAddress: '127.0.0.1',
+        payload: {
+          provider: 'azure_devops',
+          repo: 'o/r',
+          existing: { id: 77 },
+          azure: { organization: 'https://dev.azure.com/o', project: 'r' },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+
+      const body = res.json() as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('validation_failed');
+      const fieldErrors = body.field_errors as Record<string, string>;
+      expect(fieldErrors['azure.pat']).toBeTruthy();
 
       await app.close();
     });
@@ -6115,7 +6232,7 @@ describe('ingest hierarchy failure semantics', () => {
         provider: 'azure_devops',
         repo: 'testorg/testrepo',
         existing: { id: 77 },
-        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj' },
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj', pat: 'pat-xyz' },
       },
     });
 
@@ -6149,7 +6266,7 @@ describe('ingest hierarchy failure semantics', () => {
         repo: 'testorg/testrepo',
         title: 'Test Work Item',
         body: 'Body text',
-        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj', work_item_type: 'Task' },
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj', pat: 'pat-xyz', work_item_type: 'Task' },
       },
     });
 
@@ -6190,7 +6307,7 @@ describe('ingest hierarchy failure semantics', () => {
         provider: 'azure_devops',
         repo: 'testorg/testrepo',
         existing: { id: 77 },
-        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj' },
+        azure: { organization: 'https://dev.azure.com/testorg', project: 'testproj', pat: 'pat-xyz' },
       },
     });
 

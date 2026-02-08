@@ -15,7 +15,9 @@ You do not design solutions yet. You establish scope and constraints that will g
 <inputs>
 - Issue config: `.jeeves/issue.json` (contains issue number, repo, notes)
 - Progress log: `.jeeves/progress.txt`
-- GitHub issue: Use `gh issue view <number>` to get full issue details
+- Issue details (provider-aware):
+  - GitHub: `gh issue view <number>`
+  - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
 </inputs>
 
 ---
@@ -24,8 +26,13 @@ You do not design solutions yet. You establish scope and constraints that will g
 
 ### Step 1: Gather Context
 
-1. Read `.jeeves/issue.json` to get the issue number
-2. Run `gh issue view <issueNumber>` to get full requirements
+1. Read `.jeeves/issue.json` to get the issue/work-item identifier and provider context:
+   - Prefer `issue.source.provider` when present
+   - If provider is missing but `status.azureDevops.organization` and `status.azureDevops.project` are present, treat provider as `azure_devops`
+   - Otherwise treat provider as `github`
+2. Fetch full requirements with provider-appropriate command:
+   - GitHub: `gh issue view <issueNumber>`
+   - Azure DevOps: `az boards work-item show --id <issueId> --organization <org> --project <project> --output json`
 3. Read `.jeeves/progress.txt` for any prior context
 4. Explore the codebase to understand:
    - Where this feature would live

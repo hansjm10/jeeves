@@ -15,7 +15,9 @@ You are a senior engineer making a small, low-risk change without the full desig
 <inputs>
 - Issue config: `.jeeves/issue.json` (contains issue number, repo, optional designDocPath)
 - Progress log: `.jeeves/progress.txt`
-- GitHub issue: Prefer `gh api /repos/<owner>/<repo>/issues/<number>` (avoid GraphQL)
+- Issue source (provider-aware):
+  - GitHub: prefer `gh api /repos/<owner>/<repo>/issues/<number>` (avoid GraphQL)
+  - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
 </inputs>
 
 <constraints>
@@ -25,8 +27,9 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 <instructions>
 1. Gather requirements
-   - Read `.jeeves/issue.json` for `repo` and issue number.
-   - Fetch the issue via `gh api` to understand the ask (title/body/acceptance criteria).
+   - Read `.jeeves/issue.json` for `repo`, issue/work-item ID, and provider context.
+   - Resolve provider (`issue.source.provider` first; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub).
+   - Fetch requirements with provider-appropriate command (`gh api` for GitHub, `az boards work-item show` for Azure DevOps).
 
 2. Ensure a minimal design doc exists
    - If `.jeeves/issue.json.designDocPath` is missing or points to a missing file:

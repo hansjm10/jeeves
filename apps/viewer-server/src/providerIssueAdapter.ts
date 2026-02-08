@@ -84,7 +84,26 @@ export type SpawnCliOptions = Readonly<{
   stdin?: string;
   timeoutMs?: number;
   spawnImpl?: typeof defaultSpawn;
+  platform?: NodeJS.Platform;
 }>;
+
+function shouldRetryViaCmdOnWindows(
+  cmd: string,
+  platform: NodeJS.Platform,
+): boolean {
+  if (platform !== 'win32') return false;
+  if (cmd.includes('/') || cmd.includes('\\')) return false;
+  if (/\.[a-z0-9]+$/i.test(cmd)) return false;
+  return true;
+}
+
+function getWindowsCommandProcessor(env?: NodeJS.ProcessEnv): string {
+  const comspec = env?.ComSpec ?? env?.COMSPEC;
+  if (typeof comspec === 'string' && comspec.trim().length > 0) {
+    return comspec;
+  }
+  return 'cmd.exe';
+}
 
 /**
  * Spawn a CLI command and collect stdout/stderr.
@@ -101,89 +120,140 @@ export async function spawnCliCommand(
     stdin,
     timeoutMs,
     spawnImpl = defaultSpawn,
+    platform = process.platform,
   } = opts ?? {};
 
-  let child: ChildProcess;
-  try {
-    child = spawnImpl(cmd, [...args], {
-      cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  } catch (err) {
-    if (isNodeError(err) && err.code === 'ENOENT') {
-      return { stdout: '', stderr: '', exitCode: null, signal: null };
-    }
-    throw err;
-  }
-
-  const stdoutChunks: Buffer[] = [];
-  const stderrChunks: Buffer[] = [];
-
-  child.stdout?.on('data', (d: Buffer) => stdoutChunks.push(d));
-  child.stderr?.on('data', (d: Buffer) => stderrChunks.push(d));
-
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const exit = new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolve, reject) => {
-    child.once('error', (err) => {
+  const runOnce = async (
+    spawnCmd: string,
+    spawnArgs: readonly string[],
+  ): Promise<SpawnResult & { enoent: boolean }> => {
+    let child: ChildProcess;
+    try {
+      child = spawnImpl(spawnCmd, [...spawnArgs], {
+        cwd,
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) {
       if (isNodeError(err) && err.code === 'ENOENT') {
-        // CLI not found — resolve as a "missing CLI" result
-        resolve({ code: null, signal: null });
-      } else {
-        reject(err);
+        return {
+          stdout: '',
+          stderr: '',
+          exitCode: null,
+          signal: null,
+          enoent: true,
+        };
       }
+      throw err;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    child.stdout?.on('data', (d: Buffer) => stdoutChunks.push(d));
+    child.stderr?.on('data', (d: Buffer) => stderrChunks.push(d));
+
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const exit = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      enoent: boolean;
+    }>((resolve, reject) => {
+      child.once('error', (err) => {
+        if (isNodeError(err) && err.code === 'ENOENT') {
+          // CLI not found — resolve as a "missing CLI" result
+          resolve({ code: null, signal: null, enoent: true });
+        } else {
+          reject(err);
+        }
+      });
+      child.once('exit', (code, signal) =>
+        resolve({ code, signal, enoent: false }),
+      );
     });
-    child.once('exit', (code, signal) => resolve({ code, signal }));
-  });
 
-  if (timeoutMs !== undefined && timeoutMs > 0) {
-    timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, timeoutMs);
-  }
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+      }, timeoutMs);
+    }
 
-  if (stdin !== undefined && child.stdin) {
-    child.stdin.write(stdin);
-    child.stdin.end();
-  } else if (child.stdin) {
-    child.stdin.end();
-  }
+    if (stdin !== undefined && child.stdin) {
+      child.stdin.write(stdin);
+      child.stdin.end();
+    } else if (child.stdin) {
+      child.stdin.end();
+    }
 
-  let res: { code: number | null; signal: NodeJS.Signals | null };
-  try {
-    res = await exit;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+    let res: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      enoent: boolean;
+    };
+    try {
+      res = await exit;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
 
-  const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
-  const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+    const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+    const stderr = Buffer.concat(stderrChunks).toString('utf-8');
 
-  // Treat ENOENT-resolved result as exitCode=null (caller detects missing CLI)
-  if (res.code === null && res.signal === null && !timedOut) {
-    return { stdout, stderr, exitCode: null, signal: null };
-  }
+    // Treat ENOENT-resolved result as exitCode=null (caller detects missing CLI)
+    if (res.code === null && res.signal === null && !timedOut) {
+      return {
+        stdout,
+        stderr,
+        exitCode: null,
+        signal: null,
+        enoent: res.enoent,
+      };
+    }
 
-  if (timedOut) {
+    if (timedOut) {
+      return {
+        stdout,
+        stderr,
+        exitCode: res.code,
+        signal: res.signal ?? 'SIGTERM',
+        enoent: false,
+      };
+    }
+
     return {
       stdout,
       stderr,
       exitCode: res.code,
-      signal: res.signal ?? 'SIGTERM',
+      signal: res.signal,
+      enoent: false,
+    };
+  };
+
+  const firstAttempt = await runOnce(cmd, args);
+  if (
+    firstAttempt.enoent &&
+    shouldRetryViaCmdOnWindows(cmd, platform)
+  ) {
+    const windowsResult = await runOnce(
+      getWindowsCommandProcessor(env),
+      ['/d', '/s', '/c', cmd, ...args],
+    );
+    return {
+      stdout: windowsResult.stdout,
+      stderr: windowsResult.stderr,
+      exitCode: windowsResult.exitCode,
+      signal: windowsResult.signal,
     };
   }
 
   return {
-    stdout,
-    stderr,
-    exitCode: res.code,
-    signal: res.signal,
+    stdout: firstAttempt.stdout,
+    stderr: firstAttempt.stderr,
+    exitCode: firstAttempt.exitCode,
+    signal: firstAttempt.signal,
   };
 }
 

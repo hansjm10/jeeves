@@ -25,9 +25,9 @@ You think in terms of: "What's the input? What's the output? What can go wrong? 
 </design_phase_quality_policy>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains designDocPath and featureTypes)
-- Design document: Read from `.jeeves/issue.json.designDocPath`
-- Progress log: `.jeeves/progress.txt`
+- Issue state: `state_get_issue` (contains designDocPath and featureTypes)
+- Design document: Read from `issue.designDocPath`
+- Progress updates: `state_append_progress`
 </inputs>
 
 ---
@@ -36,7 +36,7 @@ You think in terms of: "What's the input? What's the output? What can go wrong? 
 
 ### Step 1: Check Applicability
 
-Read `.jeeves/issue.json` and check `status.featureTypes.api`:
+Call `state_get_issue` and check `status.featureTypes.api`:
 - If `false`: Skip to "Not Applicable" output
 - If `true`: Continue with API design
 
@@ -117,7 +117,7 @@ N/A - This feature does not add or modify external interfaces.
 
 ### Step 4: Update Status
 
-Append to `.jeeves/progress.txt`:
+Append via `state_append_progress`:
 ```
 ## [Date] - Design API
 

@@ -1156,9 +1156,29 @@ export class RunManager {
         let transitionedToPhase: string | null = null;
         const updatedIssue = this.stateDir ? await readIssueJson(this.stateDir) : null;
         if (updatedIssue) {
-          // If a phase intentionally switched workflows by editing issue.json, honor it immediately.
+          // If a phase requested design handoff via orchestrator-owned status, switch workflows.
           // This is only allowed when no workflow override is active.
           if (params.workflowOverride === null) {
+            if (workflowName === 'quick-fix' && currentPhase === 'design_handoff') {
+              const issueStatus = isPlainRecord(updatedIssue.status) ? updatedIssue.status : null;
+              if (issueStatus?.handoffComplete === true) {
+                const nextWorkflowName = 'default';
+                const nextWorkflow = await loadWorkflowByName(nextWorkflowName, { workflowsDir: this.workflowsDir });
+                const requestedPhase = isNonEmptyString(updatedIssue.phase) ? updatedIssue.phase.trim() : '';
+                const nextPhase = requestedPhase && nextWorkflow.phases[requestedPhase] ? requestedPhase : nextWorkflow.start;
+                updatedIssue.workflow = nextWorkflowName;
+                updatedIssue.phase = nextPhase;
+                await writeIssueJson(this.stateDir!, updatedIssue);
+                this.broadcast('state', await this.getStateSnapshot());
+                await this.appendViewerLog(
+                  viewerLogPath,
+                  `[WORKFLOW] Handoff complete: ${workflowName} -> ${nextWorkflowName} (phase=${nextPhase})`,
+                );
+                continue;
+              }
+            }
+
+            // If a phase intentionally switched workflows via canonical issue state, honor it immediately.
             const nextWorkflowName = isNonEmptyString(updatedIssue.workflow) ? updatedIssue.workflow.trim() : workflowName;
             if (nextWorkflowName !== workflowName) {
               const nextWorkflow = await loadWorkflowByName(nextWorkflowName, { workflowsDir: this.workflowsDir });

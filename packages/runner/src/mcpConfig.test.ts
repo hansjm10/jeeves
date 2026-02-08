@@ -186,4 +186,76 @@ describe('buildMcpServersConfig', () => {
       expect(result === undefined || result.pruner !== undefined).toBe(true);
     });
   });
+
+  describe('profile-driven state server wiring', () => {
+    it('returns state config for profile=state when stateDir is provided', () => {
+      const result = buildMcpServersConfig(
+        {
+          JEEVES_MCP_STATE_PATH: THIS_FILE,
+        },
+        '/workspace',
+        { profile: 'state', stateDir: '/tmp/jeeves/issues/acme/rocket/1' },
+      );
+      expect(result).toBeDefined();
+      expect(result!.state).toBeDefined();
+      expect(result!.state.command).toBe('node');
+      expect(result!.state.args).toEqual([THIS_FILE]);
+      expect(result!.state.env!.MCP_STATE_DIR).toBe('/tmp/jeeves/issues/acme/rocket/1');
+      expect(result!.pruner).toBeUndefined();
+    });
+
+    it('throws for profile=state when stateDir is missing', () => {
+      expect(() =>
+        buildMcpServersConfig(
+          {
+            JEEVES_MCP_STATE_PATH: THIS_FILE,
+          },
+          '/workspace',
+          { profile: 'state' },
+        ),
+      ).toThrow(/requires a non-empty stateDir/i);
+    });
+
+    it('includes both state and pruner for profile=state_with_pruner when pruner is enabled', () => {
+      const result = buildMcpServersConfig(
+        {
+          JEEVES_MCP_STATE_PATH: THIS_FILE,
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
+          JEEVES_PRUNER_ENABLED: 'true',
+        },
+        '/workspace',
+        { profile: 'state_with_pruner', stateDir: '/tmp/jeeves/issues/acme/rocket/2' },
+      );
+      expect(result).toBeDefined();
+      expect(result!.state).toBeDefined();
+      expect(result!.pruner).toBeDefined();
+    });
+
+    it('includes only state for profile=state_with_pruner when pruner is disabled', () => {
+      const result = buildMcpServersConfig(
+        {
+          JEEVES_MCP_STATE_PATH: THIS_FILE,
+          JEEVES_PRUNER_ENABLED: 'false',
+        },
+        '/workspace',
+        { profile: 'state_with_pruner', stateDir: '/tmp/jeeves/issues/acme/rocket/3' },
+      );
+      expect(result).toBeDefined();
+      expect(result!.state).toBeDefined();
+      expect(result!.pruner).toBeUndefined();
+    });
+
+    it('returns undefined for profile=none', () => {
+      const result = buildMcpServersConfig(
+        {
+          JEEVES_MCP_STATE_PATH: THIS_FILE,
+          JEEVES_MCP_PRUNER_PATH: THIS_FILE,
+          JEEVES_PRUNER_ENABLED: 'true',
+        },
+        '/workspace',
+        { profile: 'none', stateDir: '/tmp/jeeves/issues/acme/rocket/4' },
+      );
+      expect(result).toBeUndefined();
+    });
+  });
 });

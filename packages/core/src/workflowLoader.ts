@@ -79,6 +79,7 @@ const rawPhaseSchema = z
   .object({
     type: z.unknown().optional(),
     provider: z.unknown().optional(),
+    mcp_profile: z.string().optional(),
     prompt: z.string().optional(),
     command: z.string().optional(),
     description: z.string().optional(),
@@ -135,6 +136,7 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
       name: phaseName,
       type: phaseType,
       provider: typeof phaseRaw.provider === 'string' ? phaseRaw.provider : undefined,
+      mcpProfile: phaseRaw.mcp_profile,
       prompt: phaseRaw.prompt,
       command: phaseRaw.command,
       description: phaseRaw.description,
@@ -342,6 +344,7 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
     };
 
     if (phase.provider) phaseJson.provider = phase.provider;
+    if (phase.mcpProfile) phaseJson.mcp_profile = phase.mcpProfile;
     if (phase.prompt) phaseJson.prompt = phase.prompt;
     if (phase.command) phaseJson.command = phase.command;
     if (phase.allowedWrites.length !== 1 || phase.allowedWrites[0] !== '.jeeves/*') {
@@ -392,6 +395,7 @@ export function toWorkflowYaml(workflow: Workflow): string {
       type: phase.type,
     };
     if (phase.provider) phaseJson.provider = phase.provider;
+    if (phase.mcpProfile) phaseJson.mcp_profile = phase.mcpProfile;
     if (phase.prompt) phaseJson.prompt = phase.prompt;
     if (phase.command) phaseJson.command = phase.command;
     if (phase.description) phaseJson.description = phase.description;

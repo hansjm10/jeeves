@@ -17,9 +17,11 @@ export type RunPhaseParams = Readonly<{
   outputPath: string;
   logPath: string;
   progressPath: string;
+  stateDir: string;
   cwd: string;
   phaseName: string;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  mcpProfile?: string;
   permissionMode?: string;
 }>;
 
@@ -198,7 +200,10 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
       await logLine(`[RUNNER] prepended_instructions=${prependedFiles.join(',')}`);
     }
 
-    const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd);
+    const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd, {
+      stateDir: params.stateDir,
+      profile: params.mcpProfile,
+    });
 
     for await (const evt of params.provider.run(prompt, { cwd: params.cwd, ...(mcpServers ? { mcpServers } : {}), ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}) })) {
       writer.addProviderEvent(evt);
@@ -266,9 +271,11 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
       outputPath,
       logPath,
       progressPath,
+      stateDir: params.stateDir,
       cwd: params.cwd,
       phaseName: current,
       mcpServers: params.mcpServers,
+      mcpProfile: workflow.phases[current]?.mcpProfile,
     });
 
     if (!phaseResult.success) {
@@ -330,9 +337,11 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     outputPath,
     logPath,
     progressPath,
+    stateDir: params.stateDir,
     cwd: params.cwd,
     phaseName: phase,
     mcpServers: params.mcpServers,
+    mcpProfile: phaseConfig?.mcpProfile,
     permissionMode: phaseConfig?.permissionMode,
   });
 

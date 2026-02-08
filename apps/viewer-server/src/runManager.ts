@@ -14,6 +14,7 @@ import type { RunStatus } from './types.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { readTaskCount } from './tasksStore.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
 import {
   ParallelRunner,
@@ -357,8 +358,8 @@ export class RunManager {
   async setIssue(issueRef: string): Promise<void> {
     const parsed = parseIssueRef(issueRef);
     const stateDir = getIssueStateDir(parsed.owner, parsed.repo, parsed.issueNumber, this.dataDir);
-    const issueFile = path.join(stateDir, 'issue.json');
-    if (!(await pathExists(issueFile))) {
+    const issueJson = await readIssueJson(stateDir);
+    if (!issueJson) {
       throw new Error(`issue.json not found for ${issueRef} at ${stateDir}`);
     }
     const workDir = getWorktreePath(parsed.owner, parsed.repo, parsed.issueNumber, this.dataDir);
@@ -672,13 +673,7 @@ export class RunManager {
 
   private async readTaskCount(): Promise<number | null> {
     if (!this.stateDir) return null;
-    try {
-      const raw = await fs.readFile(path.join(this.stateDir, 'tasks.json'), 'utf-8');
-      const parsed = JSON.parse(raw) as { tasks?: unknown[] };
-      return Array.isArray(parsed.tasks) ? parsed.tasks.length : null;
-    } catch {
-      return null;
-    }
+    return readTaskCount(this.stateDir);
   }
 
   private async checkCompletionPromise(): Promise<boolean> {

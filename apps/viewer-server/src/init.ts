@@ -3,9 +3,9 @@ import path from 'node:path';
 
 import { createIssueState, getIssueStateDir, getWorktreePath, loadWorkflowByName, parseRepoSpec, type RepoSpec } from '@jeeves/core';
 
+import { saveActiveIssue } from './activeIssue.js';
 import { runGit } from './git.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
-import { writeJsonAtomic } from './jsonAtomic.js';
 
 async function pathExists(filePath: string): Promise<boolean> {
   return fs
@@ -131,10 +131,7 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
   await ensureStateLink(worktreeDir, stateDir);
   await ensureJeevesExcludedFromGitStatus(worktreeDir).catch(() => void 0);
 
-  await writeJsonAtomic(path.join(params.dataDir, 'active-issue.json'), {
-    issue_ref: `${repo.owner}/${repo.repo}#${issueNumber}`,
-    saved_at: new Date().toISOString(),
-  });
+  await saveActiveIssue(params.dataDir, `${repo.owner}/${repo.repo}#${issueNumber}`);
 
   return {
     issue_ref: `${repo.owner}/${repo.repo}#${issueNumber}`,

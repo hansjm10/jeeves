@@ -9,6 +9,7 @@ phases:
   code_fix:
     type: execute
     provider: claude
+    mcp_profile: state
     prompt: review.fix.md
     description: Apply fixes from code review
     transitions:
@@ -19,6 +20,7 @@ phases:
   code_review:
     type: evaluate
     provider: codex
+    mcp_profile: state
     prompt: review.evaluate.md
     description: Review code changes (read-only)
     transitions:
@@ -35,6 +37,7 @@ phases:
   completeness_verification:
     type: evaluate
     provider: codex
+    mcp_profile: state
     prompt: verify.completeness.md
     description: Verify complete implementation against design
     transitions:
@@ -47,6 +50,7 @@ phases:
   design_api:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.api.md
     description: Design interfaces, endpoints, and contracts
     transitions:
@@ -57,6 +61,7 @@ phases:
   design_classify:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.classify.md
     description: Classify feature types and establish scope
     transitions:
@@ -67,6 +72,7 @@ phases:
   design_data:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.data.md
     description: Design schemas, migrations, and data handling
     transitions:
@@ -77,6 +83,7 @@ phases:
   design_edit:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.edit.md
     description: Apply changes from design review
     transitions:
@@ -87,6 +94,7 @@ phases:
   design_plan:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.plan.md
     description: Break down design into implementable tasks
     transitions:
@@ -97,6 +105,7 @@ phases:
   design_research:
     type: execute
     provider: claude
+    mcp_profile: state
     prompt: design.research.md
     description: Gather deep implementation context from repo and external sources
     transitions:
@@ -106,6 +115,7 @@ phases:
   design_review:
     type: evaluate
     provider: codex
+    mcp_profile: state
     prompt: design.review.md
     description: Review complete design document (read-only)
     transitions:
@@ -118,6 +128,7 @@ phases:
   design_workflow:
     type: execute
     provider: codex
+    mcp_profile: state
     prompt: design.workflow.md
     description: Design state transitions and error handling
     transitions:
@@ -128,6 +139,7 @@ phases:
   fix_ci:
     type: execute
     provider: claude
+    mcp_profile: state
     prompt: ci.fix.md
     description: Fix commit/push failures (lint, pre-push hooks, etc)
     transitions:
@@ -137,6 +149,7 @@ phases:
   implement_task:
     type: execute
     provider: claude
+    mcp_profile: state_with_pruner
     prompt: task.implement.md
     description: Implement current task
     transitions:
@@ -150,6 +163,7 @@ phases:
   pre_implementation_check:
     type: evaluate
     provider: codex
+    mcp_profile: state
     prompt: verify.pre_implementation.md
     description: Verify task coverage before implementation
     transitions:
@@ -162,6 +176,7 @@ phases:
   prepare_pr:
     type: execute
     provider: claude
+    mcp_profile: state
     prompt: pr.prepare.md
     description: Create pull request after all tasks complete
     transitions:
@@ -172,6 +187,7 @@ phases:
   task_decomposition:
     type: execute
     provider: codex
+    mcp_profile: state_with_pruner
     prompt: task.decompose.md
     description: Decompose design into implementable tasks
     transitions:
@@ -182,6 +198,7 @@ phases:
   task_spec_check:
     type: evaluate
     provider: codex
+    mcp_profile: state_with_pruner
     prompt: task.spec_check.md
     description: Verify task meets acceptance criteria
     transitions:

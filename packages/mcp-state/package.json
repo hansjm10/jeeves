@@ -1,24 +1,25 @@
 {
-  "name": "@jeeves/viewer-server",
+  "name": "@jeeves/mcp-state",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "jeeves-viewer-server": "./dist/bin.js"
+    "mcp-state": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
   },
   "dependencies": {
-    "@fastify/cors": "^10.1.0",
-    "@fastify/websocket": "^11.0.0",
-    "@jeeves/core": "workspace:*",
     "@jeeves/state-db": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "better-sqlite3": "^12.4.1",
-    "fastify": "^5.5.0"
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/ws": "^8.18.1",
-    "ws": "^8.18.3"
+    "@types/node": "^22.0.0"
   }
 }

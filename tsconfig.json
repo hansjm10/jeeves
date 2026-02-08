@@ -3,6 +3,8 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/core" },
+    { "path": "./packages/state-db" },
+    { "path": "./packages/mcp-state" },
     { "path": "./packages/mcp-pruner" },
     { "path": "./packages/runner" },
     { "path": "./packages/cli" },

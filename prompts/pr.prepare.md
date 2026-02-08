@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/progress writes (`state_get_issue`, `state_put_issue`, `state_append_progress`) instead of editing `.jeeves/issue.json` or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -19,9 +20,9 @@ You create pull requests for completed implementations, supporting both GitHub a
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains issue number, branch name, provider metadata)
-- Progress log: `.jeeves/progress.txt`
-- Design document: Read from path in `.jeeves/issue.json.designDocPath`
+- Issue config: `state_get_issue` (contains issue number, branch name, provider metadata)
+- Progress log updates: `state_append_progress`
+- Design document: Read from path in `issue.designDocPath` from `state_get_issue`
 </inputs>
 
 <prerequisites>
@@ -30,7 +31,7 @@ You create pull requests for completed implementations, supporting both GitHub a
 </prerequisites>
 
 <instructions>
-1. Read `.jeeves/issue.json` to get:
+1. Call `state_get_issue` to get:
    - `issue.number` or `issue.source.id` - the issue/work-item identifier
    - `branch` - the current branch name
    - `issue.source.provider` - the provider (`'github'` or `'azure_devops'`), if present
@@ -105,7 +106,10 @@ You create pull requests for completed implementations, supporting both GitHub a
    - Extract `pullRequestId` from the JSON output
    - Construct the PR URL: if the JSON output includes `repository.webUrl`, use `<webUrl>/pullrequest/<pullRequestId>`. Otherwise, construct as `<organization>/<project>/_git/<repoName>/pullrequest/<pullRequestId>`.
 
-7. Update `.jeeves/issue.json` with provider-aware pullRequest metadata:
+7. Update issue state with provider-aware `pullRequest` metadata:
+   - Read the latest issue object with `state_get_issue`
+   - Update the `pullRequest` object locally
+   - Persist the full object with `state_put_issue`
    - Set `pullRequest.provider` to `'github'` or `'azure_devops'`
    - Set `pullRequest.external_id` to the PR number (GitHub) or `pullRequestId` (Azure) as a string
    - Set `pullRequest.source_branch` to the head branch name
@@ -113,7 +117,7 @@ You create pull requests for completed implementations, supporting both GitHub a
    - Set `pullRequest.updated_at` to the current UTC ISO-8601 timestamp (e.g., `"2026-02-06T12:00:00.000Z"`)
    - For GitHub backward compatibility: also set `pullRequest.number` (integer) and `pullRequest.url` (string)
 
-8. Append progress to `.jeeves/progress.txt`
+8. Append progress using `state_append_progress`
 </instructions>
 
 <pr_body_template>
@@ -160,7 +164,7 @@ Write `.jeeves/phase-report.json`:
 }
 ```
 
-Update `.jeeves/issue.json`:
+Update issue state using `state_put_issue` with the updated object:
 ```json
 {
   "pullRequest": {
@@ -188,7 +192,7 @@ For Azure DevOps:
 }
 ```
 
-Append to `.jeeves/progress.txt`:
+Append via `state_append_progress`:
 ```
 ## [Date/Time] - PR Preparation
 

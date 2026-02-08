@@ -122,6 +122,35 @@ describe('workflowLoader', () => {
     expect('provider' in phasesSection.start).toBe(false);
   });
 
+  it('round-trips phase mcp_profile', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'mcp-profile-roundtrip',
+        version: 1,
+        start: 'start',
+      },
+      phases: {
+        start: {
+          type: 'execute',
+          mcp_profile: 'state_with_pruner',
+          prompt: 'Start',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    expect(workflow.phases.start.mcpProfile).toBe('state_with_pruner');
+
+    const raw = toRawWorkflowJson(workflow);
+    const phases = raw.phases as Record<string, Record<string, unknown>>;
+    expect(phases.start.mcp_profile).toBe('state_with_pruner');
+
+    const yaml = toWorkflowYaml(workflow);
+    const parsed = parseWorkflowYaml(yaml);
+    expect(parsed).toEqual(workflow);
+  });
+
   it('round-trips workflow.default_reasoning_effort (Codex)', () => {
     const workflow = parseWorkflowObject({
       workflow: {

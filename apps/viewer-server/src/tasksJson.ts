@@ -1,9 +1,6 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
 import { expandFilesAllowedForTests } from '@jeeves/core';
 
-import { writeJsonAtomic } from './jsonAtomic.js';
+import { readTasksJson, writeTasksJson } from './tasksStore.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -28,16 +25,8 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
  * accidental test edits that would otherwise fail `task_spec_check`.
  */
 export async function expandTasksFilesAllowedForTests(stateDir: string): Promise<boolean> {
-  const tasksPath = path.join(stateDir, 'tasks.json');
-  const raw = await fs.readFile(tasksPath, 'utf-8').catch(() => null);
-  if (!raw) return false;
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw) as unknown;
-  } catch {
-    return false;
-  }
+  const json = await readTasksJson(stateDir);
+  if (!json) return false;
 
   if (!isPlainObject(json)) return false;
   const tasks = json.tasks;
@@ -57,7 +46,6 @@ export async function expandTasksFilesAllowedForTests(stateDir: string): Promise
   }
 
   if (!changed) return false;
-  await writeJsonAtomic(tasksPath, json);
+  await writeTasksJson(stateDir, json);
   return true;
 }
-

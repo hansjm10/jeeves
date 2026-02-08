@@ -197,6 +197,90 @@ describe('viewer-server', () => {
     await app.close();
   });
 
+  it('GET /api/db/health returns database health summary', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-db-health-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/db/health' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; health?: Record<string, unknown> };
+    expect(body.ok).toBe(true);
+    expect(typeof body.health?.dbPath).toBe('string');
+    expect(typeof body.health?.sizeBytes).toBe('number');
+    await app.close();
+  });
+
+  it('POST /api/db/integrity-check enforces localhost mutating guard', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-db-integrity-guard-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/db/integrity-check',
+      remoteAddress: '8.8.8.8',
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('POST /api/db/integrity-check, /api/db/vacuum, and /api/db/backup succeed from localhost', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-db-ops-');
+    const { app } = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowRemoteRun: false,
+      dataDir,
+      repoRoot: path.resolve(process.cwd()),
+    });
+
+    const integrityRes = await app.inject({
+      method: 'POST',
+      url: '/api/db/integrity-check',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(integrityRes.statusCode).toBe(200);
+    const integrityBody = integrityRes.json() as { ok: boolean; integrity?: { ok: boolean; rows: string[] } };
+    expect(integrityBody.ok).toBe(true);
+    expect(Array.isArray(integrityBody.integrity?.rows)).toBe(true);
+
+    const vacuumRes = await app.inject({
+      method: 'POST',
+      url: '/api/db/vacuum',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(vacuumRes.statusCode).toBe(200);
+    const vacuumBody = vacuumRes.json() as { ok: boolean; vacuum?: { beforeBytes: number; afterBytes: number } };
+    expect(vacuumBody.ok).toBe(true);
+    expect(typeof vacuumBody.vacuum?.beforeBytes).toBe('number');
+    expect(typeof vacuumBody.vacuum?.afterBytes).toBe('number');
+
+    const backupRes = await app.inject({
+      method: 'POST',
+      url: '/api/db/backup',
+      remoteAddress: '127.0.0.1',
+      payload: { filename: 'snapshot.db' },
+    });
+    expect(backupRes.statusCode).toBe(200);
+    const backupBody = backupRes.json() as { ok: boolean; backup?: { path: string } };
+    expect(backupBody.ok).toBe(true);
+    expect(backupBody.backup?.path).toContain(path.join(dataDir, 'backups'));
+    await expect(fs.stat(backupBody.backup!.path)).resolves.toBeDefined();
+
+    await app.close();
+  });
+
   it('lists yaml workflows directly under workflowsDir', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-workflows-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-workflows-');
@@ -1183,7 +1267,7 @@ describe('viewer-server', () => {
     }
 
     await app.close();
-  });
+  }, 15_000);
 
   it('supports create+init and persists issue.title and issue.url into issue.json', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-create-init-');

@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/progress updates (`state_get_issue`, `state_update_issue_status`, `state_append_progress`) instead of editing `.jeeves/issue.json` or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -14,16 +15,16 @@ You approve only designs that are immediately implementable without clarificatio
 <context>
 - Phase type: **evaluate** (READ-ONLY – you may NOT modify source files)
 - Workflow position: After design phases, before implementation
-- Allowed modifications: **ONLY** `.jeeves/issue.json` and `.jeeves/progress.txt`
+- Allowed workflow-state updates: MCP state tools and `.jeeves/phase-report.json`
 - Purpose: **Hard gate before implementation begins**
 - The `.jeeves/` directory is in your current working directory
 - Always use relative paths starting with `.jeeves/`
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains `designDocPath` and issue number)
-- Progress log: `.jeeves/progress.txt`
-- Design document: Read from path in `.jeeves/issue.json.designDocPath`
+- Issue config/state: `state_get_issue` (contains `designDocPath` and issue number)
+- Progress logging: `state_append_progress`
+- Design document: Read from path in `issue.designDocPath` from `state_get_issue`
 - Issue requirements (provider-aware):
   - GitHub: `gh issue view <issueNumber>`
   - Azure DevOps: `az boards work-item show --id <issueId> --organization <org> --project <project> --output json`
@@ -35,7 +36,7 @@ IMPORTANT – STRICT ENFORCEMENT:
 - You MUST NOT modify the design document
 - You MUST NOT approve a design with unresolved ambiguity
 - You MUST NOT defer clarification to implementation
-- You MAY ONLY update: `.jeeves/issue.json` and `.jeeves/progress.txt`
+- You MAY update issue/progress only through MCP state tools, and write `.jeeves/phase-report.json`
 - This is a design-only phase. Do NOT execute repository-wide quality commands in this phase.
 - Specifically: do NOT run `pnpm lint`, `pnpm typecheck`, or `pnpm test`.
 - If the design document includes validation commands, treat them as content to evaluate, not commands to run.
@@ -45,7 +46,7 @@ IMPORTANT – STRICT ENFORCEMENT:
 
 ## Review Instructions
 
-1. Read `.jeeves/issue.json` to determine:
+1. Call `state_get_issue` to determine:
    - Design document path
    - Issue/work-item identifier and provider context
 
@@ -62,7 +63,7 @@ IMPORTANT – STRICT ENFORCEMENT:
    - Run the matching command (`gh issue view` or `az boards work-item show`)
    - Extract explicit requirements
    - If explicit markdown requirement lists are missing, use deterministic fallback requirements from accessible fields:
-     - issue title (`.jeeves/issue.json.issue.title`)
+     - issue title (`issue.title` from `state_get_issue`)
      - non-empty content under headings like `Description`, `Expected Result`, `Suggested Fix`, `Impact`
    - If provider command fails, use cached `.jeeves/issue.md` when present
 
@@ -142,7 +143,7 @@ Otherwise: **REQUEST CHANGES**
 ## Output Format
 
 ### Progress Log Entry
-Append to `.jeeves/progress.txt`:
+Append this entry via `state_append_progress`:
 
 ```
 ## [Date/Time] - Design Review
@@ -167,8 +168,8 @@ Append to `.jeeves/progress.txt`:
 ```
 
 ### Canonical State Update Rules
-- You MAY update `.jeeves/issue.json.status.designFeedback` with concrete feedback text.
-- You MUST NOT directly set canonical transition flags in `.jeeves/issue.json` (`designNeedsChanges`, `designApproved`).
+- You MAY update `issue.status.designFeedback` via `state_update_issue_status`.
+- You MUST NOT directly set canonical transition flags in issue state (`designNeedsChanges`, `designApproved`).
 - Instead, write `.jeeves/phase-report.json` with your verdict:
 
 If changes are required:

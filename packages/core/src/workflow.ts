@@ -56,6 +56,7 @@ export type Phase = Readonly<{
   name: string;
   type: PhaseType;
   provider?: string;
+  mcpProfile?: string;
   prompt?: string;
   command?: string;
   description?: string;

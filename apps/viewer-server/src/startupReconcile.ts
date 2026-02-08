@@ -2,14 +2,20 @@ import {
   reconcilePromptsFromFiles,
   reconcileWorkflowsFromFiles,
 } from './contentStore.js';
-import { readIssueJson } from './issueJson.js';
-import { readTasksJson } from './tasksStore.js';
+import {
+  readIssueFromDb,
+  readTasksFromDb,
+} from './sqliteStorage.js';
 
 export type StartupReconcileSummary = Readonly<{
   promptsSynced: number;
   workflowsSynced: number;
   issueSynced: boolean;
   tasksSynced: boolean;
+  bootstrapRan: boolean;
+  bootstrapIssuesImported: number;
+  bootstrapTasksImported: number;
+  bootstrapActiveIssueImported: boolean;
 }>;
 
 export async function reconcileStartupState(params: {
@@ -24,8 +30,8 @@ export async function reconcileStartupState(params: {
   let issueSynced = false;
   let tasksSynced = false;
   if (params.selectedStateDir) {
-    issueSynced = (await readIssueJson(params.selectedStateDir)) !== null;
-    tasksSynced = (await readTasksJson(params.selectedStateDir)) !== null;
+    issueSynced = readIssueFromDb(params.selectedStateDir) !== null;
+    tasksSynced = readTasksFromDb(params.selectedStateDir) !== null;
   }
 
   return {
@@ -33,5 +39,9 @@ export async function reconcileStartupState(params: {
     workflowsSynced,
     issueSynced,
     tasksSynced,
+    bootstrapRan: false,
+    bootstrapIssuesImported: 0,
+    bootstrapTasksImported: 0,
+    bootstrapActiveIssueImported: false,
   };
 }

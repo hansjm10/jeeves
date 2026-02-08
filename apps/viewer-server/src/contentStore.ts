@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { writeTextAtomic, writeTextAtomicNew } from './textAtomic.js';
 import {
   countPromptsInDb,
   countWorkflowsInDb,
@@ -67,15 +66,11 @@ export async function writePromptToStore(params: {
   content: string;
   createIfMissing: boolean;
 }): Promise<void> {
-  const { dataDir, promptsDir, id, content, createIfMissing } = params;
+  const { dataDir, promptsDir, id, content } = params;
   upsertPromptInDb(dataDir, id, content);
-
-  const target = path.resolve(promptsDir, id);
-  if (createIfMissing) {
-    await writeTextAtomicNew(target, content);
-  } else {
-    await writeTextAtomic(target, content);
-  }
+  const promptPath = path.resolve(promptsDir, id);
+  await fs.mkdir(path.dirname(promptPath), { recursive: true });
+  await fs.writeFile(promptPath, content, 'utf-8');
 }
 
 export async function cachePromptInStore(dataDir: string, id: string, content: string): Promise<void> {
@@ -122,15 +117,11 @@ export async function writeWorkflowToStore(params: {
   yaml: string;
   createIfMissing: boolean;
 }): Promise<void> {
-  const { dataDir, workflowsDir, name, yaml, createIfMissing } = params;
+  const { dataDir, workflowsDir, name, yaml } = params;
   upsertWorkflowInDb(dataDir, name, yaml);
-
-  const filePath = path.resolve(workflowsDir, `${name}.yaml`);
-  if (createIfMissing) {
-    await writeTextAtomicNew(filePath, yaml);
-  } else {
-    await writeTextAtomic(filePath, yaml);
-  }
+  const workflowPath = path.resolve(workflowsDir, `${name}.yaml`);
+  await fs.mkdir(path.dirname(workflowPath), { recursive: true });
+  await fs.writeFile(workflowPath, yaml, 'utf-8');
 }
 
 export async function cacheWorkflowInStore(dataDir: string, name: string, yaml: string): Promise<void> {

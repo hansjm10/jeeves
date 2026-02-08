@@ -23,6 +23,65 @@ export type StoredIssueSummary = Readonly<{
 export type StoredPrompt = Readonly<{ id: string; content: string; updatedAt: string }>;
 export type StoredWorkflow = Readonly<{ name: string; yaml: string; updatedAt: string }>;
 
+export type ProgressEvent = Readonly<{
+  id: number;
+  stateDir: string;
+  ts: string;
+  source: string;
+  phase: string | null;
+  level: string | null;
+  message: string;
+  payload: JsonRecord | null;
+}>;
+
+export type RunSession = Readonly<{
+  runId: string;
+  stateDir: string;
+  issueRef: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: JsonRecord;
+  archiveMeta: JsonRecord;
+}>;
+
+export type RunLogLine = Readonly<{
+  id: number;
+  runId: string;
+  scope: string;
+  taskId: string;
+  stream: string;
+  ts: string;
+  line: string;
+}>;
+
+export type RunSdkEvent = Readonly<{
+  id: number;
+  runId: string;
+  scope: string;
+  taskId: string;
+  ts: string;
+  event: JsonRecord;
+}>;
+
+export type RunArtifact = Readonly<{
+  runId: string;
+  scope: string;
+  taskId: string;
+  name: string;
+  mime: string;
+  content: Buffer;
+  createdAt: string;
+}>;
+
+export type WorkerState = Readonly<{
+  runId: string;
+  taskId: string;
+  stateDir: string;
+  branch: string;
+  worktreeDir: string;
+  status: JsonRecord;
+}>;
+
 export type DbHealthSummary = Readonly<{
   dbPath: string;
   exists: boolean;
@@ -217,6 +276,96 @@ export function ensureSchema(db: DbHandle): void {
       yaml TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS progress_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      state_dir TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      source TEXT NOT NULL,
+      phase TEXT,
+      level TEXT,
+      message TEXT NOT NULL,
+      payload_json TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_progress_events_state_id
+      ON progress_events(state_dir, id);
+
+    CREATE TABLE IF NOT EXISTS run_sessions (
+      run_id TEXT PRIMARY KEY,
+      state_dir TEXT NOT NULL,
+      issue_ref TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      status_json TEXT NOT NULL,
+      archive_meta_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_sessions_state_started
+      ON run_sessions(state_dir, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS run_iterations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES run_sessions(run_id) ON DELETE CASCADE,
+      iteration INTEGER NOT NULL,
+      data_json TEXT NOT NULL,
+      UNIQUE(run_id, iteration)
+    );
+
+    CREATE TABLE IF NOT EXISTS run_log_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES run_sessions(run_id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      task_id TEXT NOT NULL DEFAULT '',
+      stream TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      line TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_log_lines_lookup
+      ON run_log_lines(run_id, scope, task_id, stream, id);
+
+    CREATE TABLE IF NOT EXISTS run_sdk_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES run_sessions(run_id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      task_id TEXT NOT NULL DEFAULT '',
+      ts TEXT NOT NULL,
+      event_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_sdk_events_lookup
+      ON run_sdk_events(run_id, scope, task_id, id);
+
+    CREATE TABLE IF NOT EXISTS run_artifacts (
+      run_id TEXT NOT NULL REFERENCES run_sessions(run_id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      task_id TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      content BLOB NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(run_id, scope, task_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS worker_states (
+      run_id TEXT NOT NULL REFERENCES run_sessions(run_id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL,
+      state_dir TEXT NOT NULL,
+      branch TEXT NOT NULL,
+      worktree_dir TEXT NOT NULL,
+      status_json TEXT NOT NULL,
+      PRIMARY KEY(run_id, task_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_worker_states_state
+      ON worker_states(state_dir, run_id, task_id);
   `);
 }
 
@@ -754,6 +903,734 @@ export function countWorkflowsInDb(dataDir: string): number {
   return withDb(dataDir, (db) => {
     const row = db.prepare('SELECT COUNT(*) as count FROM workflows').get() as { count: number };
     return row.count;
+  });
+}
+
+export function getMetaValue(dataDir: string, key: string): string | null {
+  return withDb(dataDir, (db) => {
+    const row = db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  });
+}
+
+export function setMetaValue(dataDir: string, key: string, value: string): void {
+  const updatedAt = nowIso();
+  withDb(dataDir, (db) => {
+    db.prepare(
+      `
+      INSERT INTO meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
+      `,
+    ).run(key, value, updatedAt);
+  });
+}
+
+export function isBootstrapComplete(dataDir: string): boolean {
+  const marker = getMetaValue(dataDir, 'bootstrap_version');
+  return Boolean(marker && marker.trim().length > 0);
+}
+
+export function markBootstrapComplete(dataDir: string, version: string): void {
+  const normalized = version.trim() || '1';
+  setMetaValue(dataDir, 'bootstrap_version', normalized);
+  setMetaValue(dataDir, 'bootstrap_completed_at', nowIso());
+}
+
+export function appendProgressEvent(params: {
+  stateDir: string;
+  source: string;
+  message: string;
+  phase?: string | null;
+  level?: string | null;
+  payload?: JsonRecord | null;
+  ts?: string;
+}): number {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const ts = params.ts ?? nowIso();
+  return withDb(dataDir, (db) => {
+    const result = db.prepare(
+      `
+      INSERT INTO progress_events (state_dir, ts, source, phase, level, message, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      normalizedStateDir,
+      ts,
+      params.source,
+      params.phase ?? null,
+      params.level ?? null,
+      params.message,
+      params.payload ? JSON.stringify(params.payload) : null,
+    );
+    return Number(result.lastInsertRowid);
+  });
+}
+
+export function listProgressEvents(params: {
+  stateDir: string;
+  afterId?: number;
+  limit?: number;
+}): ProgressEvent[] {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const afterId = Number.isInteger(params.afterId) ? Number(params.afterId) : 0;
+  const limit = Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 500;
+  return withDb(dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT id, state_dir, ts, source, phase, level, message, payload_json
+        FROM progress_events
+        WHERE state_dir = ?
+          AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        `,
+      )
+      .all(normalizedStateDir, afterId, limit) as {
+      id: number;
+      state_dir: string;
+      ts: string;
+      source: string;
+      phase: string | null;
+      level: string | null;
+      message: string;
+      payload_json: string | null;
+    }[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      stateDir: row.state_dir,
+      ts: row.ts,
+      source: row.source,
+      phase: row.phase,
+      level: row.level,
+      message: row.message,
+      payload: row.payload_json ? parseJsonRecord(row.payload_json) : null,
+    }));
+  });
+}
+
+export function renderProgressText(params: {
+  stateDir: string;
+  maxEvents?: number;
+}): string {
+  const rows = listProgressEvents({
+    stateDir: params.stateDir,
+    afterId: 0,
+    limit: Number.isInteger(params.maxEvents) ? Math.max(1, Number(params.maxEvents)) : 5000,
+  });
+  return rows
+    .map((row) => {
+      const parts: string[] = [row.ts, row.source];
+      if (row.phase) parts.push(`phase=${row.phase}`);
+      if (row.level) parts.push(`level=${row.level}`);
+      return `[${parts.join(' ')}] ${row.message}`;
+    })
+    .join('\n');
+}
+
+export function upsertRunSession(params: {
+  dataDir: string;
+  runId: string;
+  stateDir: string;
+  issueRef?: string | null;
+  startedAt?: string;
+  endedAt?: string | null;
+  status?: JsonRecord;
+  archiveMeta?: JsonRecord;
+}): void {
+  const startedAt = params.startedAt ?? nowIso();
+  withDb(params.dataDir, (db) => {
+    const existing = db
+      .prepare(
+        `
+        SELECT started_at, status_json, archive_meta_json
+        FROM run_sessions
+        WHERE run_id = ?
+        `,
+      )
+      .get(params.runId) as {
+      started_at: string;
+      status_json: string;
+      archive_meta_json: string;
+    } | undefined;
+
+    const nextStatus = params.status ?? (existing?.status_json ? (parseJsonRecord(existing.status_json) ?? {}) : {});
+    const nextArchive = params.archiveMeta ?? (existing?.archive_meta_json ? (parseJsonRecord(existing.archive_meta_json) ?? {}) : {});
+    db.prepare(
+      `
+      INSERT INTO run_sessions (run_id, state_dir, issue_ref, started_at, ended_at, status_json, archive_meta_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET
+        state_dir = excluded.state_dir,
+        issue_ref = excluded.issue_ref,
+        ended_at = excluded.ended_at,
+        status_json = excluded.status_json,
+        archive_meta_json = excluded.archive_meta_json
+      `,
+    ).run(
+      params.runId,
+      path.resolve(params.stateDir),
+      params.issueRef ?? null,
+      existing?.started_at ?? startedAt,
+      params.endedAt ?? null,
+      JSON.stringify(nextStatus),
+      JSON.stringify(nextArchive),
+    );
+  });
+}
+
+export function readRunSession(dataDir: string, runId: string): RunSession | null {
+  return withDb(dataDir, (db) => {
+    const row = db
+      .prepare(
+        `
+        SELECT run_id, state_dir, issue_ref, started_at, ended_at, status_json, archive_meta_json
+        FROM run_sessions
+        WHERE run_id = ?
+        `,
+      )
+      .get(runId) as {
+      run_id: string;
+      state_dir: string;
+      issue_ref: string | null;
+      started_at: string;
+      ended_at: string | null;
+      status_json: string;
+      archive_meta_json: string;
+    } | undefined;
+    if (!row) return null;
+    return {
+      runId: row.run_id,
+      stateDir: row.state_dir,
+      issueRef: row.issue_ref,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      status: parseJsonRecord(row.status_json) ?? {},
+      archiveMeta: parseJsonRecord(row.archive_meta_json) ?? {},
+    };
+  });
+}
+
+export function listRunSessionsForStateDir(params: {
+  dataDir: string;
+  stateDir: string;
+  limit?: number;
+}): RunSession[] {
+  const limit = Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 100;
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT run_id, state_dir, issue_ref, started_at, ended_at, status_json, archive_meta_json
+        FROM run_sessions
+        WHERE state_dir = ?
+        ORDER BY started_at DESC
+        LIMIT ?
+        `,
+      )
+      .all(path.resolve(params.stateDir), limit) as {
+      run_id: string;
+      state_dir: string;
+      issue_ref: string | null;
+      started_at: string;
+      ended_at: string | null;
+      status_json: string;
+      archive_meta_json: string;
+    }[];
+    return rows.map((row) => ({
+      runId: row.run_id,
+      stateDir: row.state_dir,
+      issueRef: row.issue_ref,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      status: parseJsonRecord(row.status_json) ?? {},
+      archiveMeta: parseJsonRecord(row.archive_meta_json) ?? {},
+    }));
+  });
+}
+
+export function getLatestRunIdForStateDir(dataDir: string, stateDir: string): string | null {
+  return withDb(dataDir, (db) => {
+    const row = db
+      .prepare(
+        `
+        SELECT run_id
+        FROM run_sessions
+        WHERE state_dir = ?
+        ORDER BY started_at DESC
+        LIMIT 1
+        `,
+      )
+      .get(path.resolve(stateDir)) as { run_id: string } | undefined;
+    return row?.run_id ?? null;
+  });
+}
+
+export function upsertRunIteration(params: {
+  dataDir: string;
+  runId: string;
+  iteration: number;
+  data: JsonRecord;
+}): void {
+  withDb(params.dataDir, (db) => {
+    db.prepare(
+      `
+      INSERT INTO run_iterations (run_id, iteration, data_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(run_id, iteration) DO UPDATE SET
+        data_json = excluded.data_json
+      `,
+    ).run(params.runId, params.iteration, JSON.stringify(params.data));
+  });
+}
+
+export function listRunIterations(params: {
+  dataDir: string;
+  runId: string;
+}): readonly { iteration: number; data: JsonRecord }[] {
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT iteration, data_json
+        FROM run_iterations
+        WHERE run_id = ?
+        ORDER BY iteration ASC
+        `,
+      )
+      .all(params.runId) as { iteration: number; data_json: string }[];
+    return rows.map((row) => ({
+      iteration: row.iteration,
+      data: parseJsonRecord(row.data_json) ?? {},
+    }));
+  });
+}
+
+export function appendRunLogLine(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  stream: string;
+  line: string;
+  taskId?: string;
+  ts?: string;
+}): number {
+  const ts = params.ts ?? nowIso();
+  return withDb(params.dataDir, (db) => {
+    const result = db.prepare(
+      `
+      INSERT INTO run_log_lines (run_id, scope, task_id, stream, ts, line)
+      VALUES (?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      params.runId,
+      params.scope,
+      params.taskId ?? '',
+      params.stream,
+      ts,
+      params.line,
+    );
+    return Number(result.lastInsertRowid);
+  });
+}
+
+export function listRunLogLines(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  stream: string;
+  taskId?: string;
+  afterId?: number;
+  limit?: number;
+}): RunLogLine[] {
+  const afterId = Number.isInteger(params.afterId) ? Number(params.afterId) : 0;
+  const limit = Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 1000;
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT id, run_id, scope, task_id, stream, ts, line
+        FROM run_log_lines
+        WHERE run_id = ?
+          AND scope = ?
+          AND stream = ?
+          AND task_id = ?
+          AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        `,
+      )
+      .all(
+        params.runId,
+        params.scope,
+        params.stream,
+        params.taskId ?? '',
+        afterId,
+        limit,
+      ) as {
+      id: number;
+      run_id: string;
+      scope: string;
+      task_id: string;
+      stream: string;
+      ts: string;
+      line: string;
+    }[];
+    return rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      scope: row.scope,
+      taskId: row.task_id,
+      stream: row.stream,
+      ts: row.ts,
+      line: row.line,
+    }));
+  });
+}
+
+export function appendRunSdkEvent(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  event: JsonRecord;
+  taskId?: string;
+  ts?: string;
+}): number {
+  const ts = params.ts ?? nowIso();
+  return withDb(params.dataDir, (db) => {
+    const result = db.prepare(
+      `
+      INSERT INTO run_sdk_events (run_id, scope, task_id, ts, event_json)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+    ).run(
+      params.runId,
+      params.scope,
+      params.taskId ?? '',
+      ts,
+      JSON.stringify(params.event),
+    );
+    return Number(result.lastInsertRowid);
+  });
+}
+
+export function listRunSdkEvents(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  taskId?: string;
+  afterId?: number;
+  limit?: number;
+}): RunSdkEvent[] {
+  const afterId = Number.isInteger(params.afterId) ? Number(params.afterId) : 0;
+  const limit = Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 1000;
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT id, run_id, scope, task_id, ts, event_json
+        FROM run_sdk_events
+        WHERE run_id = ?
+          AND scope = ?
+          AND task_id = ?
+          AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        `,
+      )
+      .all(
+        params.runId,
+        params.scope,
+        params.taskId ?? '',
+        afterId,
+        limit,
+      ) as {
+      id: number;
+      run_id: string;
+      scope: string;
+      task_id: string;
+      ts: string;
+      event_json: string;
+    }[];
+    return rows
+      .map((row) => ({
+        id: row.id,
+        runId: row.run_id,
+        scope: row.scope,
+        taskId: row.task_id,
+        ts: row.ts,
+        event: parseJsonRecord(row.event_json),
+      }))
+      .filter((row): row is RunSdkEvent => row.event !== null);
+  });
+}
+
+export function upsertRunArtifact(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  name: string;
+  mime: string;
+  content: Buffer | Uint8Array;
+  taskId?: string;
+  createdAt?: string;
+}): void {
+  const createdAt = params.createdAt ?? nowIso();
+  withDb(params.dataDir, (db) => {
+    db.prepare(
+      `
+      INSERT INTO run_artifacts (run_id, scope, task_id, name, mime, content, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id, scope, task_id, name) DO UPDATE SET
+        mime = excluded.mime,
+        content = excluded.content,
+        created_at = excluded.created_at
+      `,
+    ).run(
+      params.runId,
+      params.scope,
+      params.taskId ?? '',
+      params.name,
+      params.mime,
+      params.content,
+      createdAt,
+    );
+  });
+}
+
+export function readRunArtifact(params: {
+  dataDir: string;
+  runId: string;
+  scope: string;
+  name: string;
+  taskId?: string;
+}): RunArtifact | null {
+  return withDb(params.dataDir, (db) => {
+    const row = db
+      .prepare(
+        `
+        SELECT run_id, scope, task_id, name, mime, content, created_at
+        FROM run_artifacts
+        WHERE run_id = ?
+          AND scope = ?
+          AND task_id = ?
+          AND name = ?
+        `,
+      )
+      .get(
+        params.runId,
+        params.scope,
+        params.taskId ?? '',
+        params.name,
+      ) as {
+      run_id: string;
+      scope: string;
+      task_id: string;
+      name: string;
+      mime: string;
+      content: Buffer;
+      created_at: string;
+    } | undefined;
+    if (!row) return null;
+    return {
+      runId: row.run_id,
+      scope: row.scope,
+      taskId: row.task_id,
+      name: row.name,
+      mime: row.mime,
+      content: row.content,
+      createdAt: row.created_at,
+    };
+  });
+}
+
+export function listRunArtifacts(params: {
+  dataDir: string;
+  runId: string;
+  scope?: string;
+  taskId?: string;
+}): RunArtifact[] {
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT run_id, scope, task_id, name, mime, content, created_at
+        FROM run_artifacts
+        WHERE run_id = ?
+          AND (? IS NULL OR scope = ?)
+          AND (? IS NULL OR task_id = ?)
+        ORDER BY scope ASC, task_id ASC, name ASC
+        `,
+      )
+      .all(
+        params.runId,
+        params.scope ?? null,
+        params.scope ?? null,
+        params.taskId ?? null,
+        params.taskId ?? null,
+      ) as {
+      run_id: string;
+      scope: string;
+      task_id: string;
+      name: string;
+      mime: string;
+      content: Buffer;
+      created_at: string;
+    }[];
+
+    return rows.map((row) => ({
+      runId: row.run_id,
+      scope: row.scope,
+      taskId: row.task_id,
+      name: row.name,
+      mime: row.mime,
+      content: row.content,
+      createdAt: row.created_at,
+    }));
+  });
+}
+
+export function upsertWorkerState(params: {
+  dataDir: string;
+  runId: string;
+  taskId: string;
+  stateDir: string;
+  branch: string;
+  worktreeDir: string;
+  status: JsonRecord;
+}): void {
+  withDb(params.dataDir, (db) => {
+    db.prepare(
+      `
+      INSERT INTO worker_states (run_id, task_id, state_dir, branch, worktree_dir, status_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id, task_id) DO UPDATE SET
+        state_dir = excluded.state_dir,
+        branch = excluded.branch,
+        worktree_dir = excluded.worktree_dir,
+        status_json = excluded.status_json
+      `,
+    ).run(
+      params.runId,
+      params.taskId,
+      path.resolve(params.stateDir),
+      params.branch,
+      path.resolve(params.worktreeDir),
+      JSON.stringify(params.status),
+    );
+  });
+}
+
+export function readWorkerState(params: {
+  dataDir: string;
+  runId: string;
+  taskId: string;
+}): WorkerState | null {
+  return withDb(params.dataDir, (db) => {
+    const row = db
+      .prepare(
+        `
+        SELECT run_id, task_id, state_dir, branch, worktree_dir, status_json
+        FROM worker_states
+        WHERE run_id = ? AND task_id = ?
+        `,
+      )
+      .get(params.runId, params.taskId) as {
+      run_id: string;
+      task_id: string;
+      state_dir: string;
+      branch: string;
+      worktree_dir: string;
+      status_json: string;
+    } | undefined;
+    if (!row) return null;
+    return {
+      runId: row.run_id,
+      taskId: row.task_id,
+      stateDir: row.state_dir,
+      branch: row.branch,
+      worktreeDir: row.worktree_dir,
+      status: parseJsonRecord(row.status_json) ?? {},
+    };
+  });
+}
+
+export function listWorkerStates(params: {
+  dataDir: string;
+  runId: string;
+}): WorkerState[] {
+  return withDb(params.dataDir, (db) => {
+    const rows = db
+      .prepare(
+        `
+        SELECT run_id, task_id, state_dir, branch, worktree_dir, status_json
+        FROM worker_states
+        WHERE run_id = ?
+        ORDER BY task_id ASC
+        `,
+      )
+      .all(params.runId) as {
+      run_id: string;
+      task_id: string;
+      state_dir: string;
+      branch: string;
+      worktree_dir: string;
+      status_json: string;
+    }[];
+    return rows.map((row) => ({
+      runId: row.run_id,
+      taskId: row.task_id,
+      stateDir: row.state_dir,
+      branch: row.branch,
+      worktreeDir: row.worktree_dir,
+      status: parseJsonRecord(row.status_json) ?? {},
+    }));
+  });
+}
+
+export function deleteWorkerState(params: {
+  dataDir: string;
+  runId: string;
+  taskId: string;
+}): void {
+  withDb(params.dataDir, (db) => {
+    db.prepare('DELETE FROM worker_states WHERE run_id = ? AND task_id = ?').run(params.runId, params.taskId);
+  });
+}
+
+export function pruneRunsForStateDir(params: {
+  dataDir: string;
+  stateDir: string;
+  keep: number;
+}): number {
+  const keep = Number.isInteger(params.keep) ? Math.max(1, Number(params.keep)) : 30;
+  return withDb(params.dataDir, (db) => {
+    const runIds = db
+      .prepare(
+        `
+        SELECT run_id
+        FROM run_sessions
+        WHERE state_dir = ?
+        ORDER BY started_at DESC
+        `,
+      )
+      .all(path.resolve(params.stateDir)) as { run_id: string }[];
+    if (runIds.length <= keep) return 0;
+    const doomed = runIds.slice(keep).map((row) => row.run_id);
+    const tx = db.transaction(() => {
+      const stmt = db.prepare('DELETE FROM run_sessions WHERE run_id = ?');
+      for (const runId of doomed) stmt.run(runId);
+    });
+    tx();
+    return doomed.length;
   });
 }
 

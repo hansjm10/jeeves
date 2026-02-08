@@ -6,12 +6,13 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
 import { RunManager } from './runManager.js';
 import { readIssueJson } from './issueJson.js';
+import { installStateDbFsShim } from './testStateDbShim.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,6 +72,17 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 25));
   }
 }
+
+let uninstallFsShim: (() => void) | null = null;
+
+beforeEach(() => {
+  uninstallFsShim = installStateDbFsShim();
+});
+
+afterEach(() => {
+  uninstallFsShim?.();
+  uninstallFsShim = null;
+});
 
 describe('RunManager', () => {
   it('does not treat tool output containing the promise as completion', async () => {

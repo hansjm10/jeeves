@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
@@ -30,6 +30,7 @@ import {
   type WorkerOutcome,
 } from './parallelRunner.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { installStateDbFsShim } from './testStateDbShim.js';
 
 // Mock child_process spawn
 function createMockProc(exitCode = 0): ChildProcessWithoutNullStreams {
@@ -81,9 +82,16 @@ function createMockProcWithAsyncSpawnError(errorMessage = 'spawn ENOENT'): Child
 
 describe('parallelRunner', () => {
   let tmpDir: string;
+  let uninstallFsShim: (() => void) | null = null;
 
   beforeEach(async () => {
+    uninstallFsShim = installStateDbFsShim();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'parallel-runner-test-'));
+  });
+
+  afterEach(() => {
+    uninstallFsShim?.();
+    uninstallFsShim = null;
   });
 
   describe('MAX_PARALLEL_TASKS', () => {

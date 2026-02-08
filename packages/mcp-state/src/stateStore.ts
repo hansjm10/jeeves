@@ -2,42 +2,14 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  appendProgressEvent,
   readIssueFromDb,
-  readIssueUpdatedAtMs,
   readTasksFromDb,
   writeIssueToDb,
   writeTasksToDb,
 } from '@jeeves/state-db';
 
 type JsonRecord = Record<string, unknown>;
-
-function tryParseJson(raw: string): unknown | null {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function parseJsonRecord(raw: string): JsonRecord | null {
-  const parsed = tryParseJson(raw);
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-    ? (parsed as JsonRecord)
-    : null;
-}
-
-async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
-  await fsp.mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fsp.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
-  await fsp.rename(tmp, filePath);
-}
-
-async function readJsonRecordFile(filePath: string): Promise<JsonRecord | null> {
-  const raw = await fsp.readFile(filePath, 'utf-8').catch(() => null);
-  if (!raw || !raw.trim()) return null;
-  return parseJsonRecord(raw);
-}
 
 function ensureObjectField(root: JsonRecord, key: string): JsonRecord {
   const existing = root[key];
@@ -50,42 +22,19 @@ function ensureObjectField(root: JsonRecord, key: string): JsonRecord {
 }
 
 export async function getIssue(stateDir: string): Promise<JsonRecord | null> {
-  const issuePath = path.join(stateDir, 'issue.json');
-  const fileStat = await fsp.stat(issuePath).catch(() => null);
-  const fromDb = readIssueFromDb(stateDir);
-  const fromDbUpdatedAtMs = readIssueUpdatedAtMs(stateDir);
-  if (fromDb && (!fileStat || !fileStat.isFile() || fileStat.mtimeMs <= fromDbUpdatedAtMs)) {
-    return fromDb;
-  }
-
-  const fromFile = await readJsonRecordFile(issuePath);
-  if (fromFile) {
-    writeIssueToDb(stateDir, fromFile);
-    return fromFile;
-  }
-
-  return fromDb ?? null;
+  return readIssueFromDb(stateDir);
 }
 
 export async function putIssue(stateDir: string, issue: JsonRecord): Promise<void> {
   writeIssueToDb(stateDir, issue);
-  await writeJsonAtomic(path.join(stateDir, 'issue.json'), issue);
 }
 
 export async function getTasks(stateDir: string): Promise<JsonRecord | null> {
-  const fromDb = readTasksFromDb(stateDir);
-  if (fromDb) return fromDb;
-
-  const tasksPath = path.join(stateDir, 'tasks.json');
-  const fromFile = await readJsonRecordFile(tasksPath);
-  if (!fromFile) return null;
-  writeTasksToDb(stateDir, fromFile);
-  return fromFile;
+  return readTasksFromDb(stateDir);
 }
 
 export async function putTasks(stateDir: string, tasks: JsonRecord): Promise<void> {
   writeTasksToDb(stateDir, tasks);
-  await writeJsonAtomic(path.join(stateDir, 'tasks.json'), tasks);
 }
 
 export async function updateIssueStatusFields(stateDir: string, fields: JsonRecord): Promise<boolean> {
@@ -137,6 +86,11 @@ export async function setTaskStatus(stateDir: string, taskId: string, status: st
 }
 
 export async function appendProgress(stateDir: string, entry: string): Promise<void> {
+  appendProgressEvent({
+    stateDir,
+    source: 'mcp-state',
+    message: entry,
+  });
   const progressPath = path.join(stateDir, 'progress.txt');
   await fsp.mkdir(path.dirname(progressPath), { recursive: true });
   await fsp.appendFile(progressPath, entry, 'utf-8');

@@ -6,6 +6,7 @@ import { createIssueState, getIssueStateDir, getWorktreePath, loadWorkflowByName
 import { saveActiveIssue } from './activeIssue.js';
 import { runGit } from './git.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
+import { writeIssueJson } from './issueJson.js';
 
 async function pathExists(filePath: string): Promise<boolean> {
   return fs
@@ -114,7 +115,7 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
   const baseRef = await resolveBaseRef(repoDir);
 
   const stateDir = getIssueStateDir(repo.owner, repo.repo, issueNumber, params.dataDir);
-  await createIssueState({
+  const createdIssueState = await createIssueState({
     owner: repo.owner,
     repo: repo.repo,
     issueNumber,
@@ -125,6 +126,9 @@ export async function initIssue(params: { dataDir: string; workflowsDir: string;
     designDocPath: params.body.design_doc?.trim() || undefined,
     force,
   });
+
+  // Keep runtime state DB-backed even though createIssueState still writes files.
+  await writeIssueJson(stateDir, createdIssueState as unknown as Record<string, unknown>);
 
   const worktreeDir = getWorktreePath(repo.owner, repo.repo, issueNumber, params.dataDir);
   await ensureWorktree({ repoDir, worktreeDir, branch, baseRef, force });

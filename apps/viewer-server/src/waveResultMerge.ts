@@ -11,6 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { appendProgressEvent } from './sqliteStorage.js';
 import { runGit } from './git.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
 import type { WorkerOutcome } from './parallelRunner.js';
@@ -336,6 +337,11 @@ export async function appendMergeProgress(
     // If append fails, try to create the file
     await fs.writeFile(progressPath, entry, 'utf-8');
   }
+  appendProgressEvent({
+    stateDir,
+    source: 'wave-merge',
+    message: entry,
+  });
 }
 
 /**

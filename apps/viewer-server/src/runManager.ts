@@ -14,7 +14,17 @@ import type { RunStatus } from './types.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
-import { readTaskCount } from './tasksStore.js';
+import {
+  appendProgressEvent,
+  appendRunLogLine,
+  renderProgressText,
+  listRunLogLines,
+  readRunArtifact,
+  upsertRunArtifact,
+  upsertRunIteration,
+  upsertRunSession,
+} from './sqliteStorage.js';
+import { readTaskCount, readTasksJson } from './tasksStore.js';
 import { expandTasksFilesAllowedForTests } from './tasksJson.js';
 import {
   ParallelRunner,
@@ -289,6 +299,7 @@ export class RunManager {
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
+  private viewerLogWriteQueue: Promise<void> = Promise.resolve();
   private activeParallelRunner: ParallelRunner | null = null;
   private maxParallelTasksOverride: number | null = null;
   /** Tracks the effective max parallel tasks (override or issue setting) for status reporting */
@@ -360,7 +371,7 @@ export class RunManager {
     const stateDir = getIssueStateDir(parsed.owner, parsed.repo, parsed.issueNumber, this.dataDir);
     const issueJson = await readIssueJson(stateDir);
     if (!issueJson) {
-      throw new Error(`issue.json not found for ${issueRef} at ${stateDir}`);
+      throw new Error(`Issue state not found for ${issueRef} at ${stateDir}`);
     }
     const workDir = getWorktreePath(parsed.owner, parsed.repo, parsed.issueNumber, this.dataDir);
     this.issueRef = `${parsed.owner}/${parsed.repo}#${parsed.issueNumber}`;
@@ -411,6 +422,7 @@ export class RunManager {
     const viewerLogPath = path.join(this.stateDir, 'viewer-run.log');
     await fs.mkdir(path.dirname(viewerLogPath), { recursive: true });
     await fs.writeFile(viewerLogPath, '', 'utf-8');
+    this.viewerLogWriteQueue = Promise.resolve();
 
     this.stopRequested = false;
     this.stopReason = null;
@@ -440,6 +452,17 @@ export class RunManager {
       issue_ref: this.issueRef,
       viewer_log_file: viewerLogPath,
     };
+    if (this.dbTelemetryEnabled()) {
+      upsertRunSession({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        stateDir: this.stateDir,
+        issueRef: this.issueRef,
+        startedAt,
+        status: this.status as unknown as Record<string, unknown>,
+        archiveMeta: this.runArchiveMeta ?? {},
+      });
+    }
 
     const workflowOverride = isNonEmptyString(params.workflow) ? params.workflow.trim() : null;
 
@@ -489,6 +512,23 @@ export class RunManager {
     }
 
     return this.getStatus();
+  }
+
+  private appendProgressEntry(message: string, level = 'info'): void {
+    if (!this.stateDir) return;
+    if (!this.dbTelemetryEnabled()) return;
+    appendProgressEvent({
+      stateDir: this.stateDir,
+      source: 'viewer-server',
+      level,
+      message,
+    });
+  }
+
+  private dbTelemetryEnabled(): boolean {
+    const forceEnableInTests = process.env.JEEVES_DB_MIRROR_IN_TESTS === '1';
+    if (forceEnableInTests) return true;
+    return process.env.VITEST !== 'true';
   }
 
   /**
@@ -554,6 +594,7 @@ export class RunManager {
         `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
         `---\n`;
       await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+      this.appendProgressEntry(progressEntry, 'warn');
 
       if (this.status.viewer_log_file) {
         await this.appendViewerLog(
@@ -580,6 +621,7 @@ export class RunManager {
       `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
       `---\n`;
     await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+    this.appendProgressEntry(progressEntry, 'warn');
 
     // Log if viewer log file is available
     if (this.status.viewer_log_file) {
@@ -591,7 +633,22 @@ export class RunManager {
   }
 
   private async appendViewerLog(viewerLogPath: string, line: string): Promise<void> {
-    await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
+    const runId = this.runId;
+    this.viewerLogWriteQueue = this.viewerLogWriteQueue.then(async () => {
+      await fs.appendFile(viewerLogPath, `${line}\n`, 'utf-8').catch(() => void 0);
+      if (!runId || !this.dbTelemetryEnabled()) return;
+      try {
+        appendRunLogLine({
+          dataDir: this.dataDir,
+          runId,
+          scope: 'viewer',
+          stream: 'log',
+          line,
+        });
+      } catch {
+        // ignore telemetry persistence failures; they should not block runs
+      }
+    });
   }
 
   private async spawnRunner(args: string[], viewerLogPath: string, options?: { model?: string; permissionMode?: string }): Promise<number> {
@@ -614,6 +671,11 @@ export class RunManager {
     }
 
     const env: Record<string, string | undefined> = { ...process.env, JEEVES_DATA_DIR: this.dataDir };
+    if (this.runId) {
+      env.JEEVES_RUN_ID = this.runId;
+      env.JEEVES_RUN_SCOPE = 'canonical';
+      env.JEEVES_RUN_TASK_ID = '';
+    }
     if (options?.model) {
       env.JEEVES_MODEL = options.model;
     }
@@ -678,8 +740,20 @@ export class RunManager {
 
   private async checkCompletionPromise(): Promise<boolean> {
     if (!this.stateDir) return false;
-    const sdkPath = path.join(this.stateDir, 'sdk-output.json');
-    const raw = await fs.readFile(sdkPath, 'utf-8').catch(() => null);
+    let raw: string | null = null;
+    if (this.runId) {
+      const artifact = readRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'canonical',
+        name: 'sdk-output.json',
+      });
+      raw = artifact?.content ? artifact.content.toString('utf-8') : null;
+    }
+    if (!raw) {
+      const sdkPath = path.join(this.stateDir, 'sdk-output.json');
+      raw = await fs.readFile(sdkPath, 'utf-8').catch(() => null);
+    }
     if (!raw) return false;
     try {
       const parsed = JSON.parse(raw) as { messages?: unknown[] };
@@ -726,6 +800,7 @@ export class RunManager {
             repairResult.feedbackFilesWritten.map((f) => `- ${path.basename(f)}`).join('\n') + '\n\n' +
             `---\n`;
           await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+          this.appendProgressEntry(progressEntry, 'warn');
         }
       }
 
@@ -733,6 +808,7 @@ export class RunManager {
       for (let iteration = 1; iteration <= params.maxIterations; iteration += 1) {
         if (this.stopRequested) {
           await this.appendViewerLog(viewerLogPath, `[ITERATION] Stop requested, ending at iteration ${iteration}`);
+          await this.appendViewerLog(viewerLogPath, `[STOP] Stop requested; skipping phase transition`);
           completedNaturally = false;
           break;
         }
@@ -746,7 +822,7 @@ export class RunManager {
         await this.appendViewerLog(viewerLogPath, `${'='.repeat(60)}`);
 
 	        const issueJson = this.stateDir ? await readIssueJson(this.stateDir) : null;
-	        if (!issueJson) throw new Error('issue.json not found or invalid');
+	        if (!issueJson) throw new Error('Issue state not found or invalid');
 
 	        // Auto-route to the `quick-fix` workflow at the beginning of the run (iteration 1).
 	        // Guardrails:
@@ -838,8 +914,7 @@ export class RunManager {
         const issueBeforeIteration = JSON.parse(JSON.stringify(issueJson)) as Record<string, unknown>;
         await this.clearPhaseReportFile();
 
-        const lastRunLog = path.join(this.stateDir!, 'last-run.log');
-        let lastSize = 0;
+        let lastCanonicalLogId = 0;
         let lastChangeAtMs = Date.now();
         const startAtMs = Date.now();
         const iterStartedAt = nowIso();
@@ -994,10 +1069,17 @@ export class RunManager {
                 break;
               }
 
-              const stat = await fs.stat(lastRunLog).catch(() => null);
-              if (stat && stat.isFile()) {
-                if (stat.size !== lastSize) {
-                  lastSize = stat.size;
+              if (this.runId) {
+                const newLogLines = listRunLogLines({
+                  dataDir: this.dataDir,
+                  runId: this.runId,
+                  scope: 'canonical',
+                  stream: 'log',
+                  afterId: lastCanonicalLogId,
+                  limit: 1000,
+                });
+                if (newLogLines.length > 0) {
+                  lastCanonicalLogId = newLogLines[newLogLines.length - 1]?.id ?? lastCanonicalLogId;
                   lastChangeAtMs = Date.now();
                 }
               }
@@ -1157,6 +1239,10 @@ export class RunManager {
       this.broadcast('run', { run: this.status });
       if (this.status.viewer_log_file) await this.appendViewerLog(this.status.viewer_log_file, `[ERROR] ${msg}`);
     } finally {
+      await Promise.race([
+        this.viewerLogWriteQueue.catch(() => void 0),
+        new Promise<void>((resolve) => setTimeout(resolve, 250)),
+      ]);
       this.proc = null;
       if (this.stopReason && !this.status.completion_reason && !this.status.completed_via_promise && !this.status.completed_via_state) {
         this.status = { ...this.status, completion_reason: this.stopReason };
@@ -1196,7 +1282,7 @@ export class RunManager {
     // Read issue.json to get canonical branch
     const issueJson = await readIssueJson(this.stateDir);
     if (!issueJson) {
-      await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] ERROR: issue.json not found');
+      await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] ERROR: issue state not found');
       return { exitCode: 1, waveExecuted: false };
     }
     const canonicalBranch = typeof issueJson.branch === 'string' ? issueJson.branch : `issue/${issueNumber}`;
@@ -1402,7 +1488,7 @@ export class RunManager {
 
     const issueAfterIteration = await readIssueJson(this.stateDir);
     if (!issueAfterIteration) {
-      await this.appendViewerLog(params.viewerLogPath, '[PHASE_REPORT] issue.json missing after phase run; skipping orchestrator commit');
+      await this.appendViewerLog(params.viewerLogPath, '[PHASE_REPORT] issue state missing after phase run; skipping orchestrator commit');
       return null;
     }
 
@@ -1506,6 +1592,16 @@ export class RunManager {
       evidenceRefs,
     };
     await writeJsonAtomic(reportPath, auditReport);
+    if (this.runId && this.dbTelemetryEnabled()) {
+      upsertRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'viewer',
+        name: `phase-report-${String(this.status.current_iteration).padStart(3, '0')}.json`,
+        mime: 'application/json',
+        content: Buffer.from(`${JSON.stringify(auditReport, null, 2)}\n`, 'utf-8'),
+      });
+    }
 
     const committedKeys = Object.keys(committedStatusUpdates);
     const ignoredKeys = Array.from(new Set(ignoredStatusKeys)).sort();
@@ -1527,7 +1623,27 @@ export class RunManager {
   }
 
   private async persistLastRunStatus(): Promise<void> {
-    if (!this.stateDir) return;
+    if (!this.stateDir || !this.runId) return;
+    if (this.dbTelemetryEnabled()) {
+      upsertRunSession({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        stateDir: this.stateDir,
+        issueRef: this.issueRef,
+        startedAt: this.status.started_at ?? undefined,
+        endedAt: this.status.ended_at,
+        status: this.status as unknown as Record<string, unknown>,
+        archiveMeta: this.runArchiveMeta ?? {},
+      });
+      upsertRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'viewer',
+        name: 'viewer-run-status.json',
+        mime: 'application/json',
+        content: Buffer.from(`${JSON.stringify(this.status, null, 2)}\n`, 'utf-8'),
+      });
+    }
     const outPath = path.join(this.stateDir, 'viewer-run-status.json');
     await writeJsonAtomic(outPath, this.status);
     if (this.runDir) {
@@ -1536,9 +1652,31 @@ export class RunManager {
   }
 
   private async persistRunArchiveMeta(meta: Record<string, unknown>): Promise<void> {
-    if (!this.runDir) return;
+    if (!this.runId || !this.stateDir) return;
     this.runArchiveMeta = { ...(this.runArchiveMeta ?? {}), ...meta };
-    await writeJsonAtomic(path.join(this.runDir, 'run.json'), this.runArchiveMeta);
+    if (this.dbTelemetryEnabled()) {
+      upsertRunSession({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        stateDir: this.stateDir,
+        issueRef: this.issueRef,
+        startedAt: this.status.started_at ?? undefined,
+        endedAt: this.status.ended_at,
+        status: this.status as unknown as Record<string, unknown>,
+        archiveMeta: this.runArchiveMeta,
+      });
+      upsertRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'viewer',
+        name: 'run.json',
+        mime: 'application/json',
+        content: Buffer.from(`${JSON.stringify(this.runArchiveMeta, null, 2)}\n`, 'utf-8'),
+      });
+    }
+    if (!this.runDir) return;
+    await fs.mkdir(this.runDir, { recursive: true }).catch(() => void 0);
+    await writeJsonAtomic(path.join(this.runDir, 'run.json'), this.runArchiveMeta).catch(() => void 0);
   }
 
   private async archiveIteration(params: {
@@ -1554,7 +1692,16 @@ export class RunManager {
     phase_report_committed_fields?: string[];
     phase_report_ignored_fields?: string[];
   }): Promise<void> {
-    if (!this.stateDir || !this.runDir) return;
+    if (!this.stateDir || !this.runId) return;
+    if (this.dbTelemetryEnabled()) {
+      upsertRunIteration({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        iteration: params.iteration,
+        data: params as unknown as Record<string, unknown>,
+      });
+    }
+    if (!this.runDir) return;
     const iterDir = path.join(this.runDir, 'iterations', String(params.iteration).padStart(3, '0'));
     await fs.mkdir(iterDir, { recursive: true });
     await writeJsonAtomic(path.join(iterDir, 'iteration.json'), params);
@@ -1565,21 +1712,68 @@ export class RunManager {
     };
     copyIfExists(path.join(this.stateDir, 'last-run.log'), 'last-run.log');
     copyIfExists(path.join(this.stateDir, 'sdk-output.json'), 'sdk-output.json');
-    copyIfExists(path.join(this.stateDir, 'issue.json'), 'issue.json');
-    copyIfExists(path.join(this.stateDir, 'tasks.json'), 'tasks.json');
     copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
     copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
     await Promise.allSettled(copies);
+    const issueSnapshot = await readIssueJson(this.stateDir).catch(() => null);
+    if (issueSnapshot) {
+      await writeJsonAtomic(path.join(iterDir, 'issue.json'), issueSnapshot).catch(() => void 0);
+    }
+    const tasksSnapshot = await readTasksJson(this.stateDir).catch(() => null);
+    if (tasksSnapshot) {
+      await writeJsonAtomic(path.join(iterDir, 'tasks.json'), tasksSnapshot).catch(() => void 0);
+    }
 
     await this.captureGitDebug(iterDir).catch(() => void 0);
   }
 
   private async finalizeRunArchive(): Promise<void> {
-    if (!this.stateDir || !this.runDir || !this.runId) return;
+    if (!this.stateDir || !this.runId) return;
+    if (this.dbTelemetryEnabled()) {
+      const finalIssue = await readIssueJson(this.stateDir);
+      if (finalIssue) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: 'final-issue.json',
+          mime: 'application/json',
+          content: Buffer.from(`${JSON.stringify(finalIssue, null, 2)}\n`, 'utf-8'),
+        });
+      }
+      const finalTasks = await readTasksJson(this.stateDir);
+      if (finalTasks) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: 'final-tasks.json',
+          mime: 'application/json',
+          content: Buffer.from(`${JSON.stringify(finalTasks, null, 2)}\n`, 'utf-8'),
+        });
+      }
+      const progressText = renderProgressText({ stateDir: this.stateDir });
+      upsertRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'viewer',
+        name: 'final-progress.txt',
+        mime: 'text/plain; charset=utf-8',
+        content: Buffer.from(progressText, 'utf-8'),
+      });
+    }
+    if (!this.runDir) return;
     await fs.copyFile(path.join(this.stateDir, 'viewer-run.log'), path.join(this.runDir, 'viewer-run.log')).catch(() => void 0);
-    await fs.copyFile(path.join(this.stateDir, 'issue.json'), path.join(this.runDir, 'final-issue.json')).catch(() => void 0);
-    await fs.copyFile(path.join(this.stateDir, 'tasks.json'), path.join(this.runDir, 'final-tasks.json')).catch(() => void 0);
-    await fs.copyFile(path.join(this.stateDir, 'progress.txt'), path.join(this.runDir, 'final-progress.txt')).catch(() => void 0);
+    const finalIssue = await readIssueJson(this.stateDir).catch(() => null);
+    if (finalIssue) {
+      await writeJsonAtomic(path.join(this.runDir, 'final-issue.json'), finalIssue).catch(() => void 0);
+    }
+    const finalTasks = await readTasksJson(this.stateDir).catch(() => null);
+    if (finalTasks) {
+      await writeJsonAtomic(path.join(this.runDir, 'final-tasks.json'), finalTasks).catch(() => void 0);
+    }
+    const progressText = renderProgressText({ stateDir: this.stateDir });
+    await fs.writeFile(path.join(this.runDir, 'final-progress.txt'), progressText, 'utf-8').catch(() => void 0);
 
     await this.persistRunArchiveMeta({
       run_id: this.runId,

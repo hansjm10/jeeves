@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
+import { appendRunLogLine, upsertRunSession } from '@jeeves/state-db';
 
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { buildMcpServersConfig } from './mcpConfig.js';
@@ -24,6 +25,22 @@ export type RunPhaseParams = Readonly<{
   mcpProfile?: string;
   permissionMode?: string;
 }>;
+
+type RunDbContext = Readonly<{
+  dataDir: string;
+  runId: string;
+  scope: string;
+  taskId: string;
+}>;
+
+function resolveRunDbContextFromEnv(): RunDbContext | null {
+  const dataDir = process.env.JEEVES_DATA_DIR?.trim() ?? '';
+  const runId = process.env.JEEVES_RUN_ID?.trim() ?? '';
+  if (!dataDir || !runId) return null;
+  const scope = process.env.JEEVES_RUN_SCOPE?.trim() || 'canonical';
+  const taskId = process.env.JEEVES_RUN_TASK_ID?.trim() || '';
+  return { dataDir, runId, scope, taskId };
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -173,10 +190,23 @@ async function buildPromptWithPrependedInstructions(
 }
 
 export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: boolean }> {
+  const runDbContext = resolveRunDbContextFromEnv();
   await ensureJeevesExcludedFromGitStatus(params.cwd).catch(() => void 0);
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
   await ensureProgressFile(params.progressPath);
+
+  if (runDbContext) {
+    upsertRunSession({
+      dataDir: runDbContext.dataDir,
+      runId: runDbContext.runId,
+      stateDir: params.stateDir,
+      status: {
+        phase: params.phaseName,
+        runner: 'runPhaseOnce',
+      },
+    });
+  }
 
   await markStarted(params.progressPath);
   await markPhase(params.progressPath, params.phaseName);
@@ -187,9 +217,23 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
 
-  const writer = new SdkOutputWriterV1({ outputPath: params.outputPath });
+  const writer = new SdkOutputWriterV1({
+    outputPath: params.outputPath,
+    dbContext: runDbContext,
+  });
   const logLine = async (line: string): Promise<void> => {
-    await logStream.appendFile(`${new Date().toISOString()} ${line}\n`, 'utf-8');
+    const stamped = `${new Date().toISOString()} ${line}`;
+    await logStream.appendFile(`${stamped}\n`, 'utf-8');
+    if (runDbContext) {
+      appendRunLogLine({
+        dataDir: runDbContext.dataDir,
+        runId: runDbContext.runId,
+        scope: runDbContext.scope,
+        taskId: runDbContext.taskId,
+        stream: 'log',
+        line: stamped,
+      });
+    }
   };
 
   try {
@@ -304,6 +348,7 @@ export type RunSinglePhaseParams = Readonly<{
 }>;
 
 export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<{ phase: string; success: boolean }> {
+  const runDbContext = resolveRunDbContextFromEnv();
   const workflow = await loadWorkflowByName(params.workflowName, { workflowsDir: params.workflowsDir });
   const engine = new WorkflowEngine(workflow);
 
@@ -322,7 +367,10 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     await markStarted(progressPath);
     await markPhase(progressPath, phase);
     await fs.writeFile(logPath, '', 'utf-8');
-    const writer = new SdkOutputWriterV1({ outputPath });
+    const writer = new SdkOutputWriterV1({
+      outputPath,
+      dbContext: runDbContext,
+    });
     writer.finalize(true);
     await writer.writeIncremental({ force: true });
     await markEnded(progressPath, true);

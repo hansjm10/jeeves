@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { getWorktreesDir } from '@jeeves/core';
+import { appendProgressEvent, writeIssueToDb, writeTasksToDb } from '@jeeves/state-db';
 
 import { runGit } from './git.js';
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
@@ -399,12 +400,19 @@ export async function createWorkerSandbox(options: CreateWorkerSandboxOptions): 
   // 1a. Create worker issue.json with currentTaskId set and task-loop flags cleared
   const workerIssueJson = createWorkerIssueJson(options.canonicalIssueJson, options.taskId);
   await writeJsonAtomic(path.join(sandbox.stateDir, 'issue.json'), workerIssueJson);
+  writeIssueToDb(sandbox.stateDir, workerIssueJson);
 
   // 1b. Copy canonical tasks.json
   await writeJsonAtomic(path.join(sandbox.stateDir, 'tasks.json'), options.canonicalTasksJson);
+  writeTasksToDb(sandbox.stateDir, options.canonicalTasksJson);
 
   // 1c. Copy progress.txt (empty or initial)
   await fs.writeFile(path.join(sandbox.stateDir, 'progress.txt'), '', 'utf-8');
+  appendProgressEvent({
+    stateDir: sandbox.stateDir,
+    source: 'worker-sandbox',
+    message: '',
+  });
 
   // 1d. Optional: copy task feedback for retries
   if (options.taskFeedbackPath) {

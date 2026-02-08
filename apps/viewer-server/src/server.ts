@@ -34,7 +34,15 @@ import { runIssueExpand, buildSuccessResponse } from './issueExpand.js';
 import { listIssueJsonStates, readIssueJson, readIssueJsonUpdatedAtMs, writeIssueJson } from './issueJson.js';
 import { findRepoRoot } from './repoRoot.js';
 import { RunManager } from './runManager.js';
-import { getDbHealth, runDbBackup, runDbIntegrityCheck, runDbVacuum } from './sqliteStorage.js';
+import {
+  getDbHealth,
+  getLatestRunIdForStateDir,
+  listRunLogLines,
+  listRunSdkEvents,
+  runDbBackup,
+  runDbIntegrityCheck,
+  runDbVacuum,
+} from './sqliteStorage.js';
 import { reconcileStartupState } from './startupReconcile.js';
 import { reconcileAzureDevopsToWorktree } from './azureDevopsReconcile.js';
 import { readAzureDevopsSecret, writeAzureDevopsSecret, deleteAzureDevopsSecret, AzureDevopsSecretReadError } from './azureDevopsSecret.js';
@@ -82,7 +90,6 @@ import {
   type ProjectFilesStatusEvent,
   type ProjectFilesOperation,
 } from './projectFilesTypes.js';
-import { LogTailer, SdkOutputTailer } from './tailers.js';
 import { resolveWorkerArtifactsRunId } from './workerArtifacts.js';
 import { WorkerTailerManager } from './workerTailers.js';
 import {
@@ -390,23 +397,6 @@ async function resolvePromptPathForWrite(promptsDir: string, promptId: string): 
   return candidate;
 }
 
-async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
-  const raw = await fs.readFile(filePath, 'utf-8').catch(() => null);
-  if (!raw || !raw.trim()) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-async function readSdkOutput(stateDir: string | null): Promise<Record<string, unknown> | null> {
-  if (!stateDir) return null;
-  return readJsonFile(path.join(stateDir, 'sdk-output.json'));
-}
-
 function emitSdkSnapshot(send: (event: string, data: unknown) => void, snapshot: Record<string, unknown>): void {
   const sessionId = typeof snapshot.session_id === 'string' ? snapshot.session_id : null;
   if (sessionId) {
@@ -698,12 +688,13 @@ export async function buildServer(config: ViewerServerConfig) {
     return { acquired: false };
   }
 
-  const logTailer = new LogTailer();
-  const viewerLogTailer = new LogTailer();
-  const sdkTailer = new SdkOutputTailer();
   const workerTailerManager = new WorkerTailerManager();
 
   let currentStateDir: string | null = null;
+  let currentRunId: string | null = null;
+  let canonicalLogCursor = 0;
+  let viewerLogCursor = 0;
+  let sdkCursor = 0;
   let cachedIssueJsonStateDir: string | null = null;
   let cachedIssueJsonMtimeMs = 0;
   let cachedIssueJson: Record<string, unknown> | null = null;
@@ -728,25 +719,121 @@ export async function buildServer(config: ViewerServerConfig) {
     return cachedIssueJson;
   }
 
-  async function refreshFileTargets(): Promise<void> {
+  function resolveCurrentRunId(stateDir: string | null): string | null {
+    const statusRunId = runManager.getStatus().run_id;
+    if (typeof statusRunId === 'string' && statusRunId.trim().length > 0) return statusRunId.trim();
+    if (!stateDir) return null;
+    return getLatestRunIdForStateDir(dataDir, stateDir);
+  }
+
+  function listLogSnapshotLines(params: {
+    runId: string | null;
+    scope: string;
+    maxLines: number;
+  }): { lines: string[]; cursor: number } {
+    if (!params.runId) return { lines: [], cursor: 0 };
+    if (params.maxLines <= 0) return { lines: [], cursor: 0 };
+    const rows = listRunLogLines({
+      dataDir,
+      runId: params.runId,
+      scope: params.scope,
+      stream: 'log',
+      afterId: 0,
+      limit: Math.max(params.maxLines * 4, params.maxLines),
+    });
+    const tailRows = rows.length > params.maxLines ? rows.slice(rows.length - params.maxLines) : rows;
+    const cursor = tailRows[tailRows.length - 1]?.id ?? 0;
+    return { lines: tailRows.map((row) => row.line), cursor };
+  }
+
+  function replaySdkRowsToClient(
+    send: (event: string, data: unknown) => void,
+    rows: readonly { id: number; event: Record<string, unknown> }[],
+  ): number {
+    let latest = 0;
+    for (const row of rows) {
+      latest = row.id;
+      const eventName = typeof row.event.event === 'string' ? row.event.event.trim() : '';
+      if (!eventName) continue;
+      const eventData = Object.prototype.hasOwnProperty.call(row.event, 'data')
+        ? row.event.data
+        : {};
+      send(eventName, eventData);
+    }
+    return latest;
+  }
+
+  async function refreshRunTargets(): Promise<void> {
     const stateDir = runManager.getIssue().stateDir;
-    if (stateDir !== currentStateDir) {
+    const runId = resolveCurrentRunId(stateDir);
+    if (stateDir !== currentStateDir || runId !== currentRunId) {
       currentStateDir = stateDir;
+      currentRunId = runId;
       cachedIssueJsonStateDir = null;
       cachedIssueJsonMtimeMs = 0;
       cachedIssueJson = null;
       warnedMissingWorkerArtifactsRunId = false;
-      logTailer.reset(stateDir ? path.join(stateDir, 'last-run.log') : null);
-      viewerLogTailer.reset(stateDir ? path.join(stateDir, 'viewer-run.log') : null);
-      sdkTailer.reset(stateDir ? path.join(stateDir, 'sdk-output.json') : null);
 
-      const lines = await logTailer.getAllLines(logSnapshotLines);
-      hub.broadcast('logs', { lines, reset: true });
-      const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
-      hub.broadcast('viewer-logs', { lines: viewerLines, reset: true });
-      const sdk = await readSdkOutput(stateDir);
-      if (sdk) emitSdkSnapshot((event, data) => hub.broadcast(event, data), sdk);
+      const canonicalSnapshot = listLogSnapshotLines({
+        runId,
+        scope: 'canonical',
+        maxLines: logSnapshotLines,
+      });
+      canonicalLogCursor = canonicalSnapshot.cursor;
+      hub.broadcast('logs', { lines: canonicalSnapshot.lines, reset: true });
+
+      const viewerSnapshot = listLogSnapshotLines({
+        runId,
+        scope: 'viewer',
+        maxLines: viewerLogSnapshotLines,
+      });
+      viewerLogCursor = viewerSnapshot.cursor;
+      hub.broadcast('viewer-logs', { lines: viewerSnapshot.lines, reset: true });
+
+      const sdkRows = runId
+        ? listRunSdkEvents({
+            dataDir,
+            runId,
+            scope: 'canonical',
+            afterId: 0,
+            limit: 5000,
+          })
+        : [];
+      sdkCursor = replaySdkRowsToClient(
+        (event, data) => hub.broadcast(event, data),
+        sdkRows.map((row) => ({ id: row.id, event: row.event })),
+      );
     }
+  }
+
+  function sendCurrentRunSnapshotToClient(clientId: number): void {
+    const canonicalSnapshot = listLogSnapshotLines({
+      runId: currentRunId,
+      scope: 'canonical',
+      maxLines: logSnapshotLines,
+    });
+    hub.sendTo(clientId, 'logs', { lines: canonicalSnapshot.lines, reset: true });
+
+    const viewerSnapshot = listLogSnapshotLines({
+      runId: currentRunId,
+      scope: 'viewer',
+      maxLines: viewerLogSnapshotLines,
+    });
+    hub.sendTo(clientId, 'viewer-logs', { lines: viewerSnapshot.lines, reset: true });
+
+    const sdkRows = currentRunId
+      ? listRunSdkEvents({
+          dataDir,
+          runId: currentRunId,
+          scope: 'canonical',
+          afterId: 0,
+          limit: 5000,
+        })
+      : [];
+    replaySdkRowsToClient(
+      (event, data) => hub.sendTo(clientId, event, data),
+      sdkRows.map((row) => ({ id: row.id, event: row.event })),
+    );
   }
 
   async function getStateSnapshot(): Promise<Record<string, unknown>> {
@@ -787,6 +874,21 @@ export async function buildServer(config: ViewerServerConfig) {
     return requireAllowedBrowserOrigin(req, reply);
   });
 
+  // Startup reconciliation: refresh prompt/workflow cache and verify selected DB-backed state.
+  try {
+    await reconcileStartupState({
+      dataDir,
+      promptsDir,
+      workflowsDir,
+      selectedStateDir: null,
+    });
+  } catch (err) {
+    console.error(
+      'Startup state reconciliation failed (non-fatal):',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   // Initialize active issue selection
   const explicitIssue = config.initialIssue?.trim() || process.env.JEEVES_VIEWER_ISSUE?.trim();
   const saved = await loadActiveIssue(dataDir);
@@ -817,21 +919,7 @@ export async function buildServer(config: ViewerServerConfig) {
     }
   }
 
-  try {
-    await reconcileStartupState({
-      dataDir,
-      promptsDir,
-      workflowsDir,
-      selectedStateDir: runManager.getIssue().stateDir,
-    });
-  } catch (err) {
-    console.error(
-      'Startup state reconciliation failed (non-fatal):',
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-
-  await refreshFileTargets();
+  await refreshRunTargets();
 
   // Startup reconcile/cleanup: run best-effort reconcile for initially selected issue
   // This converges worktree artifacts, cleans up leftover .env.jeeves.tmp files,
@@ -902,26 +990,48 @@ export async function buildServer(config: ViewerServerConfig) {
   // Poll for log/sdk updates and file target changes
   async function pollTick(): Promise<void> {
     try {
-      await refreshFileTargets();
+      await refreshRunTargets();
       if (!currentStateDir) return;
 
-      const logs = await logTailer.getNewLines();
-      if (logs.changed && logs.lines.length) hub.broadcast('logs', { lines: logs.lines });
-
-      const viewerLogs = await viewerLogTailer.getNewLines();
-      if (viewerLogs.changed && viewerLogs.lines.length) hub.broadcast('viewer-logs', { lines: viewerLogs.lines });
-
-      const sdk = await sdkTailer.readSnapshot();
-      if (sdk) {
-        const diff = sdkTailer.consumeAndDiff(sdk);
-        if (diff.sessionChanged && diff.sessionId) {
-          hub.broadcast('sdk-init', { session_id: diff.sessionId, started_at: diff.startedAt, status: 'running' });
+      if (currentRunId) {
+        const logRows = listRunLogLines({
+          dataDir,
+          runId: currentRunId,
+          scope: 'canonical',
+          stream: 'log',
+          afterId: canonicalLogCursor,
+          limit: 2000,
+        });
+        if (logRows.length > 0) {
+          canonicalLogCursor = logRows[logRows.length - 1]?.id ?? canonicalLogCursor;
+          hub.broadcast('logs', { lines: logRows.map((row) => row.line) });
         }
-        for (const m of diff.newMessages) hub.broadcast('sdk-message', m);
-        for (const tc of diff.toolStarts) hub.broadcast('sdk-tool-start', tc);
-        for (const tc of diff.toolCompletes) hub.broadcast('sdk-tool-complete', tc);
-        if (diff.justEnded) {
-          hub.broadcast('sdk-complete', { status: diff.success === false ? 'error' : 'success', summary: diff.stats ?? {} });
+
+        const viewerRows = listRunLogLines({
+          dataDir,
+          runId: currentRunId,
+          scope: 'viewer',
+          stream: 'log',
+          afterId: viewerLogCursor,
+          limit: 2000,
+        });
+        if (viewerRows.length > 0) {
+          viewerLogCursor = viewerRows[viewerRows.length - 1]?.id ?? viewerLogCursor;
+          hub.broadcast('viewer-logs', { lines: viewerRows.map((row) => row.line) });
+        }
+
+        const sdkRows = listRunSdkEvents({
+          dataDir,
+          runId: currentRunId,
+          scope: 'canonical',
+          afterId: sdkCursor,
+          limit: 2000,
+        });
+        if (sdkRows.length > 0) {
+          sdkCursor = replaySdkRowsToClient(
+            (event, data) => hub.broadcast(event, data),
+            sdkRows.map((row) => ({ id: row.id, event: row.event })),
+          );
         }
       }
 
@@ -1512,7 +1622,7 @@ export async function buildServer(config: ViewerServerConfig) {
         // For GitHub issues, it should be a positive integer
       }
 
-      // Save previous active issue before initIssue (which always writes active-issue.json)
+      // Save previous active issue before initIssue (which always updates active issue selection)
       const prevActiveIssue = await loadActiveIssue(dataDir);
 
       try {
@@ -1622,7 +1732,7 @@ export async function buildServer(config: ViewerServerConfig) {
           try {
             await runManager.setIssue(initRes.issue_ref);
             await saveActiveIssue(dataDir, initRes.issue_ref);
-            await refreshFileTargets();
+            await refreshRunTargets();
             autoSelectResult = { requested: true, ok: true };
             if (lockStateDir) await updateJournalCheckpoint(lockStateDir, { auto_selected: true }).catch(() => void 0);
 
@@ -1639,7 +1749,7 @@ export async function buildServer(config: ViewerServerConfig) {
             outcome = 'partial';
           }
         } else {
-          // Restore previous active issue (initIssue always writes active-issue.json)
+          // Restore previous active issue (initIssue always updates active issue selection)
           if (prevActiveIssue) {
             await saveActiveIssue(dataDir, prevActiveIssue);
           } else {
@@ -2171,7 +2281,7 @@ export async function buildServer(config: ViewerServerConfig) {
 	    try {
 	      await runManager.setIssue(issueRef);
 	      await saveActiveIssue(dataDir, issueRef);
-	      await refreshFileTargets();
+	      await refreshRunTargets();
 
 	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
 	      const issue = runManager.getIssue();
@@ -2235,7 +2345,7 @@ export async function buildServer(config: ViewerServerConfig) {
 
 	      await runManager.setIssue(res.issue_ref);
 	      await saveActiveIssue(dataDir, res.issue_ref);
-	      await refreshFileTargets();
+	      await refreshRunTargets();
 
 	      // Trigger best-effort sonar token reconcile and emit status (non-fatal)
 	      const issue = runManager.getIssue();
@@ -2276,7 +2386,7 @@ export async function buildServer(config: ViewerServerConfig) {
 	      try {
 	        await runManager.setIssue(issueRef);
 	        await saveActiveIssue(dataDir, issueRef);
-	        await refreshFileTargets();
+	        await refreshRunTargets();
 	      } catch (err) {
 	        const mapped = errorToHttp(err);
 	        return reply.code(mapped.status).send({ ok: false, error: mapped.message });
@@ -4352,13 +4462,8 @@ export async function buildServer(config: ViewerServerConfig) {
     const snapshot = await getStateSnapshot();
     hub.sendTo(id, 'state', snapshot);
 
-    await refreshFileTargets();
-    const logLines = await logTailer.getAllLines(logSnapshotLines);
-    hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-    const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
-    hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
-    const sdk = await readSdkOutput(currentStateDir);
-    if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    await refreshRunTargets();
+    sendCurrentRunSnapshotToClient(id);
     const workerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
     for (const ws of workerSnapshots) {
       hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });
@@ -4389,13 +4494,8 @@ export async function buildServer(config: ViewerServerConfig) {
         .then((snapshot) => hub.sendTo(id, 'state', snapshot))
         .catch(() => void 0);
     }, 0);
-    await refreshFileTargets();
-    const logLines = await logTailer.getAllLines(logSnapshotLines);
-    hub.sendTo(id, 'logs', { lines: logLines, reset: true });
-    const viewerLines = await viewerLogTailer.getAllLines(viewerLogSnapshotLines);
-    hub.sendTo(id, 'viewer-logs', { lines: viewerLines, reset: true });
-    const sdk = await readSdkOutput(currentStateDir);
-    if (sdk) emitSdkSnapshot((event, data) => hub.sendTo(id, event, data), sdk);
+    await refreshRunTargets();
+    sendCurrentRunSnapshotToClient(id);
     const wsWorkerSnapshots = await workerTailerManager.getSnapshots(logSnapshotLines);
     for (const ws of wsWorkerSnapshots) {
       hub.sendTo(id, 'worker-logs', { workerId: ws.taskId, lines: ws.logLines, reset: true });

@@ -13,6 +13,7 @@
     "@jeeves/core": "workspace:*",
     "@jeeves/mcp-state": "workspace:*",
     "@jeeves/mcp-pruner": "workspace:*",
+    "@jeeves/state-db": "workspace:*",
     "@openai/codex": "^0.98.0"
   }
 }

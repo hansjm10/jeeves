@@ -9,11 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath, parseWorkflowYaml, toRawWorkflowJson } from '@jeeves/core';
 
+import { loadActiveIssue } from './activeIssue.js';
 import { readIssueJson } from './issueJson.js';
 import { readAzureDevopsSecret } from './azureDevopsSecret.js';
 import { ProviderAdapterError } from './providerIssueAdapter.js';
 import { acquireLock, readJournal, releaseLock, generateOperationId } from './providerOperationJournal.js';
 import { buildServer } from './server.js';
+import { installStateDbFsShim } from './testStateDbShim.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -59,7 +61,19 @@ async function ensureLocalRepoClone(params: { dataDir: string; owner: string; re
   await git(['clone', origin, repoDir]);
 }
 
+let uninstallFsShim: (() => void) | null = null;
+
+beforeEach(() => {
+  uninstallFsShim = installStateDbFsShim();
+});
+
+afterEach(() => {
+  uninstallFsShim?.();
+  uninstallFsShim = null;
+});
+
 describe('viewer-server', () => {
+
   it('rejects cross-origin browser requests by default', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-origin-');
     const { app } = await buildServer({
@@ -1369,8 +1383,7 @@ describe('viewer-server', () => {
     const stateRes = await app.inject({ method: 'GET', url: '/api/state' });
     expect((stateRes.json() as { issue_ref?: unknown }).issue_ref).toBe(initialIssueRef);
 
-    const activeIssueRaw = await fs.readFile(path.join(dataDir, 'active-issue.json'), 'utf-8');
-    expect(JSON.parse(activeIssueRaw).issue_ref).toBe(initialIssueRef);
+    expect(await loadActiveIssue(dataDir)).toBe(initialIssueRef);
 
     const createdStateDir = getIssueStateDir('o', 'r', 123, dataDir);
     const createdIssueJson = await readIssueJson(createdStateDir);
@@ -3053,7 +3066,9 @@ describe('POST /api/run quick', () => {
       if (running) await new Promise((r) => setTimeout(r, 25));
     }
 
-    const issueJson = JSON.parse(await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8')) as { workflow?: unknown; phase?: unknown };
+    const issueJson = await readIssueJson(stateDir);
+    expect(issueJson).toBeTruthy();
+    if (!issueJson) throw new Error('issue state should exist');
     expect(issueJson.workflow).toBe('quick-fix');
     expect(issueJson.phase).toBe('quick_fix');
 
@@ -4579,18 +4594,29 @@ describe('sonar-token endpoints', () => {
       // Connect via WebSocket - we should eventually get status when connecting
       const receivedEvents: { event: string; data: unknown }[] = [];
       const ws = new WebSocket(`ws://127.0.0.1:${actualPort}/api/ws`);
-
-      await new Promise<void>((resolve) => {
-        ws.on('open', resolve);
+      let resolveStateEvent: (() => void) | null = null;
+      const stateEventSeen = new Promise<void>((resolve) => {
+        resolveStateEvent = resolve;
       });
 
       ws.on('message', (raw) => {
         const msg = JSON.parse(decodeWsData(raw)) as { event: string; data: unknown };
         receivedEvents.push(msg);
+        if (msg.event === 'state') {
+          resolveStateEvent?.();
+          resolveStateEvent = null;
+        }
+      });
+
+      await new Promise<void>((resolve) => {
+        ws.on('open', resolve);
       });
 
       // Wait for state event (which clients receive on connect)
-      await waitFor(() => receivedEvents.some((e) => e.event === 'state'));
+      await Promise.race([
+        stateEventSeen,
+        waitFor(() => receivedEvents.some((e) => e.event === 'state')),
+      ]);
 
       // Verify GET status shows correct values (startup reconcile ran)
       const res = await app.inject({

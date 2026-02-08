@@ -188,6 +188,9 @@ importers:
       '@jeeves/mcp-state':
         specifier: workspace:*
         version: link:../mcp-state
+      '@jeeves/state-db':
+        specifier: workspace:*
+        version: link:../state-db
       '@openai/codex':
         specifier: ^0.98.0
         version: 0.98.0

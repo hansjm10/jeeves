@@ -1672,6 +1672,83 @@ describe('RunManager quick-fix workflow switching', () => {
     expect(secondCall).toContain('--workflow');
     expect(secondCall).toContain('default');
   });
+
+  it('restores workflow on non-zero exit from a workflow-switching phase', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-switch-fail-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-switch-fail-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 790;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_handoff', workflow: 'quick-fix', branch: 'issue/790', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const calls: string[][] = [];
+    const spawn = ((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      const phaseIdx = args.findIndex((a) => a === '--phase');
+      const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
+      if (phase === 'design_handoff') {
+        // Simulate a failed handoff attempt that persisted a workflow switch before exiting.
+        void fs.writeFile(
+          path.join(stateDir, 'issue.json'),
+          JSON.stringify(
+            { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_handoff', workflow: 'default', branch: 'issue/790', notes: '' },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      }
+      return makeFakeChild(17, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toContain('--workflow');
+      expect(call).toContain('quick-fix');
+      expect(call).toContain('--phase');
+      expect(call).toContain('design_handoff');
+    }
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.workflow).toBe('quick-fix');
+    expect(updatedIssue?.phase).toBe('design_handoff');
+    expect(rm.getStatus().last_error).toContain('runner exited with code 17');
+    expect(rm.getStatus().last_error).not.toContain('Unknown phase');
+  });
 });
 
 describe('RunManager orchestrator-owned transition flags', () => {

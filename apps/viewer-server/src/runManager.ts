@@ -1478,6 +1478,13 @@ export class RunManager {
     if (hasOwn(params.issueBeforeIteration, 'phase')) issueAfterIteration.phase = params.issueBeforeIteration.phase;
     else delete issueAfterIteration.phase;
 
+    // Failed iterations skip workflow-switch reconciliation, so restore workflow too
+    // to avoid carrying an invalid workflow/phase combination into the next loop.
+    if (params.exitCode !== 0) {
+      if (hasOwn(params.issueBeforeIteration, 'workflow')) issueAfterIteration.workflow = params.issueBeforeIteration.workflow;
+      else delete issueAfterIteration.workflow;
+    }
+
     for (const [key, value] of Object.entries(committedStatusUpdates)) {
       nextStatus[key] = value;
     }

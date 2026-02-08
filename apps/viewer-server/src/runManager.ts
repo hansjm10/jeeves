@@ -267,11 +267,6 @@ function normalizePhaseStatusUpdates(
     if (next.handoffComplete === true) next.needsDesign = true;
   }
 
-  if (phase === 'fix_ci') {
-    if (next.commitFailed === false) next.pushFailed = false;
-    if (next.pushFailed === false) next.commitFailed = false;
-  }
-
   return next;
 }
 

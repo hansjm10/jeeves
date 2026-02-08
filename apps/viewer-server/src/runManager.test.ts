@@ -1884,6 +1884,109 @@ describe('RunManager orchestrator-owned transition flags', () => {
     expect(report.source).toBe('agent_file');
     expect(report.ignoredStatusKeys).toContain('designApproved');
   });
+
+  it('preserves single CI failure flags from fix_ci phase-report updates', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-fix-ci-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-fix-ci-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-fix-ci-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const workflowName = 'fixture-fix-ci-preserve-single-failure';
+    await writeWorkflowYaml(
+      workflowsDir,
+      workflowName,
+      [
+        'workflow:',
+        `  name: ${workflowName}`,
+        '  version: 2',
+        '  start: fix_ci',
+        '',
+        'phases:',
+        '  fix_ci:',
+        '    type: execute',
+        '    prompt: fixtures/trivial.md',
+        '',
+      ].join('\n'),
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 9203;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'fix_ci',
+          workflow: workflowName,
+          branch: 'issue/9203',
+          notes: '',
+          status: { commitFailed: true, pushFailed: false },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify(
+            {
+              schemaVersion: 1,
+              phase: 'fix_ci',
+              outcome: 'partial_fix',
+              statusUpdates: {
+                commitFailed: true,
+                pushFailed: false,
+              },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updatedIssue = await readIssueJson(stateDir);
+    const status = (updatedIssue?.status ?? {}) as Record<string, unknown>;
+    expect(status.commitFailed).toBe(true);
+    expect(status.pushFailed).toBe(false);
+
+    const report = JSON.parse(await fs.readFile(path.join(stateDir, 'phase-report.json'), 'utf-8')) as {
+      committedStatusUpdates?: Record<string, unknown>;
+    };
+    expect(report.committedStatusUpdates?.commitFailed).toBe(true);
+    expect(report.committedStatusUpdates?.pushFailed).toBe(false);
+  });
 });
 
 describe('RunManager max_iterations handling', () => {

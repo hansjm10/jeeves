@@ -57,12 +57,18 @@ You are a senior engineer making a small, low-risk change without the full desig
 5. Decide completion vs escalation
    - If the change is complete and verified:
      - Write `.jeeves/phase-report.json` with:
-       - `implementationComplete = true`
-       - `needsDesign = false`
+       - `schemaVersion = 1`
+       - `phase = "quick_fix"`
+       - `outcome = "implemented"`
+       - `statusUpdates.implementationComplete = true`
+       - `statusUpdates.needsDesign = false`
    - If scope grew beyond a quick fix:
      - Write `.jeeves/phase-report.json` with:
-       - `implementationComplete = false`
-       - `needsDesign = true`
+       - `schemaVersion = 1`
+       - `phase = "quick_fix"`
+       - `outcome = "needs_design"`
+       - `statusUpdates.implementationComplete = false`
+       - `statusUpdates.needsDesign = true`
      - Briefly explain why in `.jeeves/progress.txt`
 
 6. Append progress

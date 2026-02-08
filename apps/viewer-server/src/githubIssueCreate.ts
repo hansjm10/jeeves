@@ -36,14 +36,14 @@ export class CreateGitHubIssueError extends Error {
   }
 }
 
-function parseIssueUrl(stdout: string): string | null {
+export function parseIssueUrl(stdout: string): string | null {
   const m = stdout.match(/https?:\/\/\S+/);
   if (!m) return null;
   const raw = m[0].trim();
   return raw.replace(/[),.;]+$/, '');
 }
 
-function parseIssueRefFromUrl(issueUrl: string): IssueRefString | null {
+export function parseIssueRefFromUrl(issueUrl: string): IssueRefString | null {
   let url: URL;
   try {
     url = new URL(issueUrl);
@@ -63,7 +63,7 @@ function parseIssueRefFromUrl(issueUrl: string): IssueRefString | null {
   return `${owner}/${repo}#${n}`;
 }
 
-function mapGhFailureToSafeError(stderr: string): {
+export function mapGhFailureToSafeError(stderr: string): {
   status: number;
   code: CreateGitHubIssueError['code'];
   message: string;

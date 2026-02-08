@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { IssueStateSnapshot, RunStatus, SonarTokenStatusEvent } from '../api/types.js';
+import type {
+  IssueStateSnapshot,
+  RunStatus,
+  SonarTokenStatusEvent,
+  AzureDevopsStatusEvent,
+  IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
+} from '../api/types.js';
 import type { ExtendedStreamState } from './streamReducer.js';
 import { MAX_LOG_LINES, MAX_SDK_EVENTS, capArray, streamReducer } from './streamReducer.js';
 
@@ -17,6 +24,9 @@ function makeState(): ExtendedStreamState {
     runOverride: null,
     effectiveRun: null,
     sonarTokenStatus: null,
+    azureDevopsStatus: null,
+    issueIngestStatus: null,
+    projectFilesStatus: null,
   };
 }
 
@@ -370,3 +380,301 @@ describe('streamReducer sonar-token-status', () => {
   });
 });
 
+function makeAzureDevopsStatusEvent(
+  overrides: Partial<AzureDevopsStatusEvent> = {}
+): AzureDevopsStatusEvent {
+  return {
+    issue_ref: 'owner/repo#1',
+    worktree_present: true,
+    configured: true,
+    organization: 'https://dev.azure.com/myorg',
+    project: 'MyProject',
+    has_pat: true,
+    pat_last_updated_at: '2026-02-04T10:00:00.000Z',
+    pat_env_var_name: 'AZURE_DEVOPS_EXT_PAT',
+    sync_status: 'in_sync',
+    last_attempt_at: '2026-02-04T10:00:00.000Z',
+    last_success_at: '2026-02-04T10:00:00.000Z',
+    last_error: null,
+    operation: 'put',
+    ...overrides,
+  };
+}
+
+describe('streamReducer azure-devops-status', () => {
+  it('stores azure-devops-status event in state', () => {
+    const s1 = makeState();
+    const event = makeAzureDevopsStatusEvent();
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: event });
+
+    expect(s2.azureDevopsStatus).toEqual(event);
+  });
+
+  it('updates azure-devops-status when a new event arrives', () => {
+    const s1 = makeState();
+    const event1 = makeAzureDevopsStatusEvent({ sync_status: 'in_sync' });
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: event1 });
+    expect(s2.azureDevopsStatus?.sync_status).toBe('in_sync');
+
+    const event2 = makeAzureDevopsStatusEvent({
+      sync_status: 'failed_env_write',
+      last_error: 'Permission denied',
+      operation: 'reconcile',
+    });
+    const s3 = streamReducer(s2, { type: 'azure-devops-status', data: event2 });
+
+    expect(s3.azureDevopsStatus?.sync_status).toBe('failed_env_write');
+    expect(s3.azureDevopsStatus?.last_error).toBe('Permission denied');
+    expect(s3.azureDevopsStatus?.operation).toBe('reconcile');
+  });
+
+  it('does NOT add azure-devops-status to sdkEvents', () => {
+    const s1 = makeState();
+    const event = makeAzureDevopsStatusEvent();
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: event });
+
+    // sdkEvents should remain empty - azure-devops-status is handled separately
+    expect(s2.sdkEvents).toEqual([]);
+  });
+
+  it('preserves azure-devops-status across state snapshot updates', () => {
+    const s1 = makeState();
+
+    // First: azure-devops-status arrives
+    const azureEvent = makeAzureDevopsStatusEvent({ issue_ref: 'owner/repo#1' });
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: azureEvent });
+    expect(s2.azureDevopsStatus).toEqual(azureEvent);
+
+    // Then: state snapshot arrives - azureDevopsStatus should be preserved
+    const snapshot = makeStateSnapshot({ issue_ref: 'owner/repo#1' });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot });
+
+    // azureDevopsStatus is NOT cleared by state snapshots
+    expect(s3.azureDevopsStatus).toEqual(azureEvent);
+  });
+
+  it('preserves azure-devops-status across run updates', () => {
+    const s1 = makeState();
+
+    // First: azure-devops-status arrives
+    const azureEvent = makeAzureDevopsStatusEvent();
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: azureEvent });
+    expect(s2.azureDevopsStatus).toEqual(azureEvent);
+
+    // Then: run update arrives - azureDevopsStatus should be preserved
+    const runUpdate = makeRunStatus({ running: true, current_iteration: 3 });
+    const s3 = streamReducer(s2, { type: 'run', data: { run: runUpdate } });
+
+    expect(s3.azureDevopsStatus).toEqual(azureEvent);
+  });
+
+  it('handles azure-devops-status for different issues', () => {
+    const s1 = makeState();
+
+    // Event for issue #1
+    const event1 = makeAzureDevopsStatusEvent({ issue_ref: 'owner/repo#1', has_pat: true });
+    const s2 = streamReducer(s1, { type: 'azure-devops-status', data: event1 });
+    expect(s2.azureDevopsStatus?.issue_ref).toBe('owner/repo#1');
+    expect(s2.azureDevopsStatus?.has_pat).toBe(true);
+
+    // Event for issue #2 replaces the stored status
+    const event2 = makeAzureDevopsStatusEvent({ issue_ref: 'owner/repo#2', has_pat: false });
+    const s3 = streamReducer(s2, { type: 'azure-devops-status', data: event2 });
+    expect(s3.azureDevopsStatus?.issue_ref).toBe('owner/repo#2');
+    expect(s3.azureDevopsStatus?.has_pat).toBe(false);
+  });
+
+  it('does not interfere with sonar-token-status', () => {
+    const s1 = makeState();
+
+    const sonarEvent = makeSonarTokenStatusEvent();
+    const azureEvent = makeAzureDevopsStatusEvent();
+
+    const s2 = streamReducer(s1, { type: 'sonar-token-status', data: sonarEvent });
+    const s3 = streamReducer(s2, { type: 'azure-devops-status', data: azureEvent });
+
+    // Both should be stored independently
+    expect(s3.sonarTokenStatus).toEqual(sonarEvent);
+    expect(s3.azureDevopsStatus).toEqual(azureEvent);
+  });
+});
+
+function makeIssueIngestStatusEvent(
+  overrides: Partial<IssueIngestStatusEvent> = {}
+): IssueIngestStatusEvent {
+  return {
+    issue_ref: 'owner/repo#1',
+    provider: 'github',
+    mode: 'create',
+    outcome: 'success',
+    remote_id: '42',
+    remote_url: 'https://github.com/owner/repo/issues/42',
+    warnings: [],
+    auto_select: { requested: false, ok: false },
+    auto_run: { requested: false, ok: false },
+    occurred_at: '2026-02-04T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('streamReducer issue-ingest-status', () => {
+  it('stores issue-ingest-status event in state', () => {
+    const s1 = makeState();
+    const event = makeIssueIngestStatusEvent();
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: event });
+
+    expect(s2.issueIngestStatus).toEqual(event);
+  });
+
+  it('updates issue-ingest-status when a new event arrives', () => {
+    const s1 = makeState();
+    const event1 = makeIssueIngestStatusEvent({ outcome: 'success' });
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: event1 });
+    expect(s2.issueIngestStatus?.outcome).toBe('success');
+
+    const event2 = makeIssueIngestStatusEvent({
+      outcome: 'partial',
+      warnings: ['Init failed'],
+    });
+    const s3 = streamReducer(s2, { type: 'issue-ingest-status', data: event2 });
+
+    expect(s3.issueIngestStatus?.outcome).toBe('partial');
+    expect(s3.issueIngestStatus?.warnings).toEqual(['Init failed']);
+  });
+
+  it('does NOT add issue-ingest-status to sdkEvents', () => {
+    const s1 = makeState();
+    const event = makeIssueIngestStatusEvent();
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: event });
+
+    // sdkEvents should remain empty - issue-ingest-status is handled separately
+    expect(s2.sdkEvents).toEqual([]);
+  });
+
+  it('preserves issue-ingest-status across state snapshot updates', () => {
+    const s1 = makeState();
+
+    // First: issue-ingest-status arrives
+    const ingestEvent = makeIssueIngestStatusEvent({ issue_ref: 'owner/repo#1' });
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: ingestEvent });
+    expect(s2.issueIngestStatus).toEqual(ingestEvent);
+
+    // Then: state snapshot arrives - issueIngestStatus should be preserved
+    const snapshot = makeStateSnapshot({ issue_ref: 'owner/repo#1' });
+    const s3 = streamReducer(s2, { type: 'state', data: snapshot });
+
+    // issueIngestStatus is NOT cleared by state snapshots
+    expect(s3.issueIngestStatus).toEqual(ingestEvent);
+  });
+
+  it('preserves issue-ingest-status across run updates', () => {
+    const s1 = makeState();
+
+    // First: issue-ingest-status arrives
+    const ingestEvent = makeIssueIngestStatusEvent();
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: ingestEvent });
+    expect(s2.issueIngestStatus).toEqual(ingestEvent);
+
+    // Then: run update arrives - issueIngestStatus should be preserved
+    const runUpdate = makeRunStatus({ running: true, current_iteration: 3 });
+    const s3 = streamReducer(s2, { type: 'run', data: { run: runUpdate } });
+
+    expect(s3.issueIngestStatus).toEqual(ingestEvent);
+  });
+
+  it('stores error outcome with error details', () => {
+    const s1 = makeState();
+    const event = makeIssueIngestStatusEvent({
+      outcome: 'error',
+      error: { code: 'auth', message: 'Authentication failed' },
+    });
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: event });
+
+    expect(s2.issueIngestStatus?.outcome).toBe('error');
+    expect(s2.issueIngestStatus?.error?.code).toBe('auth');
+    expect(s2.issueIngestStatus?.error?.message).toBe('Authentication failed');
+  });
+
+  it('handles azure_devops provider events', () => {
+    const s1 = makeState();
+    const event = makeIssueIngestStatusEvent({
+      provider: 'azure_devops',
+      mode: 'init_existing',
+      outcome: 'success',
+      remote_id: '123',
+      remote_url: 'https://dev.azure.com/org/project/_workitems/edit/123',
+    });
+    const s2 = streamReducer(s1, { type: 'issue-ingest-status', data: event });
+
+    expect(s2.issueIngestStatus?.provider).toBe('azure_devops');
+    expect(s2.issueIngestStatus?.mode).toBe('init_existing');
+    expect(s2.issueIngestStatus?.remote_url).toBe(
+      'https://dev.azure.com/org/project/_workitems/edit/123'
+    );
+  });
+
+  it('does not interfere with other status events', () => {
+    const s1 = makeState();
+
+    const sonarEvent = makeSonarTokenStatusEvent();
+    const azureEvent = makeAzureDevopsStatusEvent();
+    const ingestEvent = makeIssueIngestStatusEvent();
+
+    let state = streamReducer(s1, { type: 'sonar-token-status', data: sonarEvent });
+    state = streamReducer(state, { type: 'azure-devops-status', data: azureEvent });
+    state = streamReducer(state, { type: 'issue-ingest-status', data: ingestEvent });
+
+    // All three should be stored independently
+    expect(state.sonarTokenStatus).toEqual(sonarEvent);
+    expect(state.azureDevopsStatus).toEqual(azureEvent);
+    expect(state.issueIngestStatus).toEqual(ingestEvent);
+  });
+});
+
+function makeProjectFilesStatusEvent(
+  overrides: Partial<ProjectFilesStatusEvent> = {},
+): ProjectFilesStatusEvent {
+  return {
+    issue_ref: 'owner/repo#1',
+    worktree_present: true,
+    file_count: 1,
+    files: [{
+      id: 'abc',
+      display_name: 'connections.local.config',
+      target_path: 'connections.local.config',
+      size_bytes: 123,
+      sha256: 'deadbeef',
+      updated_at: '2026-02-07T12:00:00.000Z',
+    }],
+    sync_status: 'in_sync',
+    last_attempt_at: '2026-02-07T12:00:00.000Z',
+    last_success_at: '2026-02-07T12:00:00.000Z',
+    last_error: null,
+    operation: 'put',
+    ...overrides,
+  };
+}
+
+describe('streamReducer project-files-status', () => {
+  it('stores project-files-status event in state', () => {
+    const s1 = makeState();
+    const event = makeProjectFilesStatusEvent();
+    const s2 = streamReducer(s1, { type: 'project-files-status', data: event });
+    expect(s2.projectFilesStatus).toEqual(event);
+  });
+
+  it('does not interfere with other status events', () => {
+    const s1 = makeState();
+    const sonarEvent = makeSonarTokenStatusEvent();
+    const azureEvent = makeAzureDevopsStatusEvent();
+    const projectEvent = makeProjectFilesStatusEvent();
+
+    let state = streamReducer(s1, { type: 'sonar-token-status', data: sonarEvent });
+    state = streamReducer(state, { type: 'azure-devops-status', data: azureEvent });
+    state = streamReducer(state, { type: 'project-files-status', data: projectEvent });
+
+    expect(state.sonarTokenStatus).toEqual(sonarEvent);
+    expect(state.azureDevopsStatus).toEqual(azureEvent);
+    expect(state.projectFilesStatus).toEqual(projectEvent);
+  });
+});

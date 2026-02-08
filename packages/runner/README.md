@@ -20,7 +20,7 @@ pnpm exec jeeves-runner run-fixture
 pnpm exec jeeves-runner run-workflow --workflow <name> [--issue <owner/repo#N>]
 ```
 
-If `--issue` is provided, the runner defaults to XDG state/worktree paths (override with `JEEVES_DATA_DIR`).
+If `--issue` is provided, the runner defaults to platform data-dir state/worktree paths (override with `JEEVES_DATA_DIR`).
 
 ## Providers
 

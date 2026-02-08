@@ -5,9 +5,13 @@
  * context-focus pruning.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptions } from "node:child_process";
 import { z } from "zod";
 import { type PrunerConfig, pruneContent } from "../pruner.js";
+import {
+  resolveShellCommand,
+  type PlatformResolveDeps,
+} from "../platform.js";
 
 /** Zod schema for bash tool input arguments. */
 export const BashInputSchema = z.object({
@@ -16,6 +20,21 @@ export const BashInputSchema = z.object({
 });
 
 export type BashInput = z.infer<typeof BashInputSchema>;
+
+type ExecFileLike = (
+  file: string,
+  args: readonly string[],
+  options: ExecFileOptions,
+  callback: (
+    error: NodeJS.ErrnoException | null,
+    stdout: string,
+    stderr: string,
+  ) => void,
+) => ReturnType<typeof execFile>;
+
+export interface BashRuntimeDeps extends PlatformResolveDeps {
+  execFileImpl?: ExecFileLike;
+}
 
 /**
  * Format bash output per the issue specification:
@@ -61,15 +80,30 @@ export async function handleBash(
   args: BashInput,
   cwd: string,
   config: PrunerConfig,
+  deps: BashRuntimeDeps = {},
 ): Promise<{ content: { type: "text"; text: string }[] }> {
   let rawOutput: string;
   let isSpawnError = false;
 
   try {
+    const shell = resolveShellCommand({
+      platform: deps.platform,
+      env: deps.env,
+      pathLookup: deps.pathLookup,
+      fileExists: deps.fileExists,
+    });
+    if (!shell) {
+      throw new Error(
+        "No usable bash-compatible shell found on this host. Install Git Bash or set MCP_PRUNER_BASH_PATH.",
+      );
+    }
+
+    const execFileImpl = deps.execFileImpl ?? execFile;
+
     rawOutput = await new Promise<string>((resolve, reject) => {
-      const child = execFile(
-        "/bin/sh",
-        ["-c", args.command],
+      const child = execFileImpl(
+        shell.command,
+        [...shell.argsPrefix, args.command],
         { cwd },
         (error, stdout, stderr) => {
           if (error) {

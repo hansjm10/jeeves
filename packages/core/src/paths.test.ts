@@ -66,6 +66,36 @@ describe('parseRepoSpec / parseIssueRef', () => {
     expect(parseRepoSpec('git@github.com:owner/repo.git')).toEqual({ owner: 'owner', repo: 'repo' });
   });
 
+  it('parses Azure DevOps git URLs', () => {
+    expect(
+      parseRepoSpec('https://dev.azure.com/IOCHealthSystems/Software%20Development/_git/IOC-HealthSystems'),
+    ).toEqual({
+      owner: 'IOCHealthSystems',
+      repo: 'IOC-HealthSystems',
+      cloneUrl: 'https://dev.azure.com/IOCHealthSystems/Software%20Development/_git/IOC-HealthSystems',
+    });
+  });
+
+  it('parses Azure DevOps git URL with trailing .git', () => {
+    expect(
+      parseRepoSpec('https://dev.azure.com/MyOrg/MyProject/_git/MyRepo.git'),
+    ).toEqual({
+      owner: 'MyOrg',
+      repo: 'MyRepo',
+      cloneUrl: 'https://dev.azure.com/MyOrg/MyProject/_git/MyRepo',
+    });
+  });
+
+  it('parses legacy visualstudio.com git URLs', () => {
+    expect(
+      parseRepoSpec('https://myorg.visualstudio.com/MyProject/_git/MyRepo'),
+    ).toEqual({
+      owner: 'myorg',
+      repo: 'MyRepo',
+      cloneUrl: 'https://myorg.visualstudio.com/MyProject/_git/MyRepo',
+    });
+  });
+
   it('parses issue refs, including #123 with default repo', () => {
     expect(parseIssueRef('owner/repo#123')).toEqual({ owner: 'owner', repo: 'repo', issueNumber: 123 });
     expect(parseIssueRef('#123', { owner: 'owner', repo: 'repo' })).toEqual({ owner: 'owner', repo: 'repo', issueNumber: 123 });

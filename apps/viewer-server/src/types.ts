@@ -1,12 +1,33 @@
 import type { CreateGitHubIssueParams, CreateGitHubIssueResult } from './githubIssueCreate.js';
+import type {
+  CreateProviderIssueParams,
+  LookupExistingIssueParams,
+  FetchAzureHierarchyParams,
+} from './providerIssueAdapter.js';
+import type { IngestRemoteRef, IngestHierarchy } from './azureDevopsTypes.js';
 
 export type IssueRefString = `${string}/${string}#${number}`;
 
-export type RepoSpec = Readonly<{ owner: string; repo: string }>;
+export type RepoSpec = Readonly<{ owner: string; repo: string; cloneUrl?: string }>;
 
 export type CreateGitHubIssueAdapter = (
   params: CreateGitHubIssueParams,
 ) => Promise<CreateGitHubIssueResult>;
+
+/** Provider adapter for creating issues/work-items. For testing only. */
+export type CreateProviderIssueAdapter = (
+  params: CreateProviderIssueParams,
+) => Promise<IngestRemoteRef>;
+
+/** Provider adapter for looking up existing issues/work-items. For testing only. */
+export type LookupExistingIssueAdapter = (
+  params: LookupExistingIssueParams,
+) => Promise<IngestRemoteRef>;
+
+/** Provider adapter for fetching Azure work-item hierarchy. For testing only. */
+export type FetchAzureHierarchyAdapter = (
+  params: FetchAzureHierarchyParams,
+) => Promise<IngestHierarchy>;
 
 export type ViewerPaths = Readonly<{
   dataDir: string;

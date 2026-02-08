@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export type RepoSpec = Readonly<{ owner: string; repo: string }>;
+export type RepoSpec = Readonly<{ owner: string; repo: string; cloneUrl?: string }>;
 export type IssueRef = Readonly<{ owner: string; repo: string; issueNumber: number }>;
 
 function expandHome(inputPath: string, homeDir: string): string {
@@ -83,6 +83,29 @@ export function parseRepoSpec(spec: string): RepoSpec {
   }
 
   if (cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
+    // Azure DevOps: https://dev.azure.com/{org}/{project}/_git/{repo}
+    const azureMatch = cleaned.match(
+      /^https?:\/\/dev\.azure\.com\/([^/]+)\/[^/]+\/_git\/([^/]+?)(?:\.git)?$/,
+    );
+    if (azureMatch) {
+      const org = decodeURIComponent(azureMatch[1]);
+      const repoName = decodeURIComponent(azureMatch[2]).replace(/\.git$/, '');
+      const cloneUrl = cleaned.replace(/\.git$/, '');
+      return { owner: org, repo: repoName, cloneUrl };
+    }
+
+    // Legacy Azure DevOps: https://{org}.visualstudio.com/{project}/_git/{repo}
+    const vstsMatch = cleaned.match(
+      /^https?:\/\/([^.]+)\.visualstudio\.com\/[^/]+\/_git\/([^/]+?)(?:\.git)?$/,
+    );
+    if (vstsMatch) {
+      const org = decodeURIComponent(vstsMatch[1]);
+      const repoName = decodeURIComponent(vstsMatch[2]).replace(/\.git$/, '');
+      const cloneUrl = cleaned.replace(/\.git$/, '');
+      return { owner: org, repo: repoName, cloneUrl };
+    }
+
+    // GitHub: https://github.com/{owner}/{repo}
     const idx = cleaned.indexOf('github.com/');
     if (idx === -1) throw new Error(`invalid repo spec: ${spec}`);
     const after = cleaned.slice(idx + 'github.com/'.length).replace(/\.git$/, '').replace(/\/$/, '');
@@ -103,7 +126,7 @@ export function parseRepoSpec(spec: string): RepoSpec {
   }
 
   throw new Error(
-    `invalid repo spec: ${spec}. expected owner/repo, https://github.com/owner/repo, or git@github.com:owner/repo.git`,
+    `invalid repo spec: ${spec}. expected owner/repo, https://github.com/owner/repo, git@github.com:owner/repo.git, or https://dev.azure.com/org/project/_git/repo`,
   );
 }
 

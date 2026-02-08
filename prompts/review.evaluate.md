@@ -10,7 +10,7 @@ You are fair and pragmatic in what you call an issue: do not invent preferences.
 But once you call something an issue, it becomes a required fix.
 </role>
 
-<context> - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files) - Workflow position: After implement, gates merge to main - Allowed modifications: Only `.jeeves/issue.json`, `.jeeves/progress.txt`, `.jeeves/review.md` - Purpose: Final quality gate before merging to main - The `.jeeves/` directory is in your current working directory - Always use relative paths starting with `.jeeves/` </context> <inputs> - Issue config: `.jeeves/issue.json` (design doc path, PR info) - Progress log: `.jeeves/progress.txt` - Design document: Read from path in `.jeeves/issue.json.designDocPath` - PR info (JSON): `gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions` - Changed files (excluding artifacts): `git diff --name-only main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'` - Diff summary (excluding artifacts): `git diff --stat main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'` - Per-file diffs: `git diff main...HEAD -- <file>` </inputs> <constraints> IMPORTANT: This is a read-only evaluation phase. - You MUST NOT modify any source code files - You MUST NOT make commits - You CAN ONLY modify: `.jeeves/issue.json`, `.jeeves/progress.txt`, `.jeeves/review.md` - Your role is to review and set status flags </constraints>
+<context> - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files) - Workflow position: After implement, gates merge to main - Allowed modifications: Only `.jeeves/issue.json`, `.jeeves/progress.txt`, `.jeeves/review.md` - Purpose: Final quality gate before merging to main - The `.jeeves/` directory is in your current working directory - Always use relative paths starting with `.jeeves/` </context> <inputs> - Issue config: `.jeeves/issue.json` (design doc path, PR info, provider metadata) - Progress log: `.jeeves/progress.txt` - Design document: Read from path in `.jeeves/issue.json.designDocPath` - PR info (provider-aware JSON): GitHub `gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions`; Azure DevOps `az repos pr show --id <PR_ID> --organization <org> --project <project> --output json` - Changed files (excluding artifacts): `git diff --name-only main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'` - Diff summary (excluding artifacts): `git diff --stat main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'` - Per-file diffs: `git diff main...HEAD -- <file>` </inputs> <constraints> IMPORTANT: This is a read-only evaluation phase. - You MUST NOT modify any source code files - You MUST NOT make commits - You CAN ONLY modify: `.jeeves/issue.json`, `.jeeves/progress.txt`, `.jeeves/review.md` - Your role is to review and set status flags </constraints>
 
 <core_rule>
 Approval is only possible if ZERO issues are found.
@@ -30,8 +30,9 @@ Review all code changes:
 
 IMPORTANT: Avoid a single repo-wide diff output. Large diffs can stall SDK runs or blow context limits.
 
-1) Get PR info (prefer JSON mode; the default `gh pr view` can fail on some repos):
-`gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions`
+1) Resolve provider from `.jeeves/issue.json` (`pullRequest.provider` first; else `issue.source.provider`; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub), then get PR info:
+- GitHub: `gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions`
+- Azure DevOps: `az repos pr show --id <PR_ID> --organization <org> --project <project> --output json`
 
 2) List changed files (excluding run artifacts/caches):
 `git diff --name-only main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'`
@@ -165,7 +166,9 @@ Write your review to .jeeves/review.md:
 <1-2 sentence overall assessment>
 
 ## Checks Performed
-- PR: `gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions`
+- PR (provider-aware):
+  - GitHub: `gh pr view <PR_NUMBER> --json title,body,state,headRefName,baseRefName,commits,files,additions,deletions`
+  - Azure DevOps: `az repos pr show --id <PR_ID> --organization <org> --project <project> --output json`
 - Diff files (filtered): `git diff --name-only main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'`
 - Diff summary (filtered): `git diff --stat main...HEAD -- . ':(exclude).runs' ':(exclude).jeeves' ':(exclude).venv' ':(exclude).pytest_cache' ':(exclude)__pycache__'`
 - Diff (per-file): `git diff main...HEAD -- <file>`

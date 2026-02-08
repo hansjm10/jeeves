@@ -336,3 +336,26 @@ export type ToolInput =
 // ============================================================================
 
 export type { SonarTokenStatusEvent, SonarSyncStatus } from './sonarTokenTypes.js';
+
+// ============================================================================
+// Azure DevOps Types (re-exported from azureDevopsTypes for convenience)
+// ============================================================================
+
+export type {
+  AzureDevopsStatusEvent,
+  AzureDevopsSyncStatus,
+  IssueIngestStatusEvent,
+  IssueProvider,
+  IngestMode,
+  IngestOutcome,
+  IngestEventOutcome,
+} from './azureDevopsTypes.js';
+
+// ============================================================================
+// Project Files Types (re-exported for convenience)
+// ============================================================================
+
+export type {
+  ProjectFilesStatusEvent,
+  ProjectFilesSyncStatus,
+} from './projectFilesTypes.js';

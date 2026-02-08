@@ -10,6 +10,7 @@ Jeeves is a proof‑of‑concept orchestration layer that runs agent SDK session
 
 - Node.js 20+
 - pnpm 10+
+- Git (Git for Windows on native Windows hosts)
 - `gh` CLI (optional, for GitHub issue metadata)
 
 ### Install
@@ -33,9 +34,13 @@ pnpm dev
 3. **Run** – launches the SDK runner and streams logs + SDK events.
 4. **Edit Prompts** – edit `prompts/issue.*.md` in the Prompts tab.
 
-## State Directory (XDG)
+## State Directory
 
-Jeeves stores state in the XDG data directory (override with `JEEVES_DATA_DIR`).
+Jeeves stores state under a platform-default data directory (override with `JEEVES_DATA_DIR`):
+
+- Linux: `$XDG_DATA_HOME/jeeves` or `~/.local/share/jeeves`
+- macOS: `~/Library/Application Support/jeeves`
+- Windows: `%LOCALAPPDATA%\\jeeves`
 
 Typical layout:
 
@@ -121,11 +126,16 @@ jeeves/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JEEVES_DATA_DIR` | `~/.local/share/jeeves` | Base directory for repos/worktrees/issues |
+| `JEEVES_DATA_DIR` | OS-dependent data-dir | Base directory for repos/worktrees/issues |
 | `VITE_VIEWER_SERVER_URL` | `window.location.origin` | Viewer UI base URL for viewer-server REST/WS calls (set to bypass the Vite proxy) |
 | `OPENAI_API_KEY` | (none) | OpenAI API key for the `codex` provider (also supports `CODEX_API_KEY`) |
 | `CODEX_MODEL` | (none) | Model override for the `codex` provider (falls back to `OPENAI_MODEL`) |
 | `OPENAI_BASE_URL` | (none) | Base URL override for the `codex` provider (also supports `CODEX_BASE_URL`) |
+
+For MCP pruner on Windows, optional overrides are available:
+
+- `MCP_PRUNER_BASH_PATH`: absolute path to `bash.exe`
+- `MCP_PRUNER_GREP_PATH`: absolute path to `grep.exe`
 
 ## Development
 

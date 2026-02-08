@@ -1,0 +1,185 @@
+/* AzureDevopsPage styles */
+/* Uses shared design tokens from styles/tokens.css */
+
+.azure-devops-page {
+  padding: var(--space-4);
+  height: 100%;
+  overflow-y: auto;
+}
+
+.azure-devops-empty,
+.azure-devops-loading,
+.azure-devops-error {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.azure-devops-error .btn {
+  margin-top: var(--space-4);
+}
+
+/* Status Section */
+.azure-devops-status-section {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+}
+
+.azure-devops-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+}
+
+.azure-devops-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.azure-devops-status-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.azure-devops-status-value {
+  font-size: 14px;
+}
+
+.azure-devops-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.azure-devops-badge.configured {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--color-accent-green);
+}
+
+.azure-devops-badge.not-configured {
+  background: rgba(139, 148, 158, 0.15);
+  color: var(--color-text-muted);
+}
+
+.azure-devops-last-error {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.azure-devops-last-error .errorBox {
+  margin-top: var(--space-2);
+  font-size: 13px;
+}
+
+/* Warning Banner */
+.azure-devops-warning {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(236, 201, 75, 0.1);
+  border: 1px solid rgba(236, 201, 75, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--color-accent-amber);
+  font-size: 13px;
+}
+
+/* Field Error */
+.azure-devops-field-error {
+  color: var(--color-accent-red);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* Form Section */
+.azure-devops-form-section {
+  margin-bottom: var(--space-6);
+}
+
+.azure-devops-form-section .label {
+  margin-bottom: var(--space-4);
+}
+
+.azure-devops-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.azure-devops-actions .btn.danger {
+  background: var(--color-accent-red);
+  color: white;
+}
+
+.azure-devops-actions .btn.danger:hover:not(:disabled) {
+  background: var(--color-accent-red);
+  opacity: 0.9;
+}
+
+/* Help Section */
+.azure-devops-help {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.azure-devops-help summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.azure-devops-help summary:hover {
+  color: var(--color-text);
+}
+
+.azure-devops-help-content {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.azure-devops-help-content ul {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.azure-devops-help-content li {
+  margin-bottom: var(--space-2);
+}
+
+.azure-devops-help-content code {
+  padding: var(--space-1) var(--space-2);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .azure-devops-page {
+    padding: var(--space-3);
+  }
+
+  .azure-devops-status-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .azure-devops-actions {
+    flex-direction: column;
+  }
+
+  .azure-devops-actions .btn {
+    width: 100%;
+  }
+}

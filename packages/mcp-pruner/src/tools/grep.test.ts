@@ -206,6 +206,27 @@ describe('grep tool', () => {
     });
   });
 
+  describe('node fallback behavior', () => {
+    it('falls back to built-in search when grep binary is unavailable', async () => {
+      const result = await handleGrep(
+        { pattern: 'hello', path: tmpDir },
+        { grepCommand: null },
+      );
+
+      expect(result.content[0].text).toContain('hello world');
+      expect(result.content[0].text).toMatch(/\d+.*hello world/);
+    });
+
+    it('returns Error: ... for invalid regex in fallback mode', async () => {
+      const result = await handleGrep(
+        { pattern: '([', path: tmpDir },
+        { grepCommand: null },
+      );
+
+      expect(result.content[0].text).toMatch(/^Error: /);
+    });
+  });
+
   describe('command execution', () => {
     it('runs grep -Ern --color=never <pattern> <path>', async () => {
       const origCwd = process.env.MCP_PRUNER_CWD;

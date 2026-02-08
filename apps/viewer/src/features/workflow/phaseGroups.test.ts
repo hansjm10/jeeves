@@ -12,6 +12,10 @@ describe('groupForPhase', () => {
     expect(groupForPhase('design_draft')).toBe('design');
   });
 
+  it('groups design_research into design', () => {
+    expect(groupForPhase('design_research')).toBe('design');
+  });
+
   it('groups prepare_pr into review', () => {
     expect(groupForPhase('prepare_pr')).toBe('review');
   });
@@ -33,9 +37,9 @@ describe('pickGroupTarget', () => {
       { id: 'complete', name: 'Complete', type: 'terminal', description: '' },
       { id: 'completeness_verification', name: 'Completeness Verification', type: 'evaluate', description: '' },
       { id: 'design_classify', name: 'Design Classify', type: 'execute', description: '' },
+      { id: 'design_research', name: 'Design Research', type: 'execute', description: '' },
       { id: 'task_decomposition', name: 'Task Decomposition', type: 'execute', description: '' },
       { id: 'implement_task', name: 'Implement Task', type: 'execute', description: '' },
-      { id: 'plan_task', name: 'Plan Task', type: 'execute', description: '' },
       { id: 'pre_implementation_check', name: 'Pre-Implementation Check', type: 'evaluate', description: '' },
       { id: 'prepare_pr', name: 'Prepare PR', type: 'execute', description: '' },
     ],
@@ -45,9 +49,9 @@ describe('pickGroupTarget', () => {
       'complete',
       'completeness_verification',
       'design_classify',
+      'design_research',
       'task_decomposition',
       'implement_task',
-      'plan_task',
       'pre_implementation_check',
       'prepare_pr',
     ],
@@ -57,8 +61,17 @@ describe('pickGroupTarget', () => {
     expect(pickGroupTarget(defaultLikeWorkflow, 'design')).toBe('design_classify');
   });
 
-  it('picks plan_task for implement group regardless of phase order', () => {
-    expect(pickGroupTarget(defaultLikeWorkflow, 'implement')).toBe('plan_task');
+  it('picks design_research when design_classify is absent', () => {
+    const workflowWithoutClassify: WorkflowResponse = {
+      ...defaultLikeWorkflow,
+      phases: defaultLikeWorkflow.phases.filter((p) => p.id !== 'design_classify'),
+      phase_order: defaultLikeWorkflow.phase_order.filter((p) => p !== 'design_classify'),
+    };
+    expect(pickGroupTarget(workflowWithoutClassify, 'design')).toBe('design_research');
+  });
+
+  it('picks implement_task for implement group regardless of phase order', () => {
+    expect(pickGroupTarget(defaultLikeWorkflow, 'implement')).toBe('implement_task');
   });
 
   it('picks review anchor for review group', () => {

@@ -1,0 +1,124 @@
+.project-files-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.project-files-loading,
+.project-files-empty,
+.project-files-error {
+  padding: var(--space-5) 0;
+}
+
+.project-files-status-section {
+  margin-bottom: var(--space-5);
+}
+
+.project-files-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: var(--space-4) var(--space-5);
+}
+
+.project-files-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.project-files-status-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-ui-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.project-files-status-value {
+  color: var(--color-text);
+}
+
+.project-files-last-error {
+  margin-top: var(--space-5);
+}
+
+.project-files-warning {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: var(--radius-md);
+  color: var(--color-accent-amber);
+  padding: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.project-files-form-section,
+.project-files-list-section {
+  margin-top: var(--space-5);
+}
+
+.project-files-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.project-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.project-files-row {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.project-files-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.project-files-row-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-files-row-sub {
+  font-size: var(--font-size-ui-sm);
+}
+
+.project-files-badge {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-ui-sm);
+}
+
+.project-files-badge.configured {
+  border-color: rgba(63, 185, 80, 0.6);
+  color: var(--color-accent-green);
+}
+
+.project-files-badge.not-configured {
+  border-color: rgba(139, 148, 158, 0.6);
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 900px) {
+  .project-files-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .project-files-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

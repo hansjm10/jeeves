@@ -24,7 +24,9 @@ You approve only designs that are immediately implementable without clarificatio
 - Issue config: `.jeeves/issue.json` (contains `designDocPath` and issue number)
 - Progress log: `.jeeves/progress.txt`
 - Design document: Read from path in `.jeeves/issue.json.designDocPath`
-- GitHub issue: Run `gh issue view <issueNumber>` to retrieve full requirements
+- Issue requirements (provider-aware):
+  - GitHub: `gh issue view <issueNumber>`
+  - Azure DevOps: `az boards work-item show --id <issueId> --organization <org> --project <project> --output json`
 </inputs>
 
 <constraints>
@@ -45,7 +47,7 @@ IMPORTANT – STRICT ENFORCEMENT:
 
 1. Read `.jeeves/issue.json` to determine:
    - Design document path
-   - GitHub issue number
+   - Issue/work-item identifier and provider context
 
 2. Read the design document in full. It should have 6 sections:
    - Section 1: Scope (Problem, Goals, Non-Goals)
@@ -55,9 +57,14 @@ IMPORTANT – STRICT ENFORCEMENT:
    - Section 5: Tasks (Dependency Graph, Task Breakdown)
    - Section 6: Validation (Commands, Test Coverage)
 
-3. Read the original issue:
-   - Run `gh issue view <issueNumber>`
+3. Read the original issue/work-item:
+   - Resolve provider (`issue.source.provider` first; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub)
+   - Run the matching command (`gh issue view` or `az boards work-item show`)
    - Extract explicit requirements
+   - If explicit markdown requirement lists are missing, use deterministic fallback requirements from accessible fields:
+     - issue title (`.jeeves/issue.json.issue.title`)
+     - non-empty content under headings like `Description`, `Expected Result`, `Suggested Fix`, `Impact`
+   - If provider command fails, use cached `.jeeves/issue.md` when present
 
 4. Evaluate each section against the criteria below.
 
@@ -74,6 +81,7 @@ IMPORTANT – STRICT ENFORCEMENT:
 - [ ] Every issue requirement maps to a Goal
 - [ ] Non-Goals explicitly exclude adjacent scope
 - [ ] No scope creep beyond the issue
+- [ ] Requirement extraction was deterministic from available authoritative sources (provider CLI and/or `.jeeves/issue.md` cache)
 
 **FAIL if**: A requirement is missing, misinterpreted, or marked "future work"
 

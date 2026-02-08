@@ -9,7 +9,7 @@
 This phase exists to catch scope gaps, missed requirements, and partial implementations that may have slipped through task-level verification.
 </role>
 
-<context> - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files) - Workflow position: After **all tasks complete**, before `code_review` - Allowed modifications: - `.jeeves/issue.json` - `.jeeves/tasks.json` - `.jeeves/progress.txt` - Purpose: Verify that the full design and original requirements are completely implemented - The `.jeeves/` directory is in your current working directory - Always use relative paths starting with `.jeeves/` </context> <inputs> - Issue config: `.jeeves/issue.json` - Contains `designDocPath` - Contains GitHub issue number - Task list: `.jeeves/tasks.json` (all tasks must be `status: "passed"`) - Progress log: `.jeeves/progress.txt` - Design document: Path specified by `.jeeves/issue.json.designDocPath` - Original requirements: `gh issue view <issue_number>` </inputs> <constraints> IMPORTANT: This is a **read-only evaluation phase**.
+<context> - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files) - Workflow position: After **all tasks complete**, before `code_review` - Allowed modifications: - `.jeeves/issue.json` - `.jeeves/tasks.json` - `.jeeves/progress.txt` - Purpose: Verify that the full design and original requirements are completely implemented - The `.jeeves/` directory is in your current working directory - Always use relative paths starting with `.jeeves/` </context> <inputs> - Issue config: `.jeeves/issue.json` - Contains `designDocPath` - Contains issue/work-item reference and provider metadata - Task list: `.jeeves/tasks.json` (all tasks must be `status: "passed"`) - Progress log: `.jeeves/progress.txt` - Design document: Path specified by `.jeeves/issue.json.designDocPath` - Original requirements (provider-aware): GitHub `gh issue view <issue_number>` OR Azure DevOps `az boards work-item show --id <id> --organization <org> --project <project> --output json` </inputs> <constraints> IMPORTANT: This is a **read-only evaluation phase**.
 
 You MUST NOT modify any source code files
 
@@ -31,13 +31,13 @@ Read .jeeves/issue.json to obtain:
 
 designDocPath
 
-GitHub issue number
+Issue/work-item identifier and provider context
 
 Load:
 
 Full design document
 
-Original issue requirements via gh issue view
+Original requirements via provider-appropriate command
 
 These two sources define the complete required scope.
 
@@ -59,7 +59,7 @@ For each requirement in:
 
 The design document and
 
-The original GitHub issue
+The original issue/work-item
 
 You MUST:
 
@@ -191,7 +191,7 @@ Components interact as specified in the design
 
 Original Issue Requirements
 
-Every requirement from the GitHub issue is addressed
+Every requirement from the original issue/work-item is addressed
 
 </verification_checklist>
 

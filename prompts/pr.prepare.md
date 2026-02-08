@@ -7,7 +7,7 @@
 # PR Preparation Phase
 
 <role>
-You create pull requests for completed implementations.
+You create pull requests for completed implementations, supporting both GitHub and Azure DevOps providers.
 </role>
 
 <context>
@@ -19,42 +19,102 @@ You create pull requests for completed implementations.
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains issue number, branch name)
+- Issue config: `.jeeves/issue.json` (contains issue number, branch name, provider metadata)
 - Progress log: `.jeeves/progress.txt`
 - Design document: Read from path in `.jeeves/issue.json.designDocPath`
 </inputs>
 
+<prerequisites>
+- **GitHub**: `gh` must be installed and authenticated (`gh auth login`).
+- **Azure DevOps**: `az` CLI must be installed and authenticated (`az login`). The Azure DevOps PAT should be configured via the viewer's Azure settings (stored in `status.azureDevops`).
+</prerequisites>
+
 <instructions>
 1. Read `.jeeves/issue.json` to get:
-   - `issueNumber` - the GitHub issue number
-   - `branchName` - the current branch
+   - `issue.number` or `issue.source.id` - the issue/work-item identifier
+   - `branch` - the current branch name
+   - `issue.source.provider` - the provider (`'github'` or `'azure_devops'`), if present
+   - `issue.repo` - the repository reference (e.g., `owner/repo`)
+   - For Azure DevOps: also read `status.azureDevops.organization` and `status.azureDevops.project`
 
-2. Check if PR already exists:
-   - Run `gh pr list --head <branchName> --json number,url`
-   - If a PR exists, skip to step 5
+2. Determine the provider:
+   - If `issue.source.provider` is set, use it.
+   - Otherwise, if `status.azureDevops.organization` and `status.azureDevops.project` are both present, use `'azure_devops'`.
+   - Otherwise, use `'github'`.
+   - Follow the matching provider path below.
 
-3. Prepare PR content:
+3. Check if PR already exists:
+
+   **GitHub path:**
+   ```bash
+   gh pr list --head <branch> --repo <repo> --json number,url,state
+   ```
+   If a PR is returned, skip to step 6.
+
+   **Azure DevOps path:**
+   ```bash
+   az repos pr list \
+     --organization <organization> \
+     --project <project> \
+     --repository <repoName> \
+     --source-branch <branch> \
+     --status active \
+     --output json
+   ```
+   Where `<repoName>` is:
+   - If `issue.repo` is `owner/repo`, use `repo`
+   - If `issue.repo` is an Azure git URL ending in `/_git/<repo>`, use `<repo>`
+   - Otherwise use `issue.repo` as-is
+   If an active PR is returned, skip to step 6.
+
+4. Prepare PR content:
    - Read the design document for context
    - Read `.jeeves/progress.txt` for implementation summary
    - Write a clear, descriptive title
    - Write a body that summarizes the changes
 
-4. Create the pull request:
+5. Create the pull request:
+
+   **GitHub path:**
    ```bash
-   gh pr create --base main --head <branchName> \
+   gh pr create --base main --head <branch> --repo <repo> \
      --title "<descriptive title>" \
      --body "<body with summary and Fixes #<issueNumber>>"
    ```
 
-5. Capture PR info:
+   **Azure DevOps path:**
+   ```bash
+   az repos pr create \
+     --organization <organization> \
+     --project <project> \
+     --repository <repoName> \
+     --source-branch <branch> \
+     --target-branch main \
+     --title "<descriptive title>" \
+     --description "<body with summary>" \
+     --output json
+   ```
+
+6. Capture PR info:
+
+   **GitHub path:**
    - Run `gh pr view --json number,url`
    - Extract the PR number and URL
 
-6. Update `.jeeves/issue.json`:
-   - Set `status.prCreated = true`
-   - Set `pullRequest.number` and `pullRequest.url`
+   **Azure DevOps path:**
+   - Extract `pullRequestId` from the JSON output
+   - Construct the PR URL: if the JSON output includes `repository.webUrl`, use `<webUrl>/pullrequest/<pullRequestId>`. Otherwise, construct as `<organization>/<project>/_git/<repoName>/pullrequest/<pullRequestId>`.
 
-7. Append progress to `.jeeves/progress.txt`
+7. Update `.jeeves/issue.json` with provider-aware pullRequest metadata:
+   - Set `status.prCreated = true`
+   - Set `pullRequest.provider` to `'github'` or `'azure_devops'`
+   - Set `pullRequest.external_id` to the PR number (GitHub) or `pullRequestId` (Azure) as a string
+   - Set `pullRequest.source_branch` to the head branch name
+   - Set `pullRequest.target_branch` to `'main'` (or the specified base branch)
+   - Set `pullRequest.updated_at` to the current UTC ISO-8601 timestamp (e.g., `"2026-02-06T12:00:00.000Z"`)
+   - For GitHub backward compatibility: also set `pullRequest.number` (integer) and `pullRequest.url` (string)
+
+8. Append progress to `.jeeves/progress.txt`
 </instructions>
 
 <pr_body_template>
@@ -76,15 +136,18 @@ Fixes #<issueNumber>
 
 <thinking_guidance>
 Before creating the PR:
-1. Does a PR already exist for this branch?
-2. What is the clearest way to summarize these changes?
-3. Have all changes been pushed?
+1. What is the provider — GitHub or Azure DevOps?
+2. Does a PR already exist for this branch?
+3. What is the clearest way to summarize these changes?
+4. Have all changes been pushed?
+5. For Azure DevOps: are organization and project available in `status.azureDevops`?
 </thinking_guidance>
 
 <completion>
 The phase is complete when:
 - PR exists (created or already existed)
-- PR info is captured in issue.json
+- Provider-aware PR info is captured in issue.json
+- `status.prCreated` is set to `true`
 
 Update `.jeeves/issue.json`:
 ```json
@@ -93,8 +156,29 @@ Update `.jeeves/issue.json`:
     "prCreated": true
   },
   "pullRequest": {
-    "number": <number>,
-    "url": "<url>"
+    "provider": "github",
+    "external_id": "123",
+    "source_branch": "issue/103",
+    "target_branch": "main",
+    "updated_at": "2026-02-06T12:00:00.000Z",
+    "number": 123,
+    "url": "https://github.com/owner/repo/pull/123"
+  }
+}
+```
+
+For Azure DevOps:
+```json
+{
+  "status": {
+    "prCreated": true
+  },
+  "pullRequest": {
+    "provider": "azure_devops",
+    "external_id": "456",
+    "source_branch": "issue/103",
+    "target_branch": "main",
+    "updated_at": "2026-02-06T12:00:00.000Z"
   }
 }
 ```
@@ -104,7 +188,8 @@ Append to `.jeeves/progress.txt`:
 ## [Date/Time] - PR Preparation
 
 ### Pull Request
-- Number: #<number>
+- Provider: <github|azure_devops>
+- ID: <number or pullRequestId>
 - URL: <url>
 
 ### Status

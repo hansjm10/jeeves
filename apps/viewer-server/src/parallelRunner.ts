@@ -40,6 +40,7 @@ import {
   updateWaveSummaryWithMerge,
   type WaveMergeResult,
 } from './waveResultMerge.js';
+import { terminateProcess } from './processTermination.js';
 
 /** Maximum allowed parallel tasks (hard cap per §6.2.1) */
 export const MAX_PARALLEL_TASKS = 8;
@@ -821,11 +822,7 @@ export class ParallelRunner {
     this.stopRequested = true;
     for (const worker of this.activeWorkers.values()) {
       if (worker.proc && worker.proc.exitCode === null) {
-        try {
-          worker.proc.kill('SIGTERM');
-        } catch {
-          // ignore
-        }
+        terminateProcess(worker.proc, 'SIGTERM');
       }
     }
   }
@@ -854,12 +851,8 @@ export class ParallelRunner {
     this.timeoutType = type;
     for (const worker of this.activeWorkers.values()) {
       if (worker.proc && worker.proc.exitCode === null) {
-        try {
-          // Use SIGKILL for immediate termination on timeout
-          worker.proc.kill('SIGKILL');
-        } catch {
-          // ignore
-        }
+        // Use SIGKILL for immediate termination on timeout
+        terminateProcess(worker.proc, 'SIGKILL');
         // Mark worker as timed_out
         worker.status = 'timed_out';
       }
@@ -1477,12 +1470,8 @@ export class ParallelRunner {
       // Best-effort terminate any already-started workers
       for (const { sandbox, worker } of startedWorkers) {
         if (worker.proc && worker.proc.exitCode === null) {
-          try {
-            worker.proc.kill('SIGKILL');
-            await this.options.appendLog(`[WORKER ${sandbox.taskId}] Terminated due to spawn failure`);
-          } catch {
-            // Ignore kill errors
-          }
+          terminateProcess(worker.proc, 'SIGKILL');
+          await this.options.appendLog(`[WORKER ${sandbox.taskId}] Terminated due to spawn failure`);
         }
         this.activeWorkers.delete(sandbox.taskId);
       }

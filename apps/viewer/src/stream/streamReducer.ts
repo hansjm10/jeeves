@@ -1,4 +1,10 @@
-import type { RunStatus, SonarTokenStatusEvent } from '../api/types.js';
+import type {
+  RunStatus,
+  SonarTokenStatusEvent,
+  AzureDevopsStatusEvent,
+  IssueIngestStatusEvent,
+  ProjectFilesStatusEvent,
+} from '../api/types.js';
 import type { StreamAction, StreamState } from './streamTypes.js';
 
 export const MAX_LOG_LINES = 10_000;
@@ -16,6 +22,12 @@ export type ExtendedStreamState = StreamState & {
   effectiveRun: RunStatus | null;
   /** Latest sonar-token-status event (mirrors StreamState for direct access). */
   sonarTokenStatus: SonarTokenStatusEvent | null;
+  /** Latest azure-devops-status event (mirrors StreamState for direct access). */
+  azureDevopsStatus: AzureDevopsStatusEvent | null;
+  /** Latest issue-ingest-status event (mirrors StreamState for direct access). */
+  issueIngestStatus: IssueIngestStatusEvent | null;
+  /** Latest project-files-status event (mirrors StreamState for direct access). */
+  projectFilesStatus: ProjectFilesStatusEvent | null;
 };
 
 /** Action for live run updates from the viewer-server */
@@ -86,8 +98,22 @@ export function streamReducer(
       // This does NOT add to sdkEvents (no noise)
       return { ...state, sonarTokenStatus: action.data };
     }
+    case 'azure-devops-status': {
+      // Store the latest azure-devops-status event for direct access by consumers
+      // This does NOT add to sdkEvents (no noise)
+      return { ...state, azureDevopsStatus: action.data };
+    }
+    case 'issue-ingest-status': {
+      // Store the latest issue-ingest-status event for direct access by consumers
+      // This does NOT add to sdkEvents (no noise)
+      return { ...state, issueIngestStatus: action.data };
+    }
+    case 'project-files-status': {
+      // Store the latest project-files-status event for direct access by consumers
+      // This does NOT add to sdkEvents (no noise)
+      return { ...state, projectFilesStatus: action.data };
+    }
     default:
       return state;
   }
 }
-

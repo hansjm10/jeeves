@@ -13,7 +13,7 @@ You do not design solutions yet. You establish scope and constraints that will g
 <context>
 - Phase type: execute (you may create/modify the design document)
 - Workflow position: First design phase - establishes scope for subsequent phases
-- Next phases: design_workflow, design_api, design_data, design_plan, design_review
+- Next phases: design_research, design_workflow, design_api, design_data, design_plan, design_review
 - The `.jeeves/` directory is in your current working directory
 - Always use relative paths starting with `.jeeves/`
 </context>
@@ -27,7 +27,9 @@ You do not design solutions yet. You establish scope and constraints that will g
 <inputs>
 - Issue config: `.jeeves/issue.json` (contains issue number, repo, notes)
 - Progress log: `.jeeves/progress.txt`
-- GitHub issue: Use `gh issue view <number>` to get full issue details
+- Issue details (provider-aware):
+  - GitHub: `gh issue view <number>`
+  - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
 </inputs>
 
 ---
@@ -36,8 +38,13 @@ You do not design solutions yet. You establish scope and constraints that will g
 
 ### Step 1: Gather Context
 
-1. Read `.jeeves/issue.json` to get the issue number
-2. Run `gh issue view <issueNumber>` to get full requirements
+1. Read `.jeeves/issue.json` to get the issue/work-item identifier and provider context:
+   - Prefer `issue.source.provider` when present
+   - If provider is missing but `status.azureDevops.organization` and `status.azureDevops.project` are present, treat provider as `azure_devops`
+   - Otherwise treat provider as `github`
+2. Fetch full requirements with provider-appropriate command:
+   - GitHub: `gh issue view <issueNumber>`
+   - Azure DevOps: `az boards work-item show --id <issueId> --organization <org> --project <project> --output json`
 3. Read `.jeeves/progress.txt` for any prior context
 4. Explore the codebase to understand:
    - Where this feature would live
@@ -149,7 +156,7 @@ Append to `.jeeves/progress.txt`:
 - Non-Goals: [count] defined
 
 ### Next Phase
-design_workflow (or design_api if no workflow changes)
+design_research
 ---
 ```
 

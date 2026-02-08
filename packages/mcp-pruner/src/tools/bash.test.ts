@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { PrunerConfig } from '../pruner.js';
@@ -69,21 +73,28 @@ describe('bash tool', () => {
       expect(result.content[0].text).toBe('(no output)');
     });
 
-    it('returns spawn error as "Error executing command: <message>"', async () => {
-      // Use a command that will cause a spawn-level failure by pointing to
-      // a non-existent shell. We test by using an impossible scenario.
-      // Actually, handleBash uses /bin/sh -c, so a typical spawn error
-      // would be if /bin/sh didn't exist. Instead, test the format indirectly.
-      // The format guarantee is tested via a command that definitely errors.
+    it('returns shell resolution error as "Error executing command: <message>"', async () => {
       const result = await handleBash(
-        { command: 'nonexistent_command_that_should_fail_with_error 2>/dev/null' },
+        { command: 'echo hi' },
         process.cwd(),
         disabledPruner(),
+        {
+          platform: 'win32',
+          pathLookup: () =>
+            ({
+              status: 1,
+              stdout: '',
+              stderr: '',
+              output: [],
+              pid: 1,
+              signal: null,
+            }) as unknown as import('node:child_process').SpawnSyncReturns<string>,
+          fileExists: () => false,
+        },
       );
 
-      // This will produce an exit code, not a spawn error, since /bin/sh exists
-      // Verify it includes exit code formatting
-      expect(result.content[0].text).toContain('[exit code:');
+      expect(result.content[0].text).toContain('Error executing command:');
+      expect(result.content[0].text).toContain('No usable bash-compatible shell found');
     });
   });
 
@@ -177,14 +188,15 @@ describe('bash tool', () => {
 
   describe('working directory', () => {
     it('executes command in the specified cwd', async () => {
+      const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mcp-bash-cwd-'));
       const result = await handleBash(
         { command: 'pwd' },
-        '/tmp',
+        tempDir,
         disabledPruner(),
       );
 
-      // On some systems /tmp might be a symlink, so just check it resolves
       expect(result.content[0].text.trim()).toBeTruthy();
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
     });
   });
 });

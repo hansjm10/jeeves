@@ -103,7 +103,7 @@ Jeeves uses an iteration pattern where each run is a **fresh context window**:
 2. You read `progress.txt` to understand what happened in prior iterations
 3. You work on the current phase
 4. You write your progress to `progress.txt` for the next iteration
-5. If complete, output `<promise>COMPLETE</promise>` to stop the loop
+5. If complete, output `<promise>COMPLETE</promise>` (the orchestrator only stops on this signal in terminal phase context)
 6. If not complete, end normally and the next iteration continues
 
 **This means:**
@@ -120,6 +120,8 @@ When ALL tasks for the current phase are complete:
 2. Update `.jeeves/issue.json` with final status
 3. Append final summary to `.jeeves/progress.txt`
 4. Output exactly: `<promise>COMPLETE</promise>`
+
+Note: This marker is ignored in non-terminal phases; workflow state transitions are the source of truth for completion.
 
 **When NOT to output the promise:**
 - Tests are failing

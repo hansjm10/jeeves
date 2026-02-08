@@ -29,6 +29,20 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   return `${String(stdout ?? '')}${String(stderr ?? '')}`;
 }
 
+async function initGitRepoWithDesignDoc(workDir: string, issueNumber: number): Promise<void> {
+  const designDocPath = path.join(workDir, 'docs', `issue-${issueNumber}-design.md`);
+  await fs.mkdir(path.dirname(designDocPath), { recursive: true });
+  await fs.writeFile(designDocPath, '# Design\n', 'utf-8');
+
+  await runGit(workDir, ['init']);
+  await runGit(workDir, ['checkout', '-b', `issue/${issueNumber}`]);
+  await runGit(workDir, ['add', '.']);
+  await runGit(
+    workDir,
+    ['-c', 'user.name=Test User', '-c', 'user.email=test@example.com', 'commit', '-m', 'init'],
+  );
+}
+
 function makeFakeChild(exitCode = 0, delayMs = 25, signal: NodeJS.Signals | null = null) {
   class FakeChild extends EventEmitter {
     pid = 12345;
@@ -216,6 +230,197 @@ describe('RunManager', () => {
     await rm.setIssue(issueRef);
     const done = await (rm as unknown as { checkCompletionPromise(): Promise<boolean> }).checkCompletionPromise();
     expect(done).toBe(false);
+  });
+
+  it('does not stop via completion promise after advancing to a non-terminal phase', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-design-edit-two-step',
+      `
+workflow:
+  name: fixture-design-edit-two-step
+  version: 1
+  start: design_edit
+phases:
+  design_edit:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: design_review
+        auto: true
+  design_review:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 61;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'design_edit',
+          workflow: 'fixture-design-edit-two-step',
+          branch: 'issue/61',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify(
+        {
+          messages: [
+            {
+              type: 'assistant',
+              content: '<promise>COMPLETE</promise>',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    const status = rm.getStatus();
+    expect(status.completed_via_promise).toBe(false);
+    expect(status.completion_reason).toBe('max_iterations');
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('design_review');
+  });
+
+  it('does not stop via completion promise in non-terminal design_edit without transition', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-design-edit-sticky',
+      `
+workflow:
+  name: fixture-design-edit-sticky
+  version: 1
+  start: design_edit
+phases:
+  design_edit:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 62;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'design_edit',
+          workflow: 'fixture-design-edit-sticky',
+          branch: 'issue/62',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify(
+        {
+          messages: [
+            {
+              type: 'assistant',
+              content: '<promise>COMPLETE</promise>',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    const status = rm.getStatus();
+    expect(status.completed_via_promise).toBe(false);
+    expect(status.completion_reason).toBe('max_iterations');
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('design_edit');
   });
 
   it('runs a single iteration and advances phase via workflow transitions', async () => {

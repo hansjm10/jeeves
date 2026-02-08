@@ -208,14 +208,14 @@ describe('grep tool', () => {
   });
 
   describe('command execution', () => {
-    it('runs grep -rn --color=never <pattern> <path>', async () => {
+    it('runs grep -Ern --color=never <pattern> <path>', async () => {
       const origCwd = process.env.MCP_PRUNER_CWD;
       process.env.MCP_PRUNER_CWD = tmpDir;
 
       try {
         const result = await handleGrep({ pattern: 'hello', path: 'match.txt' });
 
-        // grep -rn outputs line numbers (format may be "file:N:line" or "N:line")
+        // grep -Ern outputs line numbers (format may be "file:N:line" or "N:line")
         expect(result.content[0].text).toContain('hello world');
         // Line numbers should be present in the output
         expect(result.content[0].text).toMatch(/\d+.*hello world/);

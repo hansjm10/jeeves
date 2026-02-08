@@ -166,22 +166,33 @@ Append to `.jeeves/progress.txt`:
 ---
 ```
 
-### Issue JSON Update
+### Canonical State Update Rules
+- You MAY update `.jeeves/issue.json.status.designFeedback` with concrete feedback text.
+- You MUST NOT directly set canonical transition flags in `.jeeves/issue.json` (`designNeedsChanges`, `designApproved`).
+- Instead, write `.jeeves/phase-report.json` with your verdict:
+
 If changes are required:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "design_review",
+  "outcome": "changes_requested",
+  "statusUpdates": {
     "designNeedsChanges": true,
-    "designApproved": false,
-    "designFeedback": "1. [Section]: [Issue]\n2. [Section]: [Issue]"
-  }
+    "designApproved": false
+  },
+  "reasons": ["1. [Section]: [Issue]", "2. [Section]: [Issue]"],
+  "evidenceRefs": ["docs/issue-<N>-design.md"]
 }
 ```
 
 If approved:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "design_review",
+  "outcome": "approved",
+  "statusUpdates": {
     "designNeedsChanges": false,
     "designApproved": true
   }

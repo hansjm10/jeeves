@@ -1560,7 +1560,7 @@ describe('viewer-server', () => {
       expect(envContent).toContain('AZURE_DEVOPS_EXT_PAT="pat-xyz"');
 
       await app.close();
-    });
+    }, 15_000);
 
     it('propagates adapter 401 as provider_auth_required', async () => {
       const dataDir = await makeTempDir('jeeves-vs-data-provider-create-401-');

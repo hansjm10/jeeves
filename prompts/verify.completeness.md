@@ -216,10 +216,13 @@ If any answer is “yes” → GAPS FOUND
 <completion>
 If COMPLETE
 
-Update .jeeves/issue.json:
+Write `.jeeves/phase-report.json`:
 
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "completeness_verification",
+  "outcome": "complete",
+  "statusUpdates": {
     "implementationComplete": true,
     "missingWork": false
   }
@@ -243,12 +246,16 @@ status: "pending"
 
 dependsOn appropriately
 
-2. Update .jeeves/issue.json
+2. Update `.jeeves/issue.json.status.currentTaskId = "<first_new_task_id>"`.
+
+3. Write `.jeeves/phase-report.json`
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "completeness_verification",
+  "outcome": "missing_work",
+  "statusUpdates": {
     "implementationComplete": false,
     "missingWork": true,
-    "currentTaskId": "<first_new_task_id>",
     "allTasksComplete": false
   }
 }

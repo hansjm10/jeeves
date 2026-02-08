@@ -93,13 +93,24 @@ After addressing all feedback, update `.jeeves/issue.json`:
 ```json
 {
   "status": {
-    "designNeedsChanges": false,
     "designFeedback": null
   }
 }
 ```
 
-Note: Do NOT set `designApproved` to true. That is determined by the next design_review phase.
+Write `.jeeves/phase-report.json`:
+```json
+{
+  "schemaVersion": 1,
+  "phase": "design_edit",
+  "outcome": "feedback_addressed",
+  "statusUpdates": {
+    "designNeedsChanges": false
+  }
+}
+```
+
+Note: Do NOT set `designApproved` to true. That is determined by the next `design_review` phase.
 
 If you cannot address all feedback (e.g., feedback is unclear, requires external input), write your progress to `.jeeves/progress.txt` explaining what was addressed and what remains unclear. The next iteration will continue from where you left off.
 </completion>

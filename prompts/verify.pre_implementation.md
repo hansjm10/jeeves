@@ -72,7 +72,7 @@ git ls-files --error-unmatch <designDocPath>
 - Log remediation: "Design doc must be added and committed before pre-check can pass"
 
 If this check fails:
-1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+1. Write `.jeeves/phase-report.json` with `preCheckPassed: false` and `preCheckFailed: true`
 2. Append the required progress log entry (see Completion section) documenting the failure
 3. Then stop — the workflow will transition back to `task_decomposition`
 
@@ -96,7 +96,7 @@ az boards work-item show --id <id> --organization <org> --project <project> --ou
    - Check if `.jeeves/issue.md` exists
    - If cache exists, use it as the authoritative source
    - If cache does not exist → HARD FAIL:
-     1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+     1. Write `.jeeves/phase-report.json` with `preCheckPassed: false` and `preCheckFailed: true`
      2. Append the required progress log entry documenting the failure: "Cannot fetch provider issue/work-item and no cached `.jeeves/issue.md` exists"
      3. Then stop — the workflow will transition back to `task_decomposition`
 
@@ -118,7 +118,7 @@ Check `.jeeves/tasks.json`:
 - Empty arrays or strings for required fields → HARD FAIL
 
 On any structural validation failure:
-1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+1. Write `.jeeves/phase-report.json` with `preCheckPassed: false` and `preCheckFailed: true`
 2. Append the required progress log entry documenting the specific structural issue
 3. Then stop — the workflow will transition back to `task_decomposition`
 
@@ -155,7 +155,7 @@ If Steps 5a/5b yield zero requirements, build a deterministic requirement list f
 
 ### Step 5d: No requirements found
 If all methods yield zero requirements → HARD FAIL:
-1. Update `.jeeves/issue.json` status: `preCheckPassed: false`, `preCheckFailed: true`
+1. Write `.jeeves/phase-report.json` with `preCheckPassed: false` and `preCheckFailed: true`
 2. Append the required progress log entry documenting the failure: "Issue/work-item lacks extractable requirements even after provider-structured fallback. Cannot pre-check deterministically."
 3. Then stop — the workflow will transition back to `task_decomposition`
 
@@ -210,17 +210,18 @@ If any answer is "no" or uncertain → investigate further before deciding.
 <completion>
 
 **CRITICAL**: Every exit path (PASS or FAIL) MUST:
-1. Write BOTH status flags explicitly (`preCheckPassed` and `preCheckFailed`)
+1. Write `.jeeves/phase-report.json` with BOTH status flags (`preCheckPassed` and `preCheckFailed`)
 2. Append the required progress log entry
-
-This ensures no stale flags from prior runs can cause incorrect workflow transitions.
 
 ## If PASS
 
-Update `.jeeves/issue.json`:
+Write `.jeeves/phase-report.json`:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "pre_implementation_check",
+  "outcome": "passed",
+  "statusUpdates": {
     "preCheckPassed": true,
     "preCheckFailed": false
   }
@@ -231,10 +232,13 @@ Append progress entry and proceed to `implement_task`.
 
 ## If FAIL
 
-Update `.jeeves/issue.json`:
+Write `.jeeves/phase-report.json`:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "pre_implementation_check",
+  "outcome": "failed",
+  "statusUpdates": {
     "preCheckPassed": false,
     "preCheckFailed": true
   }

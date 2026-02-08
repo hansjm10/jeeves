@@ -41,9 +41,9 @@ You fix commit and push failures. You read error output, identify the issue, app
    - If commitFailed: Stage and commit the fix
    - If pushFailed: Commit fix (if needed), then push
 
-5. Clear failure flags in `.jeeves/issue.json`:
-   - Set `status.commitFailed = false`
-   - Set `status.pushFailed = false`
+5. Clear failure flags via `.jeeves/phase-report.json`:
+   - Set `statusUpdates.commitFailed = false`
+   - Set `statusUpdates.pushFailed = false`
 
 6. Delete `.jeeves/ci-error.txt` after successful fix.
 
@@ -64,10 +64,13 @@ The phase is complete when:
 - The previously failed operation succeeds
 - Failure flags are cleared
 
-Update `.jeeves/issue.json`:
+Write `.jeeves/phase-report.json`:
 ```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "fix_ci",
+  "outcome": "fixed",
+  "statusUpdates": {
     "commitFailed": false,
     "pushFailed": false
   }

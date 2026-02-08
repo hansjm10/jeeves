@@ -106,7 +106,6 @@ You create pull requests for completed implementations, supporting both GitHub a
    - Construct the PR URL: if the JSON output includes `repository.webUrl`, use `<webUrl>/pullrequest/<pullRequestId>`. Otherwise, construct as `<organization>/<project>/_git/<repoName>/pullrequest/<pullRequestId>`.
 
 7. Update `.jeeves/issue.json` with provider-aware pullRequest metadata:
-   - Set `status.prCreated = true`
    - Set `pullRequest.provider` to `'github'` or `'azure_devops'`
    - Set `pullRequest.external_id` to the PR number (GitHub) or `pullRequestId` (Azure) as a string
    - Set `pullRequest.source_branch` to the head branch name
@@ -147,14 +146,23 @@ Before creating the PR:
 The phase is complete when:
 - PR exists (created or already existed)
 - Provider-aware PR info is captured in issue.json
-- `status.prCreated` is set to `true`
+- `.jeeves/phase-report.json` sets `prCreated` to `true`
+
+Write `.jeeves/phase-report.json`:
+```json
+{
+  "schemaVersion": 1,
+  "phase": "prepare_pr",
+  "outcome": "pr_created",
+  "statusUpdates": {
+    "prCreated": true
+  }
+}
+```
 
 Update `.jeeves/issue.json`:
 ```json
 {
-  "status": {
-    "prCreated": true
-  },
   "pullRequest": {
     "provider": "github",
     "external_id": "123",
@@ -170,9 +178,6 @@ Update `.jeeves/issue.json`:
 For Azure DevOps:
 ```json
 {
-  "status": {
-    "prCreated": true
-  },
   "pullRequest": {
     "provider": "azure_devops",
     "external_id": "456",

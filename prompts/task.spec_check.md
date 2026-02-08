@@ -180,20 +180,27 @@ Update task status in .jeeves/tasks.json
 
 Set task status → "passed"
 
-Update .jeeves/issue.json:
+Update `.jeeves/issue.json.status`:
+- Set `currentTaskId` to `<next_pending_task_id_or_current>`
+- Set `taskPassed` to `true`
+- Set `taskFailed` to `false`
+- Set `hasMoreTasks` to `<true|false>`
+- Set `allTasksComplete` to `<true|false>`
 
+Write `.jeeves/phase-report.json`:
+```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "task_spec_check",
+  "outcome": "passed",
+  "statusUpdates": {
     "taskPassed": true,
     "taskFailed": false,
-    "currentTaskId": "<next_pending_task_id_or_current>",
     "hasMoreTasks": <true|false>,
     "allTasksComplete": <true|false>
   }
 }
-
-
-Advance currentTaskId if pending tasks remain
+```
 
 If ANY criterion FAILS
 
@@ -212,17 +219,27 @@ Write failure feedback to .jeeves/task-feedback.md:
 - <specific, actionable change required>
 
 
-Update .jeeves/issue.json:
+Update `.jeeves/issue.json.status`:
+- Keep `currentTaskId` unchanged
+- Set `taskPassed` to `false`
+- Set `taskFailed` to `true`
+- Set `hasMoreTasks` to `true`
+- Set `allTasksComplete` to `false`
 
+Write `.jeeves/phase-report.json`:
+```json
 {
-  "status": {
+  "schemaVersion": 1,
+  "phase": "task_spec_check",
+  "outcome": "failed",
+  "statusUpdates": {
     "taskPassed": false,
     "taskFailed": true,
-    "currentTaskId": "<unchanged>",
     "hasMoreTasks": true,
     "allTasksComplete": false
   }
 }
+```
 
 Progress Log Entry (REQUIRED)
 ## [Date/Time] - Spec Check: <task_id>

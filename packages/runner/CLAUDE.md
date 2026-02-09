@@ -44,7 +44,7 @@ Each run produces these files in the state directory:
 |------|---------|
 | `last-run.log` | Human-readable log of events |
 | `sdk-output.json` | Structured JSON of messages, tool calls, stats |
-| `progress.txt` | Handoff notes between iterations |
+| Progress events (DB) | Handoff notes between iterations (rendered via `renderProgressText`) |
 
 ## Output Format (sdk-output.json)
 
@@ -64,7 +64,7 @@ Each run produces these files in the state directory:
 
 The runner supports the "Ralph Wiggum" iteration pattern:
 1. Each iteration is a fresh subprocess with new context
-2. Handoff between iterations via `progress.txt`
+2. Handoff between iterations via DB-backed progress events
 3. Agents read progress at start, write updates during run
 4. Completion driven by workflow state transitions (orchestrator evaluates issue.json after each iteration)
 

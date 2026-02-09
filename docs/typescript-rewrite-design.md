@@ -64,7 +64,7 @@ Jeeves will be implemented as a TypeScript monorepo with a Node-based runner and
 - **Language/tooling**: Prior implementation used a different toolchain and test stack.
 - **Viewer**: A local viewer server provides a dashboard, state inspection, and log streaming.
 - **State**: XDG-style data directory with `issues/<owner>/<repo>/<issue>/issue.json`, and `worktrees/<owner>/<repo>/issue-<N>/`.
-- **Iteration pattern**: Viewer spawns fresh subprocess runs; handoff via `progress.txt`; completion is signaled via a sentinel in output.
+- **Iteration pattern**: Viewer spawns fresh subprocess runs; handoff via `progress event log`; completion is signaled via a sentinel in output.
 
 ## 6. Proposed Solution
 

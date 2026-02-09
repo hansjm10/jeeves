@@ -46,7 +46,7 @@ For each run, the runner writes to the state directory:
 
 - `sdk-output.json` (schema `jeeves.sdk.v1`)
 - `last-run.log`
-- `progress.txt`
+- Progress events in the state DB (rendered via `renderProgressText`)
 
 ## Provider defaults
 

@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import {
   appendProgress,
+  getProgress,
   deleteMemory,
   getIssue,
   getMemory,
@@ -56,7 +57,10 @@ const fieldPatchSchema = {
   fields: z.record(z.string(), z.unknown()).describe('Fields to merge into status/control'),
 };
 const progressSchema = {
-  entry: z.string().describe('Raw text to append to progress.txt'),
+  entry: z.string().describe('Raw text to append to the canonical progress event log'),
+};
+const getProgressSchema = {
+  max_events: z.number().int().positive().max(20000).optional().describe('Optional max number of progress events to render'),
 };
 const memoryScopeSchema = z
   .enum(['session', 'working_set', 'decisions', 'cross_run'])
@@ -210,12 +214,27 @@ async function main(): Promise<void> {
 
   server.tool(
     'state_append_progress',
-    'Append a plain-text entry to progress.txt.',
+    'Append a plain-text entry to the canonical progress event log.',
     progressSchema,
     async (args) => {
       try {
         await appendProgress(stateDir, args.entry);
         return jsonTextResult({ ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonTextResult({ ok: false, error: message });
+      }
+    },
+  );
+
+  server.tool(
+    'state_get_progress',
+    'Render the canonical progress event log as plain text.',
+    getProgressSchema,
+    async (args) => {
+      try {
+        const text = await getProgress(stateDir, args.max_events);
+        return jsonTextResult({ ok: true, state_dir: stateDir, progress: text });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonTextResult({ ok: false, error: message });

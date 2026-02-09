@@ -535,7 +535,6 @@ export class RunManager {
 
   private appendProgressEntry(message: string, level = 'info'): void {
     if (!this.stateDir) return;
-    if (!this.dbTelemetryEnabled()) return;
     appendProgressEvent({
       stateDir: this.stateDir,
       source: 'viewer-server',
@@ -600,7 +599,6 @@ export class RunManager {
     // If stopped between implement/spec-check (all markers exist), preserve parallel state
     if (allImplementDone && parallelState.activeWavePhase === 'implement_task') {
       // Append progress entry noting preservation
-      const progressPath = path.join(this.stateDir, 'progress.txt');
       const progressEntry = `\n## [${nowIso()}] - Manual Stop: Between Implement/Spec-Check\n\n` +
         `### Wave\n` +
         `- Wave ID: ${parallelState.activeWaveId}\n` +
@@ -612,7 +610,6 @@ export class RunManager {
         `- Task statuses NOT rolled back (remain in_progress)\n` +
         `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
         `---\n`;
-      await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
       this.appendProgressEntry(progressEntry, 'warn');
 
       if (this.status.viewer_log_file) {
@@ -628,7 +625,6 @@ export class RunManager {
     await rollbackTaskReservations(this.stateDir, parallelState.reservedStatusByTaskId);
 
     // Append progress entry
-    const progressPath = path.join(this.stateDir, 'progress.txt');
     const progressEntry = `\n## [${nowIso()}] - Manual Stop: Parallel Wave Aborted\n\n` +
       `### Wave\n` +
       `- Wave ID: ${parallelState.activeWaveId}\n` +
@@ -639,7 +635,6 @@ export class RunManager {
       `- Parallel state cleared from issue.json\n` +
       `- Worker artifacts retained at STATE/.runs/${parallelState.runId}/workers/\n\n` +
       `---\n`;
-    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
     this.appendProgressEntry(progressEntry, 'warn');
 
     // Log if viewer log file is available
@@ -891,14 +886,12 @@ export class RunManager {
             `[RECOVERY] Repaired ${repairResult.repairedTaskIds.length} orphaned in_progress task(s): ${repairResult.repairedTaskIds.join(', ')}`,
           );
           // Append progress entry for the repair
-          const progressPath = path.join(this.stateDir, 'progress.txt');
           const progressEntry = `\n## [${nowIso()}] - Start-of-Run Recovery\n\n` +
             `### Orphaned Tasks Repaired\n` +
             repairResult.repairedTaskIds.map((id) => `- ${id}: in_progress -> failed`).join('\n') + '\n\n' +
             `### Canonical Feedback Written\n` +
             repairResult.feedbackFilesWritten.map((f) => `- ${path.basename(f)}`).join('\n') + '\n\n' +
             `---\n`;
-          await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
           this.appendProgressEntry(progressEntry, 'warn');
         }
       }
@@ -1849,7 +1842,6 @@ export class RunManager {
     };
     copyIfExists(path.join(this.stateDir, 'last-run.log'), 'last-run.log');
     copyIfExists(path.join(this.stateDir, 'sdk-output.json'), 'sdk-output.json');
-    copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
     copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
     copyIfExists(path.join(this.stateDir, ACTIVE_CONTEXT_FILE), ACTIVE_CONTEXT_FILE);
     copyIfExists(path.join(this.stateDir, RETIRED_TRAJECTORY_FILE), RETIRED_TRAJECTORY_FILE);
@@ -1934,7 +1926,7 @@ export class RunManager {
         dataDir: this.dataDir,
         runId: this.runId,
         scope: 'viewer',
-        name: 'final-progress.txt',
+        name: 'final-progress.log',
         mime: 'text/plain; charset=utf-8',
         content: Buffer.from(progressText, 'utf-8'),
       });
@@ -1973,7 +1965,7 @@ export class RunManager {
       await writeJsonAtomic(path.join(this.runDir, 'final-tasks.json'), finalTasks).catch(() => void 0);
     }
     const progressText = renderProgressText({ stateDir: this.stateDir });
-    await fs.writeFile(path.join(this.runDir, 'final-progress.txt'), progressText, 'utf-8').catch(() => void 0);
+    await fs.writeFile(path.join(this.runDir, 'final-progress.log'), progressText, 'utf-8').catch(() => void 0);
     await fs.copyFile(path.join(this.stateDir, ACTIVE_CONTEXT_FILE), path.join(this.runDir, 'final-active-context.json')).catch(() => void 0);
     await fs.copyFile(path.join(this.stateDir, RETIRED_TRAJECTORY_FILE), path.join(this.runDir, RETIRED_TRAJECTORY_FILE)).catch(() => void 0);
 

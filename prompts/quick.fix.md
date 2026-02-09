@@ -1,7 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_get_progress`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
 - Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
 - Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
 - Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
@@ -24,7 +24,7 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 <inputs>
 - Issue config: `state_get_issue` output (contains issue number, repo, optional designDocPath)
-- Progress log: `.jeeves/progress.txt`
+- Progress log: `state_get_progress` output
 - Issue source (provider-aware):
   - GitHub: prefer `gh api /repos/<owner>/<repo>/issues/<number>` (avoid GraphQL)
   - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
@@ -56,7 +56,7 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 4. Validate
    - Run the most relevant tests/lint/typecheck for the changed area when feasible.
-   - If validation fails due to unrelated issues, document it in `.jeeves/progress.txt` and keep going if safe.
+   - If validation fails due to unrelated issues, document it via `state_append_progress` and keep going if safe.
 
 5. Decide completion vs escalation
    - If the change is complete and verified:
@@ -71,12 +71,12 @@ You are a senior engineer making a small, low-risk change without the full desig
        - `schemaVersion = 1`
        - `phase = "quick_fix"`
        - `outcome = "needs_design"`
-       - `statusUpdates.implementationComplete = false`
-       - `statusUpdates.needsDesign = true`
-     - Briefly explain why in `.jeeves/progress.txt`
+     - `statusUpdates.implementationComplete = false`
+      - `statusUpdates.needsDesign = true`
+     - Briefly explain why via `state_append_progress`
 
 6. Append progress
-   - Append a short entry to `.jeeves/progress.txt` with what changed and how it was validated.
+   - Append a short entry via `state_append_progress` with what changed and how it was validated.
 </instructions>
 
 <completion>

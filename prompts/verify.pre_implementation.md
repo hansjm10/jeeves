@@ -47,7 +47,7 @@ You MAY ONLY modify:
 - `.jeeves/phase-report.json` (to set status flags)
 - `.jeeves/issue.md` (to cache issue content)
 
-You MUST append progress entries via `state_append_progress` (do not write `.jeeves/progress.txt` directly).
+You MUST append progress entries via `state_append_progress` (do not write progress files directly).
 
 You MUST obtain issue/task state via `state_get_issue` and `state_get_tasks` (do not read `state_get_issue` output or `.jeeves/tasks.json` directly).
 

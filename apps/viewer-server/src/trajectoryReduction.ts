@@ -4,6 +4,7 @@ import path from 'node:path';
 import { listMemoryEntriesFromDb, type MemoryEntry } from '@jeeves/state-db';
 
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { renderProgressText } from './sqliteStorage.js';
 
 export const ACTIVE_CONTEXT_FILE = 'active-context.json';
 export const RETIRED_TRAJECTORY_FILE = 'retired-trajectory.jsonl';
@@ -512,7 +513,7 @@ export async function computeTrajectoryReduction(params: {
   const now = params.nowIso ? params.nowIso() : new Date().toISOString();
   const issue = await readJsonRecordFromFile(path.join(params.stateDir, 'issue.json'));
   const tasks = await readJsonRecordFromFile(path.join(params.stateDir, 'tasks.json'));
-  const progressText = await fs.readFile(path.join(params.stateDir, 'progress.txt'), 'utf-8').catch(() => '');
+  const progressText = renderProgressText({ stateDir: params.stateDir });
   const sdkRaw = await fs.readFile(path.join(params.stateDir, 'sdk-output.json'), 'utf-8').catch(() => '');
 
   let memoryEntries: MemoryEntry[] = [];

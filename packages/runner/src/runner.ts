@@ -182,7 +182,6 @@ export type RunPhaseParams = Readonly<{
   promptPath: string;
   outputPath: string;
   logPath: string;
-  progressPath: string;
   stateDir: string;
   cwd: string;
   phaseName: string;
@@ -571,7 +570,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
   await fs.rm(path.join(path.dirname(params.outputPath), 'tool-raw'), { recursive: true, force: true }).catch(() => void 0);
-  await ensureProgressFile(params.progressPath);
+  await ensureProgressFile(params.stateDir);
 
   if (runDbContext) {
     upsertRunSession({
@@ -595,8 +594,8 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     memoryBlockResult.block,
   );
 
-  await markStarted(params.progressPath);
-  await markPhase(params.progressPath, params.phaseName);
+  await markStarted(params.stateDir);
+  await markPhase(params.stateDir, params.phaseName);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -698,15 +697,15 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
 
     writer.finalize(true);
     await writer.writeIncremental({ force: true });
-    await markEnded(params.progressPath, true);
-    await appendProgress(params.progressPath, '');
+    await markEnded(params.stateDir, true);
+    await appendProgress(params.stateDir, '');
     return { success: true };
   } catch (err) {
     writer.setError(err);
     writer.finalize(false);
     await writer.writeIncremental({ force: true });
     await logLine(`[ERROR] ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-    await markEnded(params.progressPath, false);
+    await markEnded(params.stateDir, false);
     return { success: false };
   } finally {
     await logStream.close();
@@ -733,14 +732,12 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
     const promptPath = await resolvePromptPath(current, params.promptsDir, engine);
     const outputPath = path.join(params.stateDir, 'sdk-output.json');
     const logPath = path.join(params.stateDir, 'last-run.log');
-    const progressPath = path.join(params.stateDir, 'progress.txt');
 
     const phaseResult = await runPhaseOnce({
       provider: params.provider,
       promptPath,
       outputPath,
       logPath,
-      progressPath,
       stateDir: params.stateDir,
       cwd: params.cwd,
       phaseName: current,
@@ -785,14 +782,13 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
 
   const outputPath = path.join(params.stateDir, 'sdk-output.json');
   const logPath = path.join(params.stateDir, 'last-run.log');
-  const progressPath = path.join(params.stateDir, 'progress.txt');
 
   if (engine.isTerminal(phase)) {
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.mkdir(path.dirname(logPath), { recursive: true });
-    await ensureProgressFile(progressPath);
-    await markStarted(progressPath);
-    await markPhase(progressPath, phase);
+    await ensureProgressFile(params.stateDir);
+    await markStarted(params.stateDir);
+    await markPhase(params.stateDir, phase);
     await fs.writeFile(logPath, '', 'utf-8');
     const writer = new SdkOutputWriterV1({
       outputPath,
@@ -800,7 +796,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     });
     writer.finalize(true);
     await writer.writeIncremental({ force: true });
-    await markEnded(progressPath, true);
+    await markEnded(params.stateDir, true);
     return { phase, success: true };
   }
 
@@ -811,7 +807,6 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     promptPath,
     outputPath,
     logPath,
-    progressPath,
     stateDir: params.stateDir,
     cwd: params.cwd,
     phaseName: phase,

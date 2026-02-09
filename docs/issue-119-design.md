@@ -21,7 +21,7 @@ The current trajectory reduction system (#113) uses deterministic keyword-regex 
 - No production rollout gating or feature flags (single-user system)
 - No replacement of #113 artifacts (`active-context.json`, `retired-trajectory.jsonl`) — schema unchanged
 - No mid-session trajectory compression (AgentDiet's original use case)
-- No progress.txt compression (being removed in favor of DB-backed progress events)
+- No progress log compression (DB-backed progress events are canonical)
 - No cross-model benchmarking harness
 
 ### Boundaries

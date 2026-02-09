@@ -76,7 +76,7 @@ Jeeves currently executes decomposed tasks strictly sequentially (`T1 → T2 →
   2. **Canonical `task_spec_check` iteration**: run `task_spec_check` for those same tasks (in parallel), then merge passed branches and update canonical `.jeeves/tasks.json` + `.jeeves/issue.json.status.*` to drive the next workflow transition.
 - After all workers in a wave complete:
   - merge successful worker branches into the canonical issue branch,
-  - update canonical `.jeeves/tasks.json` statuses and canonical `.jeeves/progress.txt`,
+  - update canonical `.jeeves/tasks.json` statuses and canonical canonical progress event log,
   - persist a wave summary artifact for audit/debug.
 
 ### 6.2 Detailed Design
@@ -202,7 +202,7 @@ After a wave completes:
 3. Update canonical `.jeeves/tasks.json` after merges (canonical status is “integrated + verified”):
    - For tasks that failed spec check or timed out: set `task.status = "failed"`.
    - For tasks that passed spec check and merged cleanly: set `task.status = "passed"`.
-   - For tasks that passed spec check but hit a merge conflict: set `task.status = "failed"` and record merge-conflict details in the wave summary and `.jeeves/progress.txt`.
+   - For tasks that passed spec check but hit a merge conflict: set `task.status = "failed"` and record merge-conflict details in the wave summary and canonical progress event log.
 4. Persist a wave summary artifact in canonical state:
    - `STATE/.runs/<runId>/waves/<waveId>.json` containing:
      - scheduled task IDs, start/end timestamps,
@@ -226,7 +226,7 @@ Failure propagation:
   5. Persist failure details for retry:
      - If worker `.jeeves/task-feedback.md` exists, copy it into canonical `.jeeves/task-feedback/<taskId>.md`.
      - If the failure reason is merge conflict or timeout, write a synthetic feedback file under `.jeeves/task-feedback/<taskId>.md` describing the reason and pointers to `STATE/.runs/<runId>/...`.
-  6. Append a single wave summary entry to canonical `.jeeves/progress.txt` including the run verdict and next steps.
+  6. Append a single wave summary entry to canonical canonical progress event log including the run verdict and next steps.
 
 #### 6.2.6 API and Status Contracts
 If the viewer UI needs to show concurrent tasks, extend the run status payload (broadcast via websocket/SSE):
@@ -303,7 +303,7 @@ Parallel mode MUST be restart-safe and MUST not leave canonical tasks permanentl
 **Resume an active wave**:
 If `issue.json.status.parallel` is present at run start, the orchestrator MUST resume that exact wave (no new ready-task selection):
 - If `issue.json.phase === "implement_task"`:
-  - Require `status.parallel.activeWavePhase === "implement_task"` (if not, treat as state corruption and set `activeWavePhase` to `"implement_task"` and append a warning to `.jeeves/progress.txt`).
+  - Require `status.parallel.activeWavePhase === "implement_task"` (if not, treat as state corruption and set `activeWavePhase` to `"implement_task"` and append a warning to canonical progress event log).
   - For each `taskId` in `activeWaveTaskIds`, (re)spawn the worker implement process unless `STATE/.runs/<runId>/workers/<taskId>/implement_task.done` exists.
   - Do not change canonical `.jeeves/tasks.json` statuses during resume; tasks remain `in_progress` until spec-check completes.
 - If `issue.json.phase === "task_spec_check"`:
@@ -377,7 +377,7 @@ If the run stops due to `iteration_timeout_sec` or `inactivity_timeout_sec` duri
 ### 7.3 Coordination Notes
 - **Hand-off Package**:
   - Key files: `apps/viewer-server/src/runManager.ts`, `apps/viewer-server/src/init.ts`, `packages/runner/src/cli.ts`, prompt files under `prompts/`.
-  - Artifacts: `.jeeves/tasks.json`, `.jeeves/issue.json`, `.jeeves/progress.txt`.
+  - Artifacts: `.jeeves/tasks.json`, `.jeeves/issue.json`, canonical progress event log.
 - **Communication Cadence**:
   - Review checkpoint after Phase 1 to validate concurrency/merge semantics before UI changes.
 

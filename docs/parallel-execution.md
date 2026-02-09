@@ -198,7 +198,7 @@ Each wave generates persistent artifacts for observability:
 
 ### Progress Entry
 
-A single combined wave summary entry is appended to `.jeeves/progress.txt` after the spec-check phase completes. This entry includes:
+A single combined wave summary entry is appended to canonical progress event log after the spec-check phase completes. This entry includes:
 - Wave tasks and run ID
 - Implement phase summary (timestamps, pass/fail counts)
 - Spec-check phase summary (timestamps, verdicts)
@@ -294,7 +294,7 @@ Worker logs are prefixed with `[WORKER <taskId>]` to make interleaved output rea
 **Symptom**: Run stops with "Merge conflict on task T2" error.
 
 **Resolution**:
-1. Check `progress.txt` for conflict details and the synthetic feedback at `.jeeves/task-feedback/<taskId>.md`
+1. Check `progress event log` for conflict details and the synthetic feedback at `.jeeves/task-feedback/<taskId>.md`
 2. Inspect the retained worker worktree at `<WORKTREES>/.../T2/`
 3. Resolve the conflict by one of:
    - Resolving manually in the worktree and re-running (the failed task will be retried automatically since the phase transitioned to `implement_task`)
@@ -305,7 +305,7 @@ Worker logs are prefixed with `[WORKER <taskId>]` to make interleaved output rea
 
 **Symptom**: Tasks are stuck as `in_progress` after server restart.
 
-**Resolution**: This is automatically repaired at run start. Check `progress.txt` for recovery notes. If the issue persists, manually set task status to `"failed"` or `"pending"`.
+**Resolution**: This is automatically repaired at run start. Check `progress event log` for recovery notes. If the issue persists, manually set task status to `"failed"` or `"pending"`.
 
 ### Worker Not Starting
 

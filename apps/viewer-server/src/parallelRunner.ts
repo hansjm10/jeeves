@@ -185,12 +185,6 @@ function nowIso(): string {
 }
 
 async function appendCanonicalProgress(stateDir: string, entry: string, source: string): Promise<void> {
-  const progressPath = path.join(stateDir, 'progress.txt');
-  try {
-    await fs.appendFile(progressPath, entry, 'utf-8');
-  } catch {
-    await fs.writeFile(progressPath, entry, 'utf-8');
-  }
   appendProgressEvent({
     stateDir,
     source,
@@ -641,9 +635,9 @@ export async function copyWorkerFeedbackToCanonical(
 }
 
 /**
- * Writes a wave summary entry to canonical progress.txt.
+ * Writes a wave summary entry to the canonical progress event log.
  *
- * Per §6.2.5, canonical progress.txt receives a single wave summary entry per wave
+ * Per §6.2.5, canonical progress receives a single wave summary entry per wave
  * (covering both implement + spec-check phases).
  */
 export async function appendWaveProgressEntry(
@@ -2039,12 +2033,12 @@ export class ParallelRunner {
   }
 
   /**
-   * Handles activeWavePhase mismatch by appending a warning to progress.txt.
+   * Handles activeWavePhase mismatch by appending a warning to the progress event log.
    *
    * Per §6.2.8 resume corruption handling:
    * - If canonical phase doesn't match status.parallel.activeWavePhase, treat as state corruption
    * - Fix activeWavePhase to match the canonical phase
-   * - Append a warning to progress.txt
+   * - Append a warning to progress telemetry
    */
   private async handleActiveWavePhaseMismatch(
     state: ParallelState,

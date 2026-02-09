@@ -25,7 +25,7 @@ The current workflow performs `completeness_verification` only after all tasks p
   1. Add a new `pre_implementation_check` phase in the default workflow between `task_decomposition` and `implement_task`.
   2. Verify that the decomposed task list plausibly covers the GitHub issue requirements and design document scope before implementation begins.
   3. Verify that the design document referenced by `.jeeves/issue.json.designDocPath` exists on disk **and is git-tracked** (so “design doc exists and is committed” is enforced as “tracked in git”).
-  4. Provide actionable feedback in `.jeeves/progress.txt` when gaps are detected, and gate workflow progression via `status.preCheckPassed` / `status.preCheckFailed`.
+  4. Provide actionable feedback in canonical progress event log when gaps are detected, and gate workflow progression via `status.preCheckPassed` / `status.preCheckFailed`.
 - **Non-Goals**:
   - Replace or weaken `completeness_verification`; that phase remains the authoritative end-to-end audit.
   - Automatically rewrite the design document during the pre-check.
@@ -62,7 +62,7 @@ The current workflow performs `completeness_verification` only after all tasks p
   - GitHub issue requirements via `gh issue view <issue_number> --repo <repo>`
 - The pre-check outputs:
   - `status.preCheckPassed: true` when no gaps are detected
-  - `status.preCheckFailed: true` when gaps are detected (with detailed log entry in `.jeeves/progress.txt`)
+  - `status.preCheckFailed: true` when gaps are detected (with detailed log entry in canonical progress event log)
 - Workflow transitions:
   - `task_decomposition → pre_implementation_check` when `status.taskDecompositionComplete == true`
   - `pre_implementation_check → implement_task` when `status.preCheckPassed == true`
@@ -103,7 +103,7 @@ Create a new “evaluate/read-only” prompt that:
        1) If the issue body contains a markdown heading named `Acceptance Criteria`, `Requirements`, or `Proposed Solution` (case-insensitive), extract *all* list items (bulleted/numbered/task-list) that occur within the first such section as must-haves.
        2) Else, extract *all* markdown task-list items (`- [ ] ...` / `- [x] ...`) in the issue body as must-haves.
        3) Else, hard fail with an explicit log message that the issue lacks an explicit requirements list and cannot be pre-checked deterministically.
-     - **Coverage rule**: each must-have requirement must map to ≥1 task ID. The pre-check must output a small mapping table in `.jeeves/progress.txt` (`Requirement → Task IDs`) with 1–2 sentence justifications per requirement.
+     - **Coverage rule**: each must-have requirement must map to ≥1 task ID. The pre-check must output a small mapping table in canonical progress event log (`Requirement → Task IDs`) with 1–2 sentence justifications per requirement.
      - **Pass threshold**: 100% of must-have requirements mapped. Any unmapped must-have requirement is a hard fail (set `status.preCheckFailed = true`).
 3. Writes status:
    - On pass: set `.jeeves/issue.json.status.preCheckPassed = true` and `.jeeves/issue.json.status.preCheckFailed = false`, and append a progress entry.
@@ -121,7 +121,7 @@ Create a new “evaluate/read-only” prompt that:
 
 ### 6.3 Operational Considerations
 - **Deployment**: No deployment changes; this is repo-local workflow/prompt/test updates.
-- **Telemetry & Observability**: Rely on `.jeeves/progress.txt` entries from the pre-check to make failures actionable and visible in the viewer.
+- **Telemetry & Observability**: Rely on canonical progress event log entries from the pre-check to make failures actionable and visible in the viewer.
 - **Security & Compliance**: Pre-check uses `gh issue view` and local repo inspection only. No new secret handling is introduced.
 
 ## 7. Work Breakdown & Delivery Plan
@@ -129,7 +129,7 @@ Create a new “evaluate/read-only” prompt that:
 | Issue Title | Scope Summary | Proposed Assignee/Agent | Dependencies | Acceptance Criteria |
 |-------------|---------------|-------------------------|--------------|---------------------|
 | feat(workflow): add pre_implementation_check phase | Insert new phase and update transitions in `workflows/default.yaml` | Implementation Agent | Design approved | Workflow loads; `task_decomposition` transitions to `pre_implementation_check` |
-| feat(prompts): add verify.pre_implementation.md | Add new prompt implementing the lightweight checks and status updates | Implementation Agent | Workflow updated | Prompt exists; sets `status.preCheckPassed`/`status.preCheckFailed`; logs to `.jeeves/progress.txt` |
+| feat(prompts): add verify.pre_implementation.md | Add new prompt implementing the lightweight checks and status updates | Implementation Agent | Workflow updated | Prompt exists; sets `status.preCheckPassed`/`status.preCheckFailed`; logs to canonical progress event log |
 | test(viewer-server): update RunManager transition tests | Update tests impacted by new phase insertion | Implementation Agent | Workflow + prompt | Tests pass; task `filesAllowed` expansion still occurs before `implement_task` runs |
 | docs: document new phase semantics | Update any developer docs referencing the task loop (if applicable) | Docs Agent | Workflow updated | Documentation mentions the new phase and its purpose |
 
@@ -152,7 +152,7 @@ Create a new “evaluate/read-only” prompt that:
 - **Prompting & Constraints**:
   - The new pre-check prompt must be **evaluate/read-only** and may only write `.jeeves/*`.
   - Status keys must be exactly `preCheckPassed` and `preCheckFailed` to match guard expressions.
-  - Progress logging format must be consistent with existing `.jeeves/progress.txt` conventions.
+  - Progress logging format must be consistent with existing canonical progress event log conventions.
 - **Safety Rails**:
   - Do not modify any non-`.jeeves/*` files in the pre-check prompt instructions.
   - Avoid introducing new required tools beyond `gh` and basic git/file checks.
@@ -177,7 +177,7 @@ Create a new “evaluate/read-only” prompt that:
 
 ## 11. Risks & Mitigations
 - **Risk**: The pre-check fails repeatedly because `task_decomposition` doesn’t incorporate pre-check feedback.
-  - **Mitigation**: Require the pre-check to write explicit, copy-pastable “missing requirements” bullets into `.jeeves/progress.txt` so the next decomposition iteration can incorporate them.
+  - **Mitigation**: Require the pre-check to write explicit, copy-pastable “missing requirements” bullets into canonical progress event log so the next decomposition iteration can incorporate them.
 - **Risk**: Overly strict coverage heuristics cause false negatives.
   - **Mitigation**: Keep gating limited to an explicit, deterministic “must-have requirements” list extracted from the issue (and treat other signals as warn-only).
 - **Risk**: Tests or tooling assume `task_decomposition` transitions directly to `implement_task`.

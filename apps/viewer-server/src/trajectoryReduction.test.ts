@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
+import { appendProgressEvent, markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -50,14 +50,11 @@ describe('trajectoryReduction', () => {
       ) + '\n',
       'utf-8',
     );
-    await fs.writeFile(
-      path.join(stateDir, 'progress.txt'),
-      [
-        'Started: 2026-02-09T00:00:00.000Z',
-        'Should repeated-context rate include objective?',
-      ].join('\n') + '\n',
-      'utf-8',
-    );
+    appendProgressEvent({
+      stateDir,
+      source: 'test',
+      message: 'Started: 2026-02-09T00:00:00.000Z\nShould repeated-context rate include objective?',
+    });
     await fs.writeFile(
       path.join(stateDir, 'sdk-output.json'),
       JSON.stringify(
@@ -203,7 +200,6 @@ describe('trajectoryReduction', () => {
       JSON.stringify({ tasks: [...blockedTasks, ...pendingTasks] }, null, 2) + '\n',
       'utf-8',
     );
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
     await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
 
     const first = await computeTrajectoryReduction({

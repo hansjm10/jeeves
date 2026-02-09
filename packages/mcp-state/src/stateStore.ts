@@ -1,6 +1,3 @@
-import fsp from 'node:fs/promises';
-import path from 'node:path';
-
 import {
   appendProgressEvent,
   deleteMemoryEntryFromDb,
@@ -9,6 +6,7 @@ import {
   type MemoryEntry,
   type MemoryScope,
   readIssueFromDb,
+  renderProgressText,
   readTasksFromDb,
   upsertMemoryEntryInDb,
   writeIssueToDb,
@@ -97,9 +95,13 @@ export async function appendProgress(stateDir: string, entry: string): Promise<v
     source: 'mcp-state',
     message: entry,
   });
-  const progressPath = path.join(stateDir, 'progress.txt');
-  await fsp.mkdir(path.dirname(progressPath), { recursive: true });
-  await fsp.appendFile(progressPath, entry, 'utf-8');
+}
+
+export async function getProgress(stateDir: string, maxEvents?: number): Promise<string> {
+  return renderProgressText({
+    stateDir,
+    ...(maxEvents === undefined ? {} : { maxEvents }),
+  });
 }
 
 export async function getMemory(

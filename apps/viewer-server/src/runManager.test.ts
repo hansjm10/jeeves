@@ -13,6 +13,7 @@ import { markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-d
 
 import { RunManager } from './runManager.js';
 import { readIssueJson } from './issueJson.js';
+import { renderProgressText } from './sqliteStorage.js';
 import { installStateDbFsShim } from './testStateDbShim.js';
 
 const execFileAsync = promisify(execFile);
@@ -4244,9 +4245,6 @@ describe('T17: Stop run on parallel wave setup failures', () => {
       'utf-8',
     );
 
-    // Create an empty progress.txt
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
-
     // Create spawn that throws synchronously on the second call (simulating a spawn failure
     // after the first worker was successfully spawned)
     let spawnCallCount = 0;
@@ -4314,7 +4312,7 @@ describe('T17: Stop run on parallel wave setup failures', () => {
     expect(inProgressTasks).toHaveLength(0); // No tasks should be stuck in in_progress
 
     // 7. Progress entry should document the setup failure
-    const progressContent = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+    const progressContent = renderProgressText({ stateDir });
     expect(progressContent.toLowerCase()).toContain('setup failure');
 
     // 8. Viewer log should show the error was handled
@@ -4392,8 +4390,6 @@ describe('T17: Stop run on parallel wave setup failures', () => {
       ) + '\n',
       'utf-8',
     );
-
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
 
     const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
 
@@ -4577,8 +4573,6 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
       JSON.stringify({ schemaVersion: 1, tasks: [{ id: 'T1', status: 'in_progress' }] }, null, 2) + '\n',
       'utf-8',
     );
-
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
 
     // Create a spawn that creates a slow child process (giving time to call stop())
     const spawn = (() => {

@@ -30,6 +30,7 @@ import {
   type WorkerOutcome,
 } from './parallelRunner.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { appendProgressEvent, renderProgressText } from './sqliteStorage.js';
 import { installStateDbFsShim } from './testStateDbShim.js';
 
 // Mock child_process spawn
@@ -1641,7 +1642,7 @@ describe('parallelRunner', () => {
       });
 
       describe('appendWaveProgressEntry', () => {
-        it('appends combined wave summary to progress.txt', async () => {
+        it('appends combined wave summary to the progress event log', async () => {
           const implementResult: WaveResult = {
             waveId: 'wave-1',
             phase: 'implement_task',
@@ -1682,7 +1683,7 @@ describe('parallelRunner', () => {
 
           await appendWaveProgressEntry(stateDir, 'run-123', 'wave-1', implementResult, specCheckResult, mergeResult);
 
-          const progress = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+          const progress = renderProgressText({ stateDir });
 
           // Verify structure
           expect(progress).toContain('Parallel Wave Summary: wave-1');
@@ -1738,7 +1739,7 @@ describe('parallelRunner', () => {
 
           await appendWaveProgressEntry(stateDir, 'run-123', 'wave-1', null, specCheckResult, mergeResult);
 
-          const progress = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+          const progress = renderProgressText({ stateDir });
 
           expect(progress).toContain('**Conflict on task**: T2');
           expect(progress).toContain('[x] T1: merged (abc1234)');
@@ -2885,8 +2886,8 @@ describe('parallelRunner', () => {
           'run-123',
         );
 
-        // Verify progress.txt was updated
-        const progressRaw = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+        // Verify the progress event log was updated
+        const progressRaw = renderProgressText({ stateDir });
         expect(progressRaw).toContain('Parallel Wave Timeout');
         expect(progressRaw).toContain('inactivity');
         expect(progressRaw).toContain('T1');
@@ -3879,7 +3880,7 @@ The task is eligible for retry in the next wave.`,
         expect(t1Feedback).toContain('no branches were merged');
 
         // Progress entry should mention no merging
-        const progressRaw = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+        const progressRaw = renderProgressText({ stateDir });
         expect(progressRaw).toContain('No branches merged (due to timeout)');
       });
     });
@@ -4399,9 +4400,12 @@ The task is eligible for retry in the next wave.`,
         ],
       });
 
-      // Create initial progress file
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, '# Initial progress\n', 'utf-8');
+      // Create initial progress event
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: '# Initial progress',
+      });
 
       // Simulate the progress entry that would be written by appendSetupFailureProgressEntry
       const setupFailureEntry = `\n## [${new Date().toISOString()}] - Parallel Wave Setup Failure\n\n` +
@@ -4422,10 +4426,14 @@ The task is eligible for retry in the next wave.`,
         `### Artifacts\n` +
         `- Wave summary: ${stateDir}/.runs/run-progress/waves/wave-progress-test.json\n\n` +
         `---\n`;
-      await fs.appendFile(progressPath, setupFailureEntry, 'utf-8');
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: setupFailureEntry,
+      });
 
       // Verify progress entry contents
-      const progressContent = await fs.readFile(progressPath, 'utf-8');
+      const progressContent = renderProgressText({ stateDir });
 
       expect(progressContent).toContain('Parallel Wave Setup Failure');
       expect(progressContent).toContain('wave-progress-test');
@@ -4457,9 +4465,12 @@ The task is eligible for retry in the next wave.`,
         tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
       });
 
-      // Create progress file
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, '# Initial\n', 'utf-8');
+      // Create initial progress event
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: '# Initial',
+      });
 
       // Simulate the warning entry that would be written by handleActiveWavePhaseMismatch
       const warningEntry = `\n## [${new Date().toISOString()}] - Parallel State Corruption Warning\n\n` +
@@ -4476,10 +4487,14 @@ The task is eligible for retry in the next wave.`,
         `This mismatch can occur if the orchestrator crashed between updating issue.json.phase ` +
         `and status.parallel.activeWavePhase, or if external tooling modified the state files.\n\n` +
         `---\n`;
-      await fs.appendFile(progressPath, warningEntry, 'utf-8');
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: warningEntry,
+      });
 
       // Verify warning entry contents
-      const progressContent = await fs.readFile(progressPath, 'utf-8');
+      const progressContent = renderProgressText({ stateDir });
 
       expect(progressContent).toContain('Parallel State Corruption Warning');
       expect(progressContent).toContain('Mismatch Detected');
@@ -4599,9 +4614,12 @@ The task is eligible for retry in the next wave.`,
         tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
       });
 
-      // Create progress file
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, '# Initial\n', 'utf-8');
+      // Create initial progress event
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: '# Initial',
+      });
 
       // Create runner
       const logs: string[] = [];
@@ -4636,7 +4654,7 @@ The task is eligible for retry in the next wave.`,
       expect(logs.some((l) => l.includes('mismatch') && l.includes('correcting'))).toBe(true);
 
       // Verify: Progress entry was written
-      const progressContent = await fs.readFile(progressPath, 'utf-8');
+      const progressContent = renderProgressText({ stateDir });
       expect(progressContent).toContain('Parallel State Corruption Warning');
       expect(progressContent).toContain('corrected from "task_spec_check" to "implement_task"');
 
@@ -4714,8 +4732,11 @@ The task is eligible for retry in the next wave.`,
         ],
       });
 
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, '# Initial progress\n', 'utf-8');
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: '# Initial progress',
+      });
 
       // Track spawn calls and kills
       let spawnCallCount = 0;
@@ -4911,7 +4932,7 @@ The task is eligible for retry in the next wave.`,
         'Error: Spawn failed: mock error for testing\n    at ...',
       );
 
-      const progressContent = await fs.readFile(progressPath, 'utf-8');
+      const progressContent = renderProgressText({ stateDir });
       expect(progressContent).toContain('Parallel Wave Setup Failure');
       expect(progressContent).toContain('wave-spawn-fail');
       expect(progressContent).toContain('T1, T2, T3');
@@ -4940,9 +4961,12 @@ The task is eligible for retry in the next wave.`,
         tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
       });
 
-      // Create progress file
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, '# Initial\n', 'utf-8');
+      // Create initial progress event
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: '# Initial',
+      });
 
       // Create runner
       const logs: string[] = [];
@@ -4976,7 +5000,7 @@ The task is eligible for retry in the next wave.`,
       expect(logs.some((l) => l.includes('mismatch') && l.includes('correcting'))).toBe(true);
 
       // Verify: Progress entry was written with corruption warning
-      const progressContent = await fs.readFile(progressPath, 'utf-8');
+      const progressContent = renderProgressText({ stateDir });
       expect(progressContent).toContain('Parallel State Corruption Warning');
       expect(progressContent).toContain('Canonical issue.json.phase: task_spec_check');
       expect(progressContent).toContain('status.parallel.activeWavePhase: implement_task');

@@ -1,27 +1,15 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
 import { appendProgressEvent } from '@jeeves/state-db';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-export async function ensureProgressFile(progressPath: string): Promise<void> {
-  await fs.mkdir(path.dirname(progressPath), { recursive: true });
-  const exists = await fs
-    .stat(progressPath)
-    .then(() => true)
-    .catch(() => false);
-  if (!exists) {
-    await fs.writeFile(progressPath, '', 'utf-8');
-  }
+export async function ensureProgressFile(_stateDir: string): Promise<void> {
+  void _stateDir;
 }
 
-export async function appendProgress(progressPath: string, line: string): Promise<void> {
-  await ensureProgressFile(progressPath);
-  await fs.appendFile(progressPath, `${line}\n`, 'utf-8');
-  const stateDir = path.dirname(progressPath);
+export async function appendProgress(stateDir: string, line: string): Promise<void> {
+  await ensureProgressFile(stateDir);
   const trimmed = line.trim();
   appendProgressEvent({
     stateDir,
@@ -31,14 +19,14 @@ export async function appendProgress(progressPath: string, line: string): Promis
   });
 }
 
-export async function markStarted(progressPath: string): Promise<void> {
-  await appendProgress(progressPath, `Started: ${nowIso()}`);
+export async function markStarted(stateDir: string): Promise<void> {
+  await appendProgress(stateDir, `Started: ${nowIso()}`);
 }
 
-export async function markPhase(progressPath: string, phase: string): Promise<void> {
-  await appendProgress(progressPath, `Phase: ${phase}`);
+export async function markPhase(stateDir: string, phase: string): Promise<void> {
+  await appendProgress(stateDir, `Phase: ${phase}`);
 }
 
-export async function markEnded(progressPath: string, success: boolean): Promise<void> {
-  await appendProgress(progressPath, `Ended: ${nowIso()} Success: ${success}`);
+export async function markEnded(stateDir: string, success: boolean): Promise<void> {
+  await appendProgress(stateDir, `Ended: ${nowIso()} Success: ${success}`);
 }

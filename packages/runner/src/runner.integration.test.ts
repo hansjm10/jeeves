@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
+import { renderProgressText, upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import { main } from './cli.js';
@@ -55,7 +55,6 @@ describe('runner integration', () => {
 
     const outputPath = path.join(stateDir, 'sdk-output.json');
     const logPath = path.join(stateDir, 'last-run.log');
-    const progressPath = path.join(stateDir, 'progress.txt');
 
     const output = JSON.parse(await fs.readFile(outputPath, 'utf-8')) as Record<string, unknown>;
     expect(output.schema).toBe('jeeves.sdk.v1');
@@ -70,7 +69,7 @@ describe('runner integration', () => {
     expect(log).toContain('[RUNNER]');
     expect(log).toContain('[ASSISTANT]');
 
-    const progress = await fs.readFile(progressPath, 'utf-8');
+    const progress = renderProgressText({ stateDir });
     expect(progress).toContain('Started:');
     expect(progress).toContain('Phase: hello');
     expect(progress).toContain('Ended:');
@@ -138,7 +137,6 @@ describe('runner integration', () => {
 
     const outputPath = path.join(stateDir, 'sdk-output.json');
     const logPath = path.join(stateDir, 'last-run.log');
-    const progressPath = path.join(stateDir, 'progress.txt');
 
     const output = JSON.parse(await fs.readFile(outputPath, 'utf-8')) as Record<string, unknown>;
     expect(output.schema).toBe('jeeves.sdk.v1');
@@ -148,7 +146,7 @@ describe('runner integration', () => {
     expect(log).toContain('[RUNNER]');
     expect(log).toContain('phase=hello');
 
-    const progress = await fs.readFile(progressPath, 'utf-8');
+    const progress = renderProgressText({ stateDir });
     expect(progress).toContain('Phase: hello');
   });
 

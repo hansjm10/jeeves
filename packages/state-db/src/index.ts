@@ -23,6 +23,19 @@ export type StoredIssueSummary = Readonly<{
 export type StoredPrompt = Readonly<{ id: string; content: string; updatedAt: string }>;
 export type StoredWorkflow = Readonly<{ name: string; yaml: string; updatedAt: string }>;
 
+export type MemoryScope = 'session' | 'working_set' | 'decisions' | 'cross_run';
+
+export type MemoryEntry = Readonly<{
+  stateDir: string;
+  scope: MemoryScope;
+  key: string;
+  value: JsonRecord;
+  sourceIteration: number | null;
+  stale: boolean;
+  createdAt: string;
+  updatedAt: string;
+}>;
+
 export type ProgressEvent = Readonly<{
   id: number;
   stateDir: string;
@@ -189,6 +202,12 @@ function statSizeOrZero(filePath: string): number {
   }
 }
 
+const MEMORY_SCOPES: readonly MemoryScope[] = ['session', 'working_set', 'decisions', 'cross_run'];
+
+function isMemoryScope(value: string): value is MemoryScope {
+  return (MEMORY_SCOPES as readonly string[]).includes(value);
+}
+
 export function ensureSchema(db: DbHandle): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS repositories (
@@ -225,6 +244,21 @@ export function ensureSchema(db: DbHandle): void {
       state_dir TEXT PRIMARY KEY REFERENCES issue_state_core(state_dir) ON DELETE CASCADE,
       payload_json TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS issue_memory (
+      state_dir TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('session', 'working_set', 'decisions', 'cross_run')),
+      key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      source_iteration INTEGER,
+      stale INTEGER NOT NULL CHECK (stale IN (0, 1)) DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(state_dir, scope, key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_memory_lookup
+      ON issue_memory(state_dir, scope, stale, key);
 
     CREATE TABLE IF NOT EXISTS issue_task_lists (
       state_dir TEXT PRIMARY KEY,
@@ -792,6 +826,324 @@ export function readTaskCountFromDb(stateDir: string): number | null {
       return row.task_count;
     }
     return null;
+  });
+}
+
+function parseMemoryEntryRow(row: {
+  state_dir: string;
+  scope: string;
+  key: string;
+  value_json: string;
+  source_iteration: number | null;
+  stale: number;
+  created_at: string;
+  updated_at: string;
+}): MemoryEntry | null {
+  if (!isMemoryScope(row.scope)) return null;
+  const value = parseJsonRecord(row.value_json);
+  if (!value) return null;
+  const sourceIteration =
+    typeof row.source_iteration === 'number' &&
+      Number.isInteger(row.source_iteration) &&
+      row.source_iteration >= 0
+      ? row.source_iteration
+      : null;
+  return {
+    stateDir: row.state_dir,
+    scope: row.scope,
+    key: row.key,
+    value,
+    sourceIteration,
+    stale: row.stale === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function readMemoryEntryFromDb(params: {
+  stateDir: string;
+  scope: MemoryScope;
+  key: string;
+}): MemoryEntry | null {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const normalizedKey = params.key.trim();
+  if (!normalizedKey) return null;
+  return withDb(dataDir, (db) => {
+    const row = db
+      .prepare(
+        `
+        SELECT state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
+        FROM issue_memory
+        WHERE state_dir = ?
+          AND scope = ?
+          AND key = ?
+        `,
+      )
+      .get(normalizedStateDir, params.scope, normalizedKey) as {
+      state_dir: string;
+      scope: string;
+      key: string;
+      value_json: string;
+      source_iteration: number | null;
+      stale: number;
+      created_at: string;
+      updated_at: string;
+    } | undefined;
+    if (!row) return null;
+    return parseMemoryEntryRow(row);
+  });
+}
+
+export function listMemoryEntriesFromDb(params: {
+  stateDir: string;
+  scope?: MemoryScope;
+  key?: string;
+  includeStale?: boolean;
+  limit?: number | null;
+}): MemoryEntry[] {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const scope = params.scope ?? null;
+  const key = typeof params.key === 'string' && params.key.trim().length > 0 ? params.key.trim() : null;
+  const includeStale = params.includeStale === true ? 1 : 0;
+  const limit = params.limit === null ? null : Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 500;
+  return withDb(dataDir, (db) => {
+    const baseQuery = `
+        SELECT state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
+        FROM issue_memory
+        WHERE state_dir = ?
+          AND (? IS NULL OR scope = ?)
+          AND (? IS NULL OR key = ?)
+          AND (? = 1 OR stale = 0)
+        ORDER BY
+          CASE scope
+            WHEN 'working_set' THEN 1
+            WHEN 'decisions' THEN 2
+            WHEN 'session' THEN 3
+            WHEN 'cross_run' THEN 4
+            ELSE 99
+          END ASC,
+          key ASC,
+          updated_at ASC
+      `;
+
+    const rows = (limit === null
+      ? db.prepare(baseQuery).all(
+        normalizedStateDir,
+        scope,
+        scope,
+        key,
+        key,
+        includeStale,
+      )
+      : db
+        .prepare(`${baseQuery}\nLIMIT ?`)
+        .all(
+          normalizedStateDir,
+          scope,
+          scope,
+          key,
+          key,
+          includeStale,
+          limit,
+        )) as {
+      state_dir: string;
+      scope: string;
+      key: string;
+      value_json: string;
+      source_iteration: number | null;
+      stale: number;
+      created_at: string;
+      updated_at: string;
+    }[];
+
+    return rows
+      .map((row) => parseMemoryEntryRow(row))
+      .filter((row): row is MemoryEntry => row !== null);
+  });
+}
+
+export function upsertMemoryEntryInDb(params: {
+  stateDir: string;
+  scope: MemoryScope;
+  key: string;
+  value: JsonRecord;
+  sourceIteration?: number | null;
+  stale?: boolean;
+}): MemoryEntry {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const normalizedKey = params.key.trim();
+  if (!normalizedKey) throw new Error('memory key must be a non-empty string');
+  const sourceIteration =
+    typeof params.sourceIteration === 'number' &&
+      Number.isInteger(params.sourceIteration) &&
+      params.sourceIteration >= 0
+      ? params.sourceIteration
+      : null;
+  const stale = params.stale === true ? 1 : 0;
+  const createdAt = nowIso();
+  const updatedAt = createdAt;
+
+  return withDb(dataDir, (db) => {
+    db.prepare(
+      `
+      INSERT INTO issue_memory (
+        state_dir,
+        scope,
+        key,
+        value_json,
+        source_iteration,
+        stale,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(state_dir, scope, key) DO UPDATE SET
+        value_json = excluded.value_json,
+        source_iteration = excluded.source_iteration,
+        stale = excluded.stale,
+        updated_at = excluded.updated_at
+      `,
+    ).run(
+      normalizedStateDir,
+      params.scope,
+      normalizedKey,
+      JSON.stringify(params.value),
+      sourceIteration,
+      stale,
+      createdAt,
+      updatedAt,
+    );
+
+    const row = db
+      .prepare(
+        `
+        SELECT state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
+        FROM issue_memory
+        WHERE state_dir = ?
+          AND scope = ?
+          AND key = ?
+        `,
+      )
+      .get(normalizedStateDir, params.scope, normalizedKey) as {
+      state_dir: string;
+      scope: string;
+      key: string;
+      value_json: string;
+      source_iteration: number | null;
+      stale: number;
+      created_at: string;
+      updated_at: string;
+    } | undefined;
+    if (!row) {
+      throw new Error(`failed to upsert memory entry for ${params.scope}:${normalizedKey}`);
+    }
+    const parsed = parseMemoryEntryRow(row);
+    if (!parsed) {
+      throw new Error(`failed to parse memory entry for ${params.scope}:${normalizedKey}`);
+    }
+    return parsed;
+  });
+}
+
+export function upsertMemoryEntriesInDb(params: {
+  stateDir: string;
+  entries: readonly Readonly<{
+    scope: MemoryScope;
+    key: string;
+    value: JsonRecord;
+    sourceIteration?: number | null;
+    stale?: boolean;
+  }>[];
+}): void {
+  if (params.entries.length === 0) return;
+
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  withDb(dataDir, (db) => {
+    const upsertStmt = db.prepare(
+      `
+      INSERT INTO issue_memory (
+        state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(state_dir, scope, key) DO UPDATE SET
+        value_json = excluded.value_json,
+        source_iteration = excluded.source_iteration,
+        stale = excluded.stale,
+        updated_at = excluded.updated_at
+      `,
+    );
+    const tx = db.transaction((entries: typeof params.entries) => {
+      for (const entry of entries) {
+        const normalizedKey = entry.key.trim();
+        if (!normalizedKey) throw new Error('memory key must be a non-empty string');
+        const sourceIteration =
+          typeof entry.sourceIteration === 'number' &&
+            Number.isInteger(entry.sourceIteration) &&
+            entry.sourceIteration >= 0
+            ? entry.sourceIteration
+            : null;
+        const stale = entry.stale === true ? 1 : 0;
+        const createdAt = nowIso();
+        const updatedAt = createdAt;
+        upsertStmt.run(
+          normalizedStateDir,
+          entry.scope,
+          normalizedKey,
+          JSON.stringify(entry.value),
+          sourceIteration,
+          stale,
+          createdAt,
+          updatedAt,
+        );
+      }
+    });
+    tx(params.entries);
+  });
+}
+
+export function markMemoryEntryStaleInDb(params: {
+  stateDir: string;
+  scope: MemoryScope;
+  key: string;
+  stale?: boolean;
+}): boolean {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const normalizedKey = params.key.trim();
+  if (!normalizedKey) throw new Error('memory key must be a non-empty string');
+  const stale = params.stale === false ? 0 : 1;
+  const updatedAt = nowIso();
+  return withDb(dataDir, (db) => {
+    const result = db.prepare(
+      `
+      UPDATE issue_memory
+      SET stale = ?, updated_at = ?
+      WHERE state_dir = ?
+        AND scope = ?
+        AND key = ?
+      `,
+    ).run(stale, updatedAt, normalizedStateDir, params.scope, normalizedKey);
+    return Number(result.changes) > 0;
+  });
+}
+
+export function deleteMemoryEntryFromDb(params: {
+  stateDir: string;
+  scope: MemoryScope;
+  key: string;
+}): boolean {
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  const normalizedKey = params.key.trim();
+  if (!normalizedKey) throw new Error('memory key must be a non-empty string');
+  return withDb(dataDir, (db) => {
+    const result = db
+      .prepare('DELETE FROM issue_memory WHERE state_dir = ? AND scope = ? AND key = ?')
+      .run(normalizedStateDir, params.scope, normalizedKey);
+    return Number(result.changes) > 0;
   });
 }
 

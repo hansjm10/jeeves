@@ -2,7 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
-import { appendRunLogLine, upsertRunSession } from '@jeeves/state-db';
+import {
+  appendRunLogLine,
+  dbPathForDataDir,
+  deriveDataDirFromStateDir,
+  listMemoryEntriesFromDb,
+  type MemoryEntry,
+  upsertRunSession,
+} from '@jeeves/state-db';
 
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { buildMcpServersConfig } from './mcpConfig.js';
@@ -11,6 +18,68 @@ import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted }
 import { SdkOutputWriterV1 } from './outputWriter.js';
 
 const PREPENDED_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+const MAX_PROMPT_MEMORY_ENTRIES = 500;
+
+function memoryScopeRank(scope: MemoryEntry['scope']): number {
+  if (scope === 'working_set') return 1;
+  if (scope === 'decisions') return 2;
+  if (scope === 'session') return 3;
+  return 4;
+}
+
+function compareMemoryEntries(a: MemoryEntry, b: MemoryEntry): number {
+  const scopeDiff = memoryScopeRank(a.scope) - memoryScopeRank(b.scope);
+  if (scopeDiff !== 0) return scopeDiff;
+
+  const keyDiff = a.key.localeCompare(b.key);
+  if (keyDiff !== 0) return keyDiff;
+
+  const updatedDiff = a.updatedAt.localeCompare(b.updatedAt);
+  if (updatedDiff !== 0) return updatedDiff;
+
+  return a.stateDir.localeCompare(b.stateDir);
+}
+
+function deriveCanonicalStateDirFromWorkerStateDir(stateDir: string): string | null {
+  const resolved = path.resolve(stateDir);
+  const marker = `${path.sep}.runs${path.sep}`;
+  const markerIdx = resolved.lastIndexOf(marker);
+  if (markerIdx === -1) return null;
+
+  const suffix = resolved.slice(markerIdx + marker.length).split(path.sep).filter((segment) => segment.length > 0);
+  if (suffix.length < 3 || suffix[1] !== 'workers') return null;
+
+  const canonical = resolved.slice(0, markerIdx);
+  return canonical || null;
+}
+
+function listMemoryStateDirsForPrompt(stateDir: string): string[] {
+  const resolved = path.resolve(stateDir);
+  const canonical = deriveCanonicalStateDirFromWorkerStateDir(resolved);
+  if (!canonical || canonical === resolved) return [resolved];
+  return [resolved, canonical];
+}
+
+function listScopedMemoryEntriesForPrompt(stateDir: string): MemoryEntry[] {
+  const stateDirs = listMemoryStateDirsForPrompt(stateDir);
+  const merged = new Map<string, MemoryEntry>();
+
+  for (const dir of stateDirs) {
+    const entries = listMemoryEntriesFromDb({
+      stateDir: dir,
+      includeStale: false,
+      limit: null,
+    });
+    for (const entry of entries) {
+      const entryId = `${entry.scope}\u0000${entry.key}`;
+      if (!merged.has(entryId)) {
+        merged.set(entryId, entry);
+      }
+    }
+  }
+
+  return [...merged.values()].sort(compareMemoryEntries);
+}
 
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
@@ -198,9 +267,146 @@ export function extractTaskPlanFromSdkOutput(raw: string): string {
   return assistantChunks.join('\n\n').trim();
 }
 
+function toPhaseHints(value: Record<string, unknown>): readonly string[] {
+  const hints = new Set<string>();
+  const addString = (raw: unknown): void => {
+    if (typeof raw !== 'string') return;
+    const normalized = raw.trim().toLowerCase();
+    if (normalized) hints.add(normalized);
+  };
+  const addStringArray = (raw: unknown): void => {
+    if (!Array.isArray(raw)) return;
+    for (const item of raw) addString(item);
+  };
+
+  addString(value['phase']);
+  addString(value['phaseName']);
+  addStringArray(value['phases']);
+  addStringArray(value['phaseNames']);
+  addStringArray(value['relevantPhases']);
+  return [...hints];
+}
+
+function isPhaseTaggedInKey(key: string, phaseName: string): boolean {
+  const normalizedKey = key.trim().toLowerCase();
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (!normalizedKey || !normalizedPhase) return false;
+  return (
+    normalizedKey === normalizedPhase ||
+    normalizedKey.startsWith(`${normalizedPhase}:`) ||
+    normalizedKey.endsWith(`:${normalizedPhase}`) ||
+    normalizedKey.includes(`:${normalizedPhase}:`)
+  );
+}
+
+function isSessionMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (!normalizedPhase) return false;
+  const hints = toPhaseHints(entry.value);
+  if (hints.length > 0) return hints.includes(normalizedPhase);
+  return isPhaseTaggedInKey(entry.key, normalizedPhase);
+}
+
+function isCrossRunMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
+  const alwaysRelevant = entry.value['alwaysRelevant'] === true || entry.value['always'] === true;
+  if (alwaysRelevant) return true;
+  const hints = toPhaseHints(entry.value);
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (hints.includes(normalizedPhase)) return true;
+  return isPhaseTaggedInKey(entry.key, phaseName);
+}
+
+function compactJsonRecord(value: Record<string, unknown>, maxChars = 800): string {
+  const raw = JSON.stringify(value);
+  if (raw.length <= maxChars) return raw;
+  return `${raw.slice(0, maxChars)}...[truncated]`;
+}
+
+function formatMemoryEntry(entry: MemoryEntry): string {
+  const sourceIteration = entry.sourceIteration === null ? 'n/a' : String(entry.sourceIteration);
+  const valueText = compactJsonRecord(entry.value);
+  return `- key=${entry.key} source_iteration=${sourceIteration} updated_at=${entry.updatedAt} value=${valueText}`;
+}
+
+function formatMemorySection(title: string, entries: readonly MemoryEntry[]): string {
+  if (entries.length === 0) return `### ${title}\n- (none)`;
+  return `### ${title}\n${entries.map((entry) => formatMemoryEntry(entry)).join('\n')}`;
+}
+
+function buildScopedMemoryBlock(stateDir: string, phaseName: string): string {
+  const entries = listScopedMemoryEntriesForPrompt(stateDir);
+
+  const relevantEntries = entries.filter((entry) => {
+    if (entry.scope === 'session') return isSessionMemoryRelevant(entry, phaseName);
+    if (entry.scope === 'cross_run') return isCrossRunMemoryRelevant(entry, phaseName);
+    return true;
+  });
+  const limitedEntries = relevantEntries.slice(0, MAX_PROMPT_MEMORY_ENTRIES);
+
+  const workingSet = limitedEntries.filter((entry) => entry.scope === 'working_set');
+  const decisions = limitedEntries.filter((entry) => entry.scope === 'decisions');
+  const session = limitedEntries.filter((entry) => entry.scope === 'session');
+  const crossRun = limitedEntries.filter((entry) => entry.scope === 'cross_run');
+
+  const sections: string[] = [
+    formatMemorySection('Working Set (active)', workingSet),
+    formatMemorySection('Decisions (active)', decisions),
+  ];
+  if (session.length > 0) {
+    sections.push(formatMemorySection(`Session Context (phase=${phaseName})`, session));
+  }
+  if (crossRun.length > 0) {
+    sections.push(formatMemorySection('Cross-Run Memory (relevant)', crossRun));
+  }
+
+  return [
+    '<memory_context>',
+    'Use these structured memory entries as primary context before replaying progress history.',
+    sections.join('\n\n'),
+    '</memory_context>',
+  ].join('\n\n');
+}
+
+type MemoryBlockResult = Readonly<{
+  block: string;
+  enabled: boolean;
+  reason: string;
+}>;
+
+function formatErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  return String(err);
+}
+
+async function buildScopedMemoryBlockIfAvailable(stateDir: string, phaseName: string): Promise<MemoryBlockResult> {
+  const dbPath = dbPathForDataDir(deriveDataDirFromStateDir(stateDir));
+  try {
+    const stat = await fs.stat(dbPath);
+    if (!stat.isFile()) {
+      return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath}` };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath}` };
+    }
+    return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath} error=${formatErrorMessage(err)}` };
+  }
+
+  try {
+    return {
+      block: buildScopedMemoryBlock(stateDir, phaseName),
+      enabled: true,
+      reason: `state_db_available path=${dbPath}`,
+    };
+  } catch (err) {
+    return { block: '', enabled: false, reason: `state_db_read_failed path=${dbPath} error=${formatErrorMessage(err)}` };
+  }
+}
+
 async function buildPromptWithPrependedInstructions(
   phasePrompt: string,
   cwd: string,
+  memoryBlock: string,
 ): Promise<Readonly<{ prompt: string; prependedFiles: readonly string[] }>> {
   const sections: string[] = [];
   const prependedFiles: string[] = [];
@@ -219,13 +425,17 @@ async function buildPromptWithPrependedInstructions(
     prependedFiles.push(fileName);
   }
 
+  if (memoryBlock.trim()) {
+    sections.push(memoryBlock.trim());
+  }
+
   if (sections.length === 0) {
     return { prompt: phasePrompt, prependedFiles };
   }
 
   const preface = [
     '<workspace_instructions>',
-    'The following repository instruction files are prepended for this run.',
+    'The following repository instructions and structured memory context are prepended for this run.',
     sections.join('\n\n'),
     '</workspace_instructions>',
   ].join('\n\n');
@@ -256,11 +466,16 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     });
   }
 
+  const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
+  const memoryBlockResult = await buildScopedMemoryBlockIfAvailable(params.stateDir, params.phaseName);
+  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(
+    phasePrompt,
+    params.cwd,
+    memoryBlockResult.block,
+  );
+
   await markStarted(params.progressPath);
   await markPhase(params.progressPath, params.phaseName);
-
-  const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
-  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(phasePrompt, params.cwd);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -291,6 +506,9 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     if (prependedFiles.length > 0) {
       await logLine(`[RUNNER] prepended_instructions=${prependedFiles.join(',')}`);
     }
+    await logLine(
+      `[RUNNER] memory_context=${memoryBlockResult.enabled ? 'enabled' : 'disabled'} ${memoryBlockResult.reason}`,
+    );
 
     const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd, {
       stateDir: params.stateDir,

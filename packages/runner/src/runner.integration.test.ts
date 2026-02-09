@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import { main } from './cli.js';
@@ -202,6 +203,341 @@ describe('runner integration', () => {
     expect(prompt.indexOf('AGENTS SENTINEL')).toBeLessThan(prompt.indexOf('CLAUDE SENTINEL'));
     expect(prompt.indexOf('CLAUDE SENTINEL')).toBeLessThan(prompt.indexOf('PHASE PROMPT SENTINEL'));
   });
+
+  it('skips memory preload when state DB is unavailable', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-skip-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, '.jeeves');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-skip-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-skip-fixture',
+        '  version: 1',
+        '  start: phase_one',
+        'phases:',
+        '  phase_one:',
+        '    type: execute',
+        '    prompt: phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'phase.prompt.md'), 'MEMORY SKIP SENTINEL', 'utf-8');
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-skip-fixture',
+      phaseName: 'phase_one',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'phase_one', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('MEMORY SKIP SENTINEL');
+    expect(prompt).not.toContain('<memory_context>');
+
+    const log = await fs.readFile(path.join(stateDir, 'last-run.log'), 'utf-8');
+    expect(log).toContain('[RUNNER] memory_context=disabled');
+    expect(log).toContain('state_db_unavailable');
+  });
+
+  it('injects scoped memory into phase prompts with deterministic ordering and relevance filtering', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-prompt-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: memory.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'memory.prompt.md'), 'MEMORY PROMPT SENTINEL', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'current-task',
+      value: { taskId: 'T42' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'decisions',
+      key: 'db-choice',
+      value: { choice: 'sqlite' },
+      sourceIteration: 3,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'decisions',
+      key: 'obsolete-choice',
+      value: { choice: 'xml' },
+      sourceIteration: 1,
+      stale: true,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'implement_task:focus',
+      value: { phase: 'implement_task', focus: 'wire memory tools' },
+      sourceIteration: 3,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'design_plan:focus',
+      value: { phase: 'design_plan', focus: 'skip in implement phase' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'implement_task:legacy-note',
+      value: { focus: 'legacy phase tag in key only' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'design_plan:legacy-note',
+      value: { focus: 'skip legacy key from other phase' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'untagged-note',
+      value: { focus: 'legacy session note without phase hints' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'cross_run',
+      key: 'implement_task:carry-forward',
+      value: { relevantPhases: ['implement_task'], reminder: 'keep prompt deterministic' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'cross_run',
+      key: 'design_review:carry-forward',
+      value: { relevantPhases: ['design_review'], reminder: 'not relevant now' },
+      sourceIteration: 1,
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt).toContain('### Working Set (active)');
+    expect(prompt).toContain('### Decisions (active)');
+    expect(prompt).toContain('### Session Context (phase=implement_task)');
+    expect(prompt).toContain('### Cross-Run Memory (relevant)');
+    expect(prompt.indexOf('### Working Set (active)')).toBeLessThan(prompt.indexOf('### Decisions (active)'));
+    expect(prompt.indexOf('### Decisions (active)')).toBeLessThan(
+      prompt.indexOf('### Session Context (phase=implement_task)'),
+    );
+    expect(prompt.indexOf('### Session Context (phase=implement_task)')).toBeLessThan(
+      prompt.indexOf('### Cross-Run Memory (relevant)'),
+    );
+
+    expect(prompt).toContain('key=current-task');
+    expect(prompt).toContain('key=db-choice');
+    expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:legacy-note');
+    expect(prompt).toContain('key=implement_task:carry-forward');
+    expect(prompt).not.toContain('key=obsolete-choice');
+    expect(prompt).not.toContain('key=design_plan:focus');
+    expect(prompt).not.toContain('key=design_plan:legacy-note');
+    expect(prompt).not.toContain('key=untagged-note');
+    expect(prompt).not.toContain('key=design_review:carry-forward');
+    expect(prompt).toContain('MEMORY PROMPT SENTINEL');
+  });
+
+  it('loads canonical issue memory when running from a worker sandbox state dir', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-worker-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const canonicalStateDir = path.join(tmp, 'issues', 'acme', 'rocket', '42');
+    const workerStateDir = path.join(canonicalStateDir, '.runs', 'run-123', 'workers', 'T1');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(canonicalStateDir, { recursive: true });
+    await fs.mkdir(workerStateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-worker-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-worker-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: memory.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'memory.prompt.md'), 'WORKER MEMORY PROMPT SENTINEL', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'working_set',
+      key: 'current-task',
+      value: { taskId: 'T42' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'session',
+      key: 'implement_task:focus',
+      value: { phase: 'implement_task', focus: 'canonical memory is visible' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'cross_run',
+      key: 'implement_task:carry-forward',
+      value: { relevantPhases: ['implement_task'], reminder: 'canonical cross-run memory is visible' },
+      sourceIteration: 1,
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-worker-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir: workerStateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt).toContain('key=current-task');
+    expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:carry-forward');
+    expect(prompt).toContain('WORKER MEMORY PROMPT SENTINEL');
+  });
+
+  it('applies memory cap after relevance filtering so relevant context is retained', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-limit-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-limit-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-limit-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: memory.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'memory.prompt.md'), 'MEMORY LIMIT PROMPT SENTINEL', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'implement_task:focus',
+      value: { phase: 'implement_task', focus: 'must survive relevance filtering' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'cross_run',
+      key: 'implement_task:carry-forward',
+      value: { relevantPhases: ['implement_task'], reminder: 'must survive relevance filtering' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntriesInDb({
+      stateDir,
+      entries: Array.from({ length: 510 }, (_, i) => ({
+        scope: 'session' as const,
+        key: `design_plan:noise-${String(i).padStart(3, '0')}`,
+        value: { phase: 'design_plan', i },
+        sourceIteration: 1,
+      })),
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-limit-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:carry-forward');
+    expect(prompt).not.toContain('key=design_plan:noise-000');
+    expect(prompt).toContain('MEMORY LIMIT PROMPT SENTINEL');
+  }, 60_000);
 
   it('fails fast when required MCP servers are missing for strict enforcement', async () => {
     const tmp = await makeTempDir('jeeves-runner-mcp-strict-');

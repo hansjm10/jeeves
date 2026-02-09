@@ -1,7 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_set_task_status`, `state_update_issue_control`, `state_append_progress`) instead of direct file-based state edits.
+- Use MCP state tools for issue/task/progress/memory updates (`state_get_issue`, `state_get_tasks`, `state_get_memory`, `state_upsert_memory`, `state_mark_memory_stale`, `state_set_task_status`, `state_update_issue_control`, `state_append_progress`) instead of direct file-based state edits.
 - Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
 - Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
 - Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
@@ -22,6 +22,7 @@ You do not decide whether the task passes — you implement and provide evidence
 </context>
 <inputs>
 - Issue/task state: `state_get_issue`, `state_get_tasks`
+- Structured memory: `state_get_memory`, `state_upsert_memory`, `state_mark_memory_stale`
 - Progress log updates: `state_append_progress`
 - Design document: Path from `state_get_issue` (`issue.designDocPath`) (reference only)
 - Task feedback: `.jeeves/task-feedback.md` (present only on retry)
@@ -55,6 +56,14 @@ acceptanceCriteria
 filesAllowed
 
 These define the entire scope of your work.
+
+Load structured memory context before coding:
+
+- Read `working_set` + `decisions` via `state_get_memory` (primary source for active context)
+- Read `session` and `cross_run` memory entries relevant to this phase
+- Use progress text only as secondary historical/audit context when memory is missing details
+
+If you discover an outdated decision, mark it stale with `state_mark_memory_stale` and write the replacement with `state_upsert_memory`.
 
 3. Read implementation plan (if present)
 
@@ -240,6 +249,7 @@ End the phase immediately
 11. Log implementation progress
 
 Append a progress entry with `state_append_progress`.
+If implementation introduced or revised durable context, upsert memory entries (and stale outdated ones) before ending the phase.
 
 </instructions>
 

@@ -7,11 +7,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendProgress,
+  deleteMemory,
   getIssue,
+  getMemory,
   getTasks,
+  markMemoryStale,
   putIssue,
   putTasks,
   setTaskStatus,
+  upsertMemory,
   updateIssueControlFields,
   updateIssueStatusFields,
 } from './stateStore.js';
@@ -96,5 +100,34 @@ describe('mcp-state store', () => {
 
     const raw = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
     expect(raw).toBe('line-one\nline-two\n');
+  });
+
+  it('manages structured memory entries', async () => {
+    const dataDir = await makeTempDir('jeeves-mcp-state-memory-');
+    const stateDir = path.join(dataDir, 'issues', 'acme', 'rocket', '77');
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const entry = await upsertMemory(stateDir, {
+      scope: 'decisions',
+      key: 'memory-schema',
+      value: { version: 1, owner: 'state-db' },
+      sourceIteration: 6,
+    });
+    expect(entry.scope).toBe('decisions');
+    expect(entry.key).toBe('memory-schema');
+    expect(entry.stale).toBe(false);
+
+    const visible = await getMemory(stateDir, { scope: 'decisions' });
+    expect(visible).toHaveLength(1);
+    expect(visible[0]?.value).toEqual({ version: 1, owner: 'state-db' });
+
+    expect(await markMemoryStale(stateDir, 'decisions', 'memory-schema')).toBe(true);
+    expect(await getMemory(stateDir, { scope: 'decisions' })).toHaveLength(0);
+    const includingStale = await getMemory(stateDir, { scope: 'decisions', includeStale: true });
+    expect(includingStale).toHaveLength(1);
+    expect(includingStale[0]?.stale).toBe(true);
+
+    expect(await deleteMemory(stateDir, 'decisions', 'memory-schema')).toBe(true);
+    expect(await getMemory(stateDir, { scope: 'decisions', includeStale: true })).toHaveLength(0);
   });
 });

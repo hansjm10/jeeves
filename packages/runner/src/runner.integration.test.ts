@@ -204,6 +204,55 @@ describe('runner integration', () => {
     expect(prompt.indexOf('CLAUDE SENTINEL')).toBeLessThan(prompt.indexOf('PHASE PROMPT SENTINEL'));
   });
 
+  it('skips memory preload when state DB is unavailable', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-skip-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, '.jeeves');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-skip-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-skip-fixture',
+        '  version: 1',
+        '  start: phase_one',
+        'phases:',
+        '  phase_one:',
+        '    type: execute',
+        '    prompt: phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'phase.prompt.md'), 'MEMORY SKIP SENTINEL', 'utf-8');
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-skip-fixture',
+      phaseName: 'phase_one',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'phase_one', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('MEMORY SKIP SENTINEL');
+    expect(prompt).not.toContain('<memory_context>');
+
+    const log = await fs.readFile(path.join(stateDir, 'last-run.log'), 'utf-8');
+    expect(log).toContain('[RUNNER] memory_context=disabled');
+    expect(log).toContain('state_db_unavailable');
+  });
+
   it('injects scoped memory into phase prompts with deterministic ordering and relevance filtering', async () => {
     const tmp = await makeTempDir('jeeves-runner-memory-prompt-');
     const workflowsDir = path.join(tmp, 'workflows');
@@ -271,6 +320,27 @@ describe('runner integration', () => {
     });
     upsertMemoryEntryInDb({
       stateDir,
+      scope: 'session',
+      key: 'implement_task:legacy-note',
+      value: { focus: 'legacy phase tag in key only' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'design_plan:legacy-note',
+      value: { focus: 'skip legacy key from other phase' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'untagged-note',
+      value: { focus: 'legacy session note without phase hints' },
+      sourceIteration: 4,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
       scope: 'cross_run',
       key: 'implement_task:carry-forward',
       value: { relevantPhases: ['implement_task'], reminder: 'keep prompt deterministic' },
@@ -313,9 +383,12 @@ describe('runner integration', () => {
     expect(prompt).toContain('key=current-task');
     expect(prompt).toContain('key=db-choice');
     expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:legacy-note');
     expect(prompt).toContain('key=implement_task:carry-forward');
     expect(prompt).not.toContain('key=obsolete-choice');
     expect(prompt).not.toContain('key=design_plan:focus');
+    expect(prompt).not.toContain('key=design_plan:legacy-note');
+    expect(prompt).not.toContain('key=untagged-note');
     expect(prompt).not.toContain('key=design_review:carry-forward');
     expect(prompt).toContain('MEMORY PROMPT SENTINEL');
   });

@@ -2,7 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
-import { appendRunLogLine, listMemoryEntriesFromDb, type MemoryEntry, upsertRunSession } from '@jeeves/state-db';
+import {
+  appendRunLogLine,
+  dbPathForDataDir,
+  deriveDataDirFromStateDir,
+  listMemoryEntriesFromDb,
+  type MemoryEntry,
+  upsertRunSession,
+} from '@jeeves/state-db';
 
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { buildMcpServersConfig } from './mcpConfig.js';
@@ -231,9 +238,11 @@ function isPhaseTaggedInKey(key: string, phaseName: string): boolean {
 }
 
 function isSessionMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (!normalizedPhase) return false;
   const hints = toPhaseHints(entry.value);
-  if (hints.length === 0) return true;
-  return hints.includes(phaseName.trim().toLowerCase());
+  if (hints.length > 0) return hints.includes(normalizedPhase);
+  return isPhaseTaggedInKey(entry.key, normalizedPhase);
 }
 
 function isCrossRunMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
@@ -291,6 +300,42 @@ function buildScopedMemoryBlock(stateDir: string, phaseName: string): string {
     sections.join('\n\n'),
     '</memory_context>',
   ].join('\n\n');
+}
+
+type MemoryBlockResult = Readonly<{
+  block: string;
+  enabled: boolean;
+  reason: string;
+}>;
+
+function formatErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  return String(err);
+}
+
+async function buildScopedMemoryBlockIfAvailable(stateDir: string, phaseName: string): Promise<MemoryBlockResult> {
+  const dbPath = dbPathForDataDir(deriveDataDirFromStateDir(stateDir));
+  try {
+    const stat = await fs.stat(dbPath);
+    if (!stat.isFile()) {
+      return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath}` };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath}` };
+    }
+    return { block: '', enabled: false, reason: `state_db_unavailable path=${dbPath} error=${formatErrorMessage(err)}` };
+  }
+
+  try {
+    return {
+      block: buildScopedMemoryBlock(stateDir, phaseName),
+      enabled: true,
+      reason: `state_db_available path=${dbPath}`,
+    };
+  } catch (err) {
+    return { block: '', enabled: false, reason: `state_db_read_failed path=${dbPath} error=${formatErrorMessage(err)}` };
+  }
 }
 
 async function buildPromptWithPrependedInstructions(
@@ -356,12 +401,16 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     });
   }
 
+  const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
+  const memoryBlockResult = await buildScopedMemoryBlockIfAvailable(params.stateDir, params.phaseName);
+  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(
+    phasePrompt,
+    params.cwd,
+    memoryBlockResult.block,
+  );
+
   await markStarted(params.progressPath);
   await markPhase(params.progressPath, params.phaseName);
-
-  const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
-  const memoryBlock = buildScopedMemoryBlock(params.stateDir, params.phaseName);
-  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(phasePrompt, params.cwd, memoryBlock);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -392,7 +441,9 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     if (prependedFiles.length > 0) {
       await logLine(`[RUNNER] prepended_instructions=${prependedFiles.join(',')}`);
     }
-    await logLine(`[RUNNER] memory_context=enabled`);
+    await logLine(
+      `[RUNNER] memory_context=${memoryBlockResult.enabled ? 'enabled' : 'disabled'} ${memoryBlockResult.reason}`,
+    );
 
     const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd, {
       stateDir: params.stateDir,

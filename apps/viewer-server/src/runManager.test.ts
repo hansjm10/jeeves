@@ -244,6 +244,81 @@ describe('RunManager', () => {
     expect(done).toBe(false);
   });
 
+  it('computes tool-usage diagnostics and appends warn-only viewer log entries', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 7;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: 'fixture-trivial', branch: 'issue/7', notes: '' }, null, 2) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify(
+        {
+          tool_calls: [
+            { name: 'mcp:pruner/grep', input: { pattern: 'foo', path: 'src/a.ts' } },
+            { name: 'mcp:pruner/grep', input: { pattern: 'foo', path: 'src/a.ts' } },
+            { name: 'mcp:pruner/grep', input: { pattern: 'bar', path: 'src/a.ts' } },
+            { name: 'mcp:pruner/grep', input: { pattern: 'baz', path: 'src/a.ts' } },
+            { name: 'mcp:pruner/read', input: { file_path: 'src/a.ts' } },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    const viewerLogPath = path.join(stateDir, 'viewer-run.log');
+    const diagnostics = await (
+      rm as unknown as {
+        computeIterationToolUsageDiagnostics(params: { viewerLogPath: string }): Promise<{
+          warnings: string[];
+          grep_calls: number;
+          read_calls: number;
+        } | null>;
+      }
+    ).computeIterationToolUsageDiagnostics({ viewerLogPath });
+
+    expect(diagnostics).not.toBeNull();
+    expect(diagnostics?.grep_calls).toBe(4);
+    expect(diagnostics?.read_calls).toBe(1);
+    expect(diagnostics?.warnings.length).toBeGreaterThan(0);
+
+    const summary = (
+      rm as unknown as { toolUsageDiagnosticsSummary: { iterations_with_diagnostics: number } | null }
+    ).toolUsageDiagnosticsSummary;
+    expect(summary?.iterations_with_diagnostics).toBe(1);
+
+    const viewerLog = await fs.readFile(viewerLogPath, 'utf-8');
+    expect(viewerLog).toContain('[TOOL_USAGE]');
+  });
+
   it('does not stop via completion promise after advancing to a non-terminal phase', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');

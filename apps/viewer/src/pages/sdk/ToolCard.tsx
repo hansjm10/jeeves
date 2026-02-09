@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import type { ToolState, ToolStatus } from './useToolState.js';
 import { JsonSyntax } from './JsonSyntax.js';
 import { getToolRenderer, GenericTool } from './tools/index.js';
+import { normalizeToolInputForRenderer, parseToolResponse } from './responseFormat.js';
 
 type Props = {
   tool: ToolState;
@@ -41,6 +42,8 @@ function StatusIndicator({ status }: { status: ToolStatus }) {
 export function ToolCard({ tool, onCopy }: Props) {
   const [showJson, setShowJson] = useState(false);
   const SpecificRenderer = getToolRenderer(tool.name);
+  const displayInput = normalizeToolInputForRenderer(tool.name, tool.input);
+  const parsedResponse = parseToolResponse(tool.response_text);
 
   const toggleJson = useCallback(() => {
     setShowJson(prev => !prev);
@@ -82,9 +85,24 @@ export function ToolCard({ tool, onCopy }: Props) {
         {showJson ? (
           <JsonSyntax data={tool.input} className="sdk-tool-json" />
         ) : SpecificRenderer ? (
-          <SpecificRenderer input={tool.input} />
+          <SpecificRenderer input={displayInput} />
         ) : (
           <GenericTool name={tool.name} input={tool.input} />
+        )}
+        {parsedResponse !== null && (
+          <div className="sdk-tool-response">
+            <div className="sdk-tool-response-header">
+              <span>Response</span>
+              {tool.response_truncated ? (
+                <span className="sdk-tool-response-truncated">truncated preview</span>
+              ) : null}
+            </div>
+            {parsedResponse.kind === 'json' ? (
+              <JsonSyntax data={parsedResponse.data} className="sdk-tool-json sdk-tool-response-json" />
+            ) : (
+              <pre className="sdk-tool-response-body">{parsedResponse.text}</pre>
+            )}
+          </div>
         )}
       </div>
     </div>

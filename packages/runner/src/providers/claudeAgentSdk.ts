@@ -40,9 +40,9 @@ function safeCompactString(value: unknown): string {
   }
 }
 
-function truncate(input: string, max = 2000): string {
-  if (input.length <= max) return input;
-  return input.slice(0, max);
+function truncateWithMeta(input: string, max = 2000): { text: string; truncated: boolean } {
+  if (input.length <= max) return { text: input, truncated: false };
+  return { text: input.slice(0, max), truncated: true };
 }
 
 function extractTextFromMessageParam(message: SDKUserMessage['message']): string {
@@ -255,10 +255,13 @@ export class ClaudeAgentProvider implements AgentProvider {
               if (input.hook_event_name !== 'PostToolUse') return { continue: true };
               const startedMs = toolStartMsById.get(input.tool_use_id);
               const durationMs = startedMs ? Date.now() - startedMs : null;
+              const response = truncateWithMeta(safeCompactString(input.tool_response));
               pendingEvents.push({
                 type: 'tool_result',
                 toolUseId: input.tool_use_id,
-                content: truncate(safeCompactString(input.tool_response)),
+                content: response.text,
+                response_text: response.text,
+                response_truncated: response.truncated,
                 durationMs,
                 isError: false,
                 timestamp: nowIso(),
@@ -275,10 +278,13 @@ export class ClaudeAgentProvider implements AgentProvider {
               if (input.hook_event_name !== 'PostToolUseFailure') return { continue: true };
               const startedMs = toolStartMsById.get(input.tool_use_id);
               const durationMs = startedMs ? Date.now() - startedMs : null;
+              const response = truncateWithMeta(input.error);
               pendingEvents.push({
                 type: 'tool_result',
                 toolUseId: input.tool_use_id,
-                content: truncate(input.error),
+                content: response.text,
+                response_text: response.text,
+                response_truncated: response.truncated,
                 durationMs,
                 isError: true,
                 timestamp: nowIso(),

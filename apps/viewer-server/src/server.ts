@@ -422,12 +422,16 @@ function emitSdkSnapshot(send: (event: string, data: unknown) => void, snapshot:
     send('sdk-tool-start', { tool_use_id: toolUseId, name, input: input ?? {} });
     const durationMs = (tc as { duration_ms?: unknown }).duration_ms;
     const isError = (tc as { is_error?: unknown }).is_error;
+    const responseText = (tc as { response_text?: unknown }).response_text;
+    const responseTruncated = (tc as { response_truncated?: unknown }).response_truncated;
     if (durationMs !== undefined || isError !== undefined) {
       send('sdk-tool-complete', {
         tool_use_id: toolUseId,
         name,
         duration_ms: durationMs ?? 0,
         is_error: isError ?? false,
+        ...(responseText !== undefined ? { response_text: responseText } : {}),
+        ...(responseTruncated !== undefined ? { response_truncated: responseTruncated } : {}),
       });
     }
   }

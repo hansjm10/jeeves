@@ -38,6 +38,10 @@ Read file contents with optional context-focused pruning.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `file_path` | string | Yes | Absolute or relative path to the file. Relative paths resolve against `MCP_PRUNER_CWD`. |
+| `start_line` | number | No | 1-based inclusive start line for focused reads (must be paired with `end_line`). |
+| `end_line` | number | No | 1-based inclusive end line for focused reads (must be paired with `start_line`). |
+| `around_line` | number | No | 1-based anchor line for around/radius reads (mutually exclusive with `start_line`/`end_line`). |
+| `radius` | number | No | Context radius used with `around_line` (default `20`). |
 | `context_focus_question` | string | No | When provided and pruning is enabled, prunes output to focus on this question. |
 
 ### bash
@@ -55,8 +59,11 @@ Search files with grep and optional context-focused pruning.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `pattern` | string | Yes | Pattern to search for (regex). |
+| `pattern` | string | Cond. | Single pattern to search for (regex). Exactly one of `pattern` or `patterns` is required. |
+| `patterns` | string[] | Cond. | Batch patterns searched in one call. Exactly one of `pattern` or `patterns` is required. |
 | `path` | string | No | File/directory path to search (defaults to `.`). |
+| `context_lines` | number | No | Context lines around matches (`0-50`, default `0`). |
+| `max_matches` | number | No | Max output lines before truncation (`1-1000`, default `200`). |
 | `context_focus_question` | string | No | When provided and pruning is enabled, prunes output to focus on this question. |
 
 ## Example: tools/call with read and context_focus_question

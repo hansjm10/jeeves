@@ -45,7 +45,20 @@ const toolRegistry: Record<string, ComponentType<ToolRendererProps>> = {
 
 export function getToolRenderer(toolName: string): ComponentType<ToolRendererProps> | null {
   // Try exact match first, then lowercase
-  return toolRegistry[toolName] || toolRegistry[toolName.toLowerCase()] || null;
+  const direct = toolRegistry[toolName] || toolRegistry[toolName.toLowerCase()];
+  if (direct) return direct;
+
+  // MCP tool names are emitted like mcp:<server>/<tool>.
+  const lower = toolName.toLowerCase();
+  if (lower.startsWith('mcp:')) {
+    const slashIdx = lower.lastIndexOf('/');
+    if (slashIdx >= 0 && slashIdx < lower.length - 1) {
+      const mcpToolName = lower.slice(slashIdx + 1);
+      return toolRegistry[mcpToolName] || null;
+    }
+  }
+
+  return null;
 }
 
 export { GenericTool };

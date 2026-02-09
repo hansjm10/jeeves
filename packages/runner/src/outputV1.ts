@@ -16,6 +16,8 @@ export type SdkOutputV1ToolCall = Readonly<{
   duration_ms?: number | null;
   timestamp?: string;
   is_error?: boolean;
+  response_text?: string;
+  response_truncated?: boolean;
   [key: string]: unknown;
 }>;
 
@@ -41,4 +43,3 @@ export type SdkOutputV1 = Readonly<{
   error?: string | null;
   error_type?: string | null;
 }>;
-

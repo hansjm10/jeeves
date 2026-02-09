@@ -15,12 +15,31 @@ import {
   type PlatformResolveDeps,
 } from "../platform.js";
 
+const DEFAULT_MAX_MATCHES = 200;
+const MAX_CONTEXT_LINES = 50;
+const MAX_MAX_MATCHES = 1000;
+
 /** Zod schema for grep tool arguments. */
-export const GrepArgsSchema = z.object({
-  pattern: z.string(),
-  path: z.string().optional(),
-  context_focus_question: z.string().optional(),
-});
+export const GrepArgsSchema = z
+  .object({
+    pattern: z.string().optional(),
+    patterns: z.array(z.string()).min(1).max(50).optional(),
+    path: z.string().optional(),
+    context_lines: z.number().int().min(0).max(MAX_CONTEXT_LINES).optional(),
+    max_matches: z.number().int().min(1).max(MAX_MAX_MATCHES).optional(),
+    context_focus_question: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasPattern = value.pattern !== undefined;
+    const hasPatterns = value.patterns !== undefined;
+    if (hasPattern === hasPatterns) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Exactly one of pattern or patterns is required",
+        path: ["pattern"],
+      });
+    }
+  });
 
 export type GrepArgs = z.infer<typeof GrepArgsSchema>;
 
@@ -104,6 +123,7 @@ async function execGrepFallback(
   pattern: string,
   searchPath: string,
   cwd: string,
+  contextLines: number,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   let regex: RegExp;
   try {
@@ -150,11 +170,47 @@ async function execGrepFallback(
     }
 
     const lines = content.split(/\r?\n/);
+    const displayPath = toDisplayPath(cwd, filePath);
+    const matchedLineIndexes: number[] = [];
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i] ?? "";
-      if (!lineMatches(regex, line)) continue;
-      stdout += `${toDisplayPath(cwd, filePath)}:${i + 1}:${line}\n`;
-      hasMatches = true;
+      if (lineMatches(regex, line)) {
+        matchedLineIndexes.push(i);
+      }
+    }
+    if (matchedLineIndexes.length === 0) continue;
+    hasMatches = true;
+
+    if (contextLines <= 0) {
+      for (const i of matchedLineIndexes) {
+        stdout += `${displayPath}:${i + 1}:${lines[i] ?? ""}\n`;
+      }
+      continue;
+    }
+
+    type Range = { start: number; end: number; matchLines: Set<number> };
+    const ranges: Range[] = [];
+    for (const idx of matchedLineIndexes) {
+      const start = Math.max(0, idx - contextLines);
+      const end = Math.min(lines.length - 1, idx + contextLines);
+      const last = ranges[ranges.length - 1];
+      if (!last || start > last.end + 1) {
+        ranges.push({ start, end, matchLines: new Set<number>([idx]) });
+      } else {
+        last.end = Math.max(last.end, end);
+        last.matchLines.add(idx);
+      }
+    }
+
+    for (let r = 0; r < ranges.length; r += 1) {
+      const range = ranges[r]!;
+      for (let i = range.start; i <= range.end; i += 1) {
+        const sep = range.matchLines.has(i) ? ":" : "-";
+        stdout += `${displayPath}${sep}${i + 1}${sep}${lines[i] ?? ""}\n`;
+      }
+      if (r < ranges.length - 1) {
+        stdout += "--\n";
+      }
     }
   }
 
@@ -174,13 +230,20 @@ function execExternalGrep(
   pattern: string,
   searchPath: string,
   cwd: string,
+  contextLines: number,
   spawnImpl: SpawnLike,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
+    const grepArgs = ["-Ern", "--color=never"];
+    if (contextLines > 0) {
+      grepArgs.push("-C", String(contextLines));
+    }
+    grepArgs.push(pattern, searchPath);
+
     const child = spawnImpl(
       grepCommand,
       // Use ERE so alternation like `foo|bar` behaves as expected.
-      ["-Ern", "--color=never", pattern, searchPath],
+      grepArgs,
       {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
@@ -218,6 +281,7 @@ async function execGrep(
     pattern: string;
     searchPath: string;
     cwd: string;
+    contextLines: number;
   },
   deps: GrepRuntimeDeps = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -231,7 +295,7 @@ async function execGrep(
       });
 
   if (!grepCommand) {
-    return execGrepFallback(args.pattern, args.searchPath, args.cwd);
+    return execGrepFallback(args.pattern, args.searchPath, args.cwd, args.contextLines);
   }
 
   const spawnImpl: SpawnLike = deps.spawnImpl ?? ((command, commandArgs, options) => spawn(command, commandArgs as string[], options));
@@ -241,14 +305,98 @@ async function execGrep(
       args.pattern,
       args.searchPath,
       args.cwd,
+      args.contextLines,
       spawnImpl,
     );
   } catch (err) {
     if (isGrepSpawnErrorFallbackCandidate(err)) {
-      return execGrepFallback(args.pattern, args.searchPath, args.cwd);
+      return execGrepFallback(args.pattern, args.searchPath, args.cwd, args.contextLines);
     }
     throw err;
   }
+}
+
+function truncateMatchLines(
+  output: string,
+  maxMatches: number,
+): { text: string; truncatedLineCount: number } {
+  const lines = output.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length <= maxMatches) return { text: output, truncatedLineCount: 0 };
+
+  const keptLines = lines.slice(0, maxMatches);
+  const truncatedLineCount = lines.length - maxMatches;
+  return {
+    text: `${keptLines.join("\n")}\n(truncated ${truncatedLineCount} lines)\n`,
+    truncatedLineCount,
+  };
+}
+
+type SinglePatternResult = {
+  text: string;
+  pruneable: boolean;
+  errored: boolean;
+};
+
+async function runSinglePattern(
+  params: {
+    pattern: string;
+    searchPath: string;
+    cwd: string;
+    contextLines: number;
+    maxMatches: number;
+  },
+  deps: GrepRuntimeDeps,
+): Promise<SinglePatternResult> {
+  const { stdout, stderr, exitCode } = await execGrep(
+    {
+      pattern: params.pattern,
+      searchPath: params.searchPath,
+      cwd: params.cwd,
+      contextLines: params.contextLines,
+    },
+    deps,
+  );
+
+  if (exitCode === 0) {
+    const truncated = truncateMatchLines(stdout, params.maxMatches);
+    return {
+      text: truncated.text,
+      pruneable: truncated.text.length > 0,
+      errored: false,
+    };
+  }
+
+  if (exitCode === 1) {
+    return {
+      text: "(no matches found)",
+      pruneable: false,
+      errored: false,
+    };
+  }
+
+  if (stderr.length > 0) {
+    return {
+      text: `Error: ${stderr}`,
+      pruneable: false,
+      errored: true,
+    };
+  }
+
+  if (stdout.length > 0) {
+    const truncated = truncateMatchLines(stdout, params.maxMatches);
+    return {
+      text: truncated.text,
+      pruneable: truncated.text.length > 0,
+      errored: false,
+    };
+  }
+
+  return {
+    text: "(no matches found)",
+    pruneable: false,
+    errored: false,
+  };
 }
 
 /**
@@ -264,46 +412,47 @@ export async function handleGrep(
   const envCwd = deps.env?.MCP_PRUNER_CWD ?? process.env.MCP_PRUNER_CWD;
   const cwd = deps.cwd ?? envCwd ?? process.cwd();
   const searchPath = args.path ?? ".";
+  const contextLines = args.context_lines ?? 0;
+  const maxMatches = args.max_matches ?? DEFAULT_MAX_MATCHES;
+  const patterns = args.pattern !== undefined ? [args.pattern] : args.patterns ?? [];
 
   let text: string;
   let isPruneable = false;
+  let hasErrors = false;
 
   try {
-    const { stdout, stderr, exitCode } = await execGrep(
-      {
-        pattern: args.pattern,
-        searchPath,
-        cwd,
-      },
-      deps,
-    );
-
-    if (exitCode === 0) {
-      // Matches found – return stdout verbatim.
-      text = stdout;
-      isPruneable = true;
-    } else if (exitCode === 1) {
-      // No matches.
-      text = "(no matches found)";
-    } else {
-      // Exit code 2 (or other non-0/1).
-      if (stderr.length > 0) {
-        text = `Error: ${stderr}`;
-      } else if (stdout.length > 0) {
-        text = stdout;
-        isPruneable = true;
+    const outputs: string[] = [];
+    for (const pattern of patterns) {
+      const result = await runSinglePattern(
+        {
+          pattern,
+          searchPath,
+          cwd,
+          contextLines,
+          maxMatches,
+        },
+        deps,
+      );
+      if (patterns.length === 1) {
+        outputs.push(result.text);
       } else {
-        text = "(no matches found)";
+        const body = result.text.endsWith("\n") ? result.text : `${result.text}\n`;
+        outputs.push(`== pattern: ${pattern} ==\n${body}`.trimEnd());
       }
+      isPruneable = isPruneable || result.pruneable;
+      hasErrors = hasErrors || result.errored;
     }
+    text = outputs.join(patterns.length > 1 ? "\n\n" : "");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     text = `Error executing grep: ${message}`;
+    hasErrors = true;
   }
 
   // Attempt pruning when eligible.
   if (
     isPruneable &&
+    !hasErrors &&
     text.length > 0 &&
     args.context_focus_question
   ) {

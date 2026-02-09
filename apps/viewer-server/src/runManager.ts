@@ -45,6 +45,12 @@ import {
 } from './workerSandbox.js';
 import { decideQuickFixRouting } from './quickFixRouter.js';
 import { terminateProcess } from './processTermination.js';
+import {
+  computeToolUsageDiagnosticsFromSdkOutputRaw,
+  mergeToolUsageDiagnosticsSummary,
+  type ToolUsageDiagnostics,
+  type ToolUsageDiagnosticsSummary,
+} from './toolUsageDiagnostics.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -296,6 +302,7 @@ export class RunManager {
   private runDir: string | null = null;
   private stopReason: string | null = null;
   private runArchiveMeta: Record<string, unknown> | null = null;
+  private toolUsageDiagnosticsSummary: ToolUsageDiagnosticsSummary | null = null;
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
@@ -428,6 +435,7 @@ export class RunManager {
     this.stopRequested = false;
     this.stopReason = null;
     this.runArchiveMeta = null;
+    this.toolUsageDiagnosticsSummary = null;
     // Reset effectiveMaxParallelTasks to avoid carrying stale values across runs
     this.effectiveMaxParallelTasks = null;
     this.runId = makeRunId();
@@ -777,6 +785,47 @@ export class RunManager {
     return false;
   }
 
+  private async computeIterationToolUsageDiagnostics(params: {
+    viewerLogPath: string;
+  }): Promise<ToolUsageDiagnostics | null> {
+    if (!this.stateDir) return null;
+
+    let raw: string | null = null;
+    if (this.runId) {
+      const artifact = readRunArtifact({
+        dataDir: this.dataDir,
+        runId: this.runId,
+        scope: 'canonical',
+        name: 'sdk-output.json',
+      });
+      raw = artifact?.content ? artifact.content.toString('utf-8') : null;
+    }
+    if (!raw) {
+      raw = await fs.readFile(path.join(this.stateDir, 'sdk-output.json'), 'utf-8').catch(() => null);
+    }
+    if (!raw) return null;
+
+    const diagnostics = computeToolUsageDiagnosticsFromSdkOutputRaw(raw);
+    if (!diagnostics) {
+      await this.appendViewerLog(
+        params.viewerLogPath,
+        '[TOOL_USAGE] Could not parse sdk-output.json for diagnostics',
+      );
+      return null;
+    }
+
+    this.toolUsageDiagnosticsSummary = mergeToolUsageDiagnosticsSummary(
+      this.toolUsageDiagnosticsSummary,
+      diagnostics,
+    );
+
+    for (const warning of diagnostics.warnings) {
+      await this.appendViewerLog(params.viewerLogPath, `[TOOL_USAGE] ${warning}`);
+    }
+
+    return diagnostics;
+  }
+
   private async runLoop(params: {
     provider: 'claude' | 'fake' | 'codex';
     maxIterations: number;
@@ -1120,6 +1169,10 @@ export class RunManager {
             })
           : null;
 
+        const toolUsageDiagnostics = await this.computeIterationToolUsageDiagnostics({
+          viewerLogPath,
+        });
+
         await this.archiveIteration({
           iteration,
           workflow: workflowName,
@@ -1132,6 +1185,7 @@ export class RunManager {
           phase_report_source: phaseCommitResult?.source ?? null,
           phase_report_committed_fields: Object.keys(phaseCommitResult?.committedStatusUpdates ?? {}).sort(),
           phase_report_ignored_fields: (phaseCommitResult?.ignoredStatusKeys ?? []).slice(),
+          tool_usage_diagnostics: toolUsageDiagnostics,
         });
 
         if (exitCode !== 0) {
@@ -1713,6 +1767,7 @@ export class RunManager {
     phase_report_source?: string | null;
     phase_report_committed_fields?: string[];
     phase_report_ignored_fields?: string[];
+    tool_usage_diagnostics?: ToolUsageDiagnostics | null;
   }): Promise<void> {
     if (!this.stateDir || !this.runId) return;
     if (this.dbTelemetryEnabled()) {
@@ -1737,6 +1792,24 @@ export class RunManager {
     copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
     copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
     await Promise.allSettled(copies);
+
+    if (params.tool_usage_diagnostics) {
+      if (this.dbTelemetryEnabled()) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: `tool-usage-diagnostics-${String(params.iteration).padStart(3, '0')}.json`,
+          mime: 'application/json',
+          content: Buffer.from(`${JSON.stringify(params.tool_usage_diagnostics, null, 2)}\n`, 'utf-8'),
+        });
+      }
+      await writeJsonAtomic(
+        path.join(iterDir, 'tool-usage-diagnostics.json'),
+        params.tool_usage_diagnostics,
+      ).catch(() => void 0);
+    }
+
     const issueSnapshot = await readIssueJson(this.stateDir).catch(() => null);
     if (issueSnapshot) {
       await writeJsonAtomic(path.join(iterDir, 'issue.json'), issueSnapshot).catch(() => void 0);
@@ -1812,6 +1885,9 @@ export class RunManager {
       max_iterations: this.status.max_iterations,
       current_iteration: this.status.current_iteration,
       command: this.status.command,
+      ...(this.toolUsageDiagnosticsSummary
+        ? { tool_usage_diagnostics_summary: this.toolUsageDiagnosticsSummary }
+        : {}),
     });
   }
 

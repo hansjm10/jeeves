@@ -14,6 +14,11 @@ function truncate(input: string, max = 2000): string {
   return input.slice(0, max);
 }
 
+function truncateWithMeta(input: string, max = 2000): { text: string; truncated: boolean } {
+  if (input.length <= max) return { text: input, truncated: false };
+  return { text: input.slice(0, max), truncated: true };
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') return false;
   const proto = Object.getPrototypeOf(value);
@@ -86,14 +91,19 @@ function toolInputForItem(itemType: string, item: Record<string, unknown>): Reco
   return toRecord(item);
 }
 
-function toolResultForItem(itemType: string, item: Record<string, unknown>): { content: string; isError: boolean } {
+function toolResultForItem(itemType: string, item: Record<string, unknown>): {
+  content: string;
+  isError: boolean;
+  responseTruncated: boolean;
+} {
   if (itemType === 'command_execution') {
     const aggregated = getString(item, 'aggregated_output') ?? '';
     const exitCode = getNumber(item, 'exit_code');
     const status = getString(item, 'status');
     const isError = status === 'failed' || (typeof exitCode === 'number' && exitCode !== 0);
     const suffix = typeof exitCode === 'number' ? `\n[exit_code] ${exitCode}` : '';
-    return { content: truncate(`${aggregated}${suffix}`.trim()), isError };
+    const truncated = truncateWithMeta(`${aggregated}${suffix}`.trim());
+    return { content: truncated.text, isError, responseTruncated: truncated.truncated };
   }
 
   if (itemType === 'mcp_tool_call') {
@@ -101,26 +111,29 @@ function toolResultForItem(itemType: string, item: Record<string, unknown>): { c
     const isError = status === 'failed';
     if (isError) {
       const err = getRecord(item, 'error');
-      return { content: truncate(getString(err ?? {}, 'message') ?? 'unknown error'), isError: true };
+      const truncated = truncateWithMeta(getString(err ?? {}, 'message') ?? 'unknown error');
+      return { content: truncated.text, isError: true, responseTruncated: truncated.truncated };
     }
     const result = getRecord(item, 'result');
     const structured = result ? result.structured_content : undefined;
-    const content = truncate(safeCompactString(structured ?? result ?? ''));
-    return { content, isError: false };
+    const truncated = truncateWithMeta(safeCompactString(structured ?? result ?? ''));
+    return { content: truncated.text, isError: false, responseTruncated: truncated.truncated };
   }
 
   if (itemType === 'web_search') {
-    return { content: 'web_search completed', isError: false };
+    return { content: 'web_search completed', isError: false, responseTruncated: false };
   }
 
   if (itemType === 'file_change') {
     const status = getString(item, 'status') ?? 'completed';
     const isError = status === 'failed';
     const details = truncate(safeCompactString(item.changes));
-    return { content: truncate(`file_change ${status}\n${details}`.trim()), isError };
+    const truncated = truncateWithMeta(`file_change ${status}\n${details}`.trim());
+    return { content: truncated.text, isError, responseTruncated: truncated.truncated };
   }
 
-  return { content: truncate(safeCompactString(item)), isError: false };
+  const truncated = truncateWithMeta(safeCompactString(item));
+  return { content: truncated.text, isError: false, responseTruncated: truncated.truncated };
 }
 
 function extractMessageText(item: Record<string, unknown>): string | null {
@@ -309,6 +322,8 @@ export function mapCodexEventToProviderEvents(
         type: 'tool_result',
         toolUseId: itemId,
         content: result.content,
+        response_text: result.content,
+        response_truncated: result.responseTruncated,
         ...(result.isError ? { isError: true } : {}),
         durationMs,
         timestamp: nowIsoFn(),

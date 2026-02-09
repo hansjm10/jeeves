@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -158,9 +159,29 @@ describe('default workflow validation', () => {
     expect(prompt).toContain('Call `state_get_issue` to obtain:');
     expect(prompt).toContain('Call `state_get_tasks` to load the decomposed task list.');
     expect(prompt).toContain('Check the `state_get_tasks` response:');
+    expect(prompt).toContain('Investigation loop is mandatory');
+    expect(prompt).toContain('Treat grep hits as evidence of existence only');
+    expect(prompt).toContain('Do not repeat an identical grep query');
 
     // Guard against regressions back to file-based canonical task loading.
     expect(prompt).not.toContain('Load `.jeeves/tasks.json` to get the decomposed task list.');
     expect(prompt).not.toContain('Check `.jeeves/tasks.json`:');
+  });
+
+  it('top-level prompts enforce grep-to-read investigation loop guidance', async () => {
+    const promptsDir = fileURLToPath(new URL('../../../prompts', import.meta.url));
+    const entries = await fs.readdir(promptsDir, { withFileTypes: true });
+    const promptFiles = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => path.join(promptsDir, entry.name));
+
+    expect(promptFiles.length).toBeGreaterThan(0);
+
+    for (const promptFile of promptFiles) {
+      const prompt = await fs.readFile(promptFile, 'utf-8');
+      expect(prompt).toContain('Investigation loop is mandatory');
+      expect(prompt).toContain('Treat grep hits as evidence of existence only');
+      expect(prompt).toContain('Do not repeat an identical grep query');
+    }
   });
 });

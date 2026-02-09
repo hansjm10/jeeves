@@ -227,6 +227,8 @@ export type SdkToolCompleteData = Readonly<{
   name: string;
   duration_ms: number;
   is_error: boolean;
+  response_text?: string;
+  response_truncated?: boolean;
 }>;
 
 export type SdkMessageData = Readonly<{

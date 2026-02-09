@@ -101,11 +101,34 @@ const bashInputShape = {
 };
 
 const grepInputShape = {
-  pattern: z.string().describe("Pattern to search for (regex)"),
+  pattern: z
+    .string()
+    .optional()
+    .describe("Single pattern to search for (regex)"),
+  patterns: z
+    .array(z.string())
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Batch patterns to search in one tool call"),
   path: z
     .string()
     .optional()
     .describe("File/dir path to search (defaults to '.')"),
+  context_lines: z
+    .number()
+    .int()
+    .min(0)
+    .max(50)
+    .optional()
+    .describe("Optional context lines around grep matches"),
+  max_matches: z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe("Optional max output lines before truncation"),
   context_focus_question: z
     .string()
     .optional()
@@ -140,9 +163,110 @@ server.tool(
 // Compiled Zod schemas for validation in the custom handler
 // ---------------------------------------------------------------------------
 
-const readSchema = z.object(readInputSchema).strict();
+const readSchema = z
+  .object(readInputSchema)
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasStart = value.start_line !== undefined;
+    const hasEnd = value.end_line !== undefined;
+    const hasAround = value.around_line !== undefined;
+    const hasRadius = value.radius !== undefined;
+    const hasRange = hasStart || hasEnd;
+
+    if (hasRange && (!hasStart || !hasEnd)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "start_line and end_line must be provided together",
+        path: ["start_line"],
+      });
+    }
+
+    if (hasStart && hasEnd && value.start_line! > value.end_line!) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "start_line must be <= end_line",
+        path: ["start_line"],
+      });
+    }
+
+    if (hasRadius && !hasAround) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "radius requires around_line",
+        path: ["radius"],
+      });
+    }
+
+    if (hasRange && hasAround) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Use either start/end range or around_line/radius, not both",
+        path: ["around_line"],
+      });
+    }
+  });
 const bashSchema = z.object(bashInputShape).strict();
-const grepSchema = z.object(grepInputShape).strict();
+const grepSchema = z
+  .object(grepInputShape)
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasPattern = value.pattern !== undefined;
+    const hasPatterns = value.patterns !== undefined;
+    if (hasPattern === hasPatterns) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Exactly one of pattern or patterns is required",
+        path: ["pattern"],
+      });
+    }
+  });
+
+const GREP_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+const GREP_DUPLICATE_CACHE_LIMIT = 512;
+const grepQueryHistory = new Map<string, number>();
+
+function makeGrepQueryKey(args: {
+  pattern?: string;
+  patterns?: string[];
+  path?: string;
+  context_lines?: number;
+  max_matches?: number;
+}): string {
+  return JSON.stringify({
+    pattern: args.pattern ?? null,
+    patterns: args.patterns ?? null,
+    path: args.path ?? ".",
+    context_lines: args.context_lines ?? 0,
+    max_matches: args.max_matches ?? 200,
+  });
+}
+
+function isDuplicateGrepQuery(args: {
+  pattern?: string;
+  patterns?: string[];
+  path?: string;
+  context_lines?: number;
+  max_matches?: number;
+}): boolean {
+  const now = Date.now();
+  for (const [key, ts] of grepQueryHistory) {
+    if (now - ts > GREP_DUPLICATE_WINDOW_MS) {
+      grepQueryHistory.delete(key);
+    }
+  }
+
+  const key = makeGrepQueryKey(args);
+  const prev = grepQueryHistory.get(key);
+  grepQueryHistory.set(key, now);
+
+  while (grepQueryHistory.size > GREP_DUPLICATE_CACHE_LIMIT) {
+    const firstKey = grepQueryHistory.keys().next().value;
+    if (firstKey === undefined) break;
+    grepQueryHistory.delete(firstKey);
+  }
+
+  return prev !== undefined && now - prev <= GREP_DUPLICATE_WINDOW_MS;
+}
 
 // ---------------------------------------------------------------------------
 // Override the CallToolRequestSchema handler installed by server.tool() so
@@ -182,7 +306,13 @@ server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!parsed.success) {
         throw jsonRpcError(ErrorCode.InvalidParams, "Invalid params");
       }
-      return handleGrep(parsed.data);
+      const duplicate = isDuplicateGrepQuery(parsed.data);
+      const result = await handleGrep(parsed.data);
+      if (duplicate && result.content[0]) {
+        result.content[0].text =
+          `[diagnostic] duplicate grep query detected; prefer read around prior anchor.\n${result.content[0].text}`;
+      }
+      return result;
     }
 
     default:

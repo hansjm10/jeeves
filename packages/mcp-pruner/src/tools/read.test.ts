@@ -30,6 +30,13 @@ describe('read tool', () => {
       // The schema should accept undefined
       expect(readInputSchema.context_focus_question.isOptional()).toBe(true);
     });
+
+    it('defines focused read fields as optional numbers', () => {
+      expect(readInputSchema.start_line?.isOptional()).toBe(true);
+      expect(readInputSchema.end_line?.isOptional()).toBe(true);
+      expect(readInputSchema.around_line?.isOptional()).toBe(true);
+      expect(readInputSchema.radius?.isOptional()).toBe(true);
+    });
   });
 
   describe('path resolution', () => {
@@ -115,6 +122,45 @@ describe('read tool', () => {
       );
 
       expect(result.content[0].text).toBe('');
+    });
+
+    it('supports explicit line range reads with numbered output', async () => {
+      const tmp = await makeTempDir();
+      const filePath = path.join(tmp, 'range.txt');
+      await fs.writeFile(filePath, 'a\nb\nc\nd\n', 'utf-8');
+
+      const result = await handleRead(
+        { file_path: filePath, start_line: 2, end_line: 3 },
+        { cwd: tmp, prunerConfig: disabledPruner() },
+      );
+
+      expect(result.content[0].text).toBe('2: b\n3: c\n');
+    });
+
+    it('supports around_line with radius', async () => {
+      const tmp = await makeTempDir();
+      const filePath = path.join(tmp, 'around.txt');
+      await fs.writeFile(filePath, 'l1\nl2\nl3\nl4\nl5\n', 'utf-8');
+
+      const result = await handleRead(
+        { file_path: filePath, around_line: 3, radius: 1 },
+        { cwd: tmp, prunerConfig: disabledPruner() },
+      );
+
+      expect(result.content[0].text).toBe('2: l2\n3: l3\n4: l4\n');
+    });
+
+    it('returns no-lines marker for out-of-range windows', async () => {
+      const tmp = await makeTempDir();
+      const filePath = path.join(tmp, 'oor.txt');
+      await fs.writeFile(filePath, 'line\n', 'utf-8');
+
+      const result = await handleRead(
+        { file_path: filePath, start_line: 10, end_line: 12 },
+        { cwd: tmp, prunerConfig: disabledPruner() },
+      );
+
+      expect(result.content[0].text).toBe('(no lines in range)');
     });
   });
 

@@ -1,7 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
-- Use MCP state tools for issue/progress writes (`state_get_issue`, `state_put_issue`, `state_append_progress`) instead of direct file edits to canonical issue/progress state.
+- Use MCP state tools for issue/progress writes (`state_get_issue`, `state_get_progress`, `state_put_issue`, `state_append_progress`) instead of direct file edits to canonical issue/progress state.
 - Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
 - Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
 - Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
@@ -73,7 +73,7 @@ You create pull requests for completed implementations, supporting both GitHub a
 
 4. Prepare PR content:
    - Read the design document for context
-   - Read `.jeeves/progress.txt` for implementation summary
+   - Read `state_get_progress` output for implementation summary
    - Write a clear, descriptive title
    - Write a body that summarizes the changes
 

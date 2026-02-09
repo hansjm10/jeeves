@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
+import { renderProgressText, upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import { main } from './cli.js';
@@ -55,7 +55,6 @@ describe('runner integration', () => {
 
     const outputPath = path.join(stateDir, 'sdk-output.json');
     const logPath = path.join(stateDir, 'last-run.log');
-    const progressPath = path.join(stateDir, 'progress.txt');
 
     const output = JSON.parse(await fs.readFile(outputPath, 'utf-8')) as Record<string, unknown>;
     expect(output.schema).toBe('jeeves.sdk.v1');
@@ -70,7 +69,7 @@ describe('runner integration', () => {
     expect(log).toContain('[RUNNER]');
     expect(log).toContain('[ASSISTANT]');
 
-    const progress = await fs.readFile(progressPath, 'utf-8');
+    const progress = renderProgressText({ stateDir });
     expect(progress).toContain('Started:');
     expect(progress).toContain('Phase: hello');
     expect(progress).toContain('Ended:');
@@ -138,7 +137,6 @@ describe('runner integration', () => {
 
     const outputPath = path.join(stateDir, 'sdk-output.json');
     const logPath = path.join(stateDir, 'last-run.log');
-    const progressPath = path.join(stateDir, 'progress.txt');
 
     const output = JSON.parse(await fs.readFile(outputPath, 'utf-8')) as Record<string, unknown>;
     expect(output.schema).toBe('jeeves.sdk.v1');
@@ -148,7 +146,7 @@ describe('runner integration', () => {
     expect(log).toContain('[RUNNER]');
     expect(log).toContain('phase=hello');
 
-    const progress = await fs.readFile(progressPath, 'utf-8');
+    const progress = renderProgressText({ stateDir });
     expect(progress).toContain('Phase: hello');
   });
 
@@ -202,6 +200,93 @@ describe('runner integration', () => {
     expect(prompt).toContain('PHASE PROMPT SENTINEL');
     expect(prompt.indexOf('AGENTS SENTINEL')).toBeLessThan(prompt.indexOf('CLAUDE SENTINEL'));
     expect(prompt.indexOf('CLAUDE SENTINEL')).toBeLessThan(prompt.indexOf('PHASE PROMPT SENTINEL'));
+  });
+
+  it('uses active-context snapshot as primary handoff and excludes retired trajectory by default', async () => {
+    const tmp = await makeTempDir('jeeves-runner-active-context-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'active-context-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: active-context-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'phase.prompt.md'), 'ACTIVE CONTEXT PROMPT SENTINEL', 'utf-8');
+    await fs.writeFile(
+      path.join(stateDir, 'active-context.json'),
+      JSON.stringify(
+        {
+          schema_version: 1,
+          generated_at: '2026-02-09T00:00:00.000Z',
+          iteration: 2,
+          current_objective: 'Land trajectory reduction artifacts for issue #113.',
+          open_hypotheses: ['Hypothesis: scoped memory + snapshot reduces stale replay.'],
+          blockers: ['Need deterministic reduction metrics.'],
+          next_actions: ['Wire reducer into runManager archive path.'],
+          unresolved_questions: ['Should repeated-context rate use active items only?'],
+          required_evidence_links: ['apps/viewer-server/src/runManager.ts'],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'retired-trajectory.jsonl'),
+      `${JSON.stringify({ value: 'RETIRED-DO-NOT-INJECT', field: 'open_hypotheses' })}\n`,
+      'utf-8',
+    );
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'current-task',
+      value: { taskId: 'T113' },
+      sourceIteration: 2,
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'active-context-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<active_context_snapshot>');
+    expect(prompt).toContain('Land trajectory reduction artifacts for issue #113.');
+    expect(prompt).toContain('Should repeated-context rate use active items only?');
+    expect(prompt).toContain('apps/viewer-server/src/runManager.ts');
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt.indexOf('<active_context_snapshot>')).toBeLessThan(prompt.indexOf('<memory_context>'));
+    expect(prompt.indexOf('<memory_context>')).toBeLessThan(prompt.indexOf('ACTIVE CONTEXT PROMPT SENTINEL'));
+    expect(prompt).not.toContain('RETIRED-DO-NOT-INJECT');
+
+    const log = await fs.readFile(path.join(stateDir, 'last-run.log'), 'utf-8');
+    expect(log).toContain('[RUNNER] active_context_snapshot=enabled');
   });
 
   it('skips memory preload when state DB is unavailable', async () => {

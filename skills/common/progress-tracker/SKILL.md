@@ -11,7 +11,7 @@ Helps maintain clear progress tracking throughout multi-step tasks.
 
 ## The Job
 
-Keep a running log of progress in `.jeeves/progress.txt` to maintain context and provide visibility into work status.
+Keep a running log of progress in the canonical progress event log (via `state_append_progress`) to maintain context and provide visibility into work status.
 
 ---
 
@@ -61,7 +61,7 @@ Keep a running log of progress in `.jeeves/progress.txt` to maintain context and
 ## Integration
 
 Progress logs are:
-- Persisted in `.jeeves/progress.txt`
+- Persisted in the canonical progress event log
 - Used by evaluation phases to understand context
 - Helpful for debugging failed phases
 - Useful for generating PR descriptions

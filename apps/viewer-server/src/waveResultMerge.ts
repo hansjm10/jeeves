@@ -321,22 +321,14 @@ export function formatMergeProgressEntry(
 }
 
 /**
- * Appends a merge progress entry to the canonical progress.txt.
+ * Appends a merge progress entry to the canonical progress event log.
  */
 export async function appendMergeProgress(
   stateDir: string,
   waveId: string,
   mergeResult: WaveMergeResult,
 ): Promise<void> {
-  const progressPath = path.join(stateDir, 'progress.txt');
   const entry = formatMergeProgressEntry(waveId, mergeResult);
-
-  try {
-    await fs.appendFile(progressPath, entry, 'utf-8');
-  } catch {
-    // If append fails, try to create the file
-    await fs.writeFile(progressPath, entry, 'utf-8');
-  }
   appendProgressEvent({
     stateDir,
     source: 'wave-merge',

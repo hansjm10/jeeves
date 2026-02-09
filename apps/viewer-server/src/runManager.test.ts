@@ -9,9 +9,11 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
+import { markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 
 import { RunManager } from './runManager.js';
 import { readIssueJson } from './issueJson.js';
+import { renderProgressText } from './sqliteStorage.js';
 import { installStateDbFsShim } from './testStateDbShim.js';
 
 const execFileAsync = promisify(execFile);
@@ -317,6 +319,217 @@ describe('RunManager', () => {
 
     const viewerLog = await fs.readFile(viewerLogPath, 'utf-8');
     expect(viewerLog).toContain('[TOOL_USAGE]');
+  });
+
+  it('emits active-context snapshot and retired trajectory diagnostics across iterations', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-trajectory-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-trajectory-two-iterations',
+      `
+workflow:
+  name: fixture-trajectory-two-iterations
+  version: 1
+  start: hello
+phases:
+  hello:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 62;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber, title: 'Trajectory reduction iteration test' },
+          phase: 'hello',
+          workflow: 'fixture-trajectory-two-iterations',
+          branch: 'issue/62',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+      'utf-8',
+    );
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let iteration = 0;
+    const spawn = (() => {
+      iteration += 1;
+      void (async () => {
+        if (iteration === 1) {
+          upsertMemoryEntryInDb({
+            stateDir,
+            scope: 'working_set',
+            key: 'hypothesis:first',
+            value: { hypothesis: 'First active branch' },
+            sourceIteration: 1,
+          });
+        } else {
+          markMemoryEntryStaleInDb({
+            stateDir,
+            scope: 'working_set',
+            key: 'hypothesis:first',
+          });
+          upsertMemoryEntryInDb({
+            stateDir,
+            scope: 'working_set',
+            key: 'hypothesis:second',
+            value: { hypothesis: 'Second active branch' },
+            sourceIteration: iteration,
+          });
+        }
+        await fs.writeFile(
+          path.join(stateDir, 'sdk-output.json'),
+          JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 120);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    expect(rm.getStatus().completion_reason).toBe('max_iterations');
+    const activeContextRaw = await fs.readFile(path.join(stateDir, 'active-context.json'), 'utf-8');
+    expect(activeContextRaw).toContain('"iteration": 2');
+
+    const retiredRaw = await fs.readFile(path.join(stateDir, 'retired-trajectory.jsonl'), 'utf-8');
+    expect(retiredRaw).toContain('hypothesis:first');
+
+    const runsDir = path.join(stateDir, '.runs');
+    const runEntries = await fs.readdir(runsDir, { withFileTypes: true });
+    const runIds = runEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    expect(runIds.length).toBeGreaterThan(0);
+    const runId = runIds[0]!;
+
+    const iterOneActiveExists = await fs
+      .stat(path.join(runsDir, runId, 'iterations', '001', 'active-context.json'))
+      .then((stat) => stat.isFile())
+      .catch(() => false);
+    const iterTwoDiagnosticsExists = await fs
+      .stat(path.join(runsDir, runId, 'iterations', '002', 'trajectory-reduction-diagnostics.json'))
+      .then((stat) => stat.isFile())
+      .catch(() => false);
+    expect(iterOneActiveExists).toBe(true);
+    expect(iterTwoDiagnosticsExists).toBe(true);
+
+    const runMeta = JSON.parse(
+      await fs.readFile(path.join(runsDir, runId, 'run.json'), 'utf-8'),
+    ) as Record<string, unknown>;
+    expect(runMeta.trajectory_reduction_summary).toBeTruthy();
+  });
+
+  it('derives active-context objective from the transitioned phase when issue metadata is sparse', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-trajectory-transition-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-transition-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-transition-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-trajectory-transition-objective',
+      `
+workflow:
+  name: fixture-trajectory-transition-objective
+  version: 1
+  start: phase_one
+phases:
+  phase_one:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: phase_two
+        auto: true
+  phase_two:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 63;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'phase_one',
+          workflow: 'fixture-trajectory-transition-objective',
+          branch: 'issue/63',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const issueAfterRun = await readIssueJson(stateDir);
+    expect(issueAfterRun?.phase).toBe('phase_two');
+
+    const activeContext = JSON.parse(
+      await fs.readFile(path.join(stateDir, 'active-context.json'), 'utf-8'),
+    ) as { current_objective?: unknown };
+    expect(activeContext.current_objective).toBe('Complete the current phase: phase_two.');
   });
 
   it('does not stop via completion promise after advancing to a non-terminal phase', async () => {
@@ -4032,9 +4245,6 @@ describe('T17: Stop run on parallel wave setup failures', () => {
       'utf-8',
     );
 
-    // Create an empty progress.txt
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
-
     // Create spawn that throws synchronously on the second call (simulating a spawn failure
     // after the first worker was successfully spawned)
     let spawnCallCount = 0;
@@ -4102,7 +4312,7 @@ describe('T17: Stop run on parallel wave setup failures', () => {
     expect(inProgressTasks).toHaveLength(0); // No tasks should be stuck in in_progress
 
     // 7. Progress entry should document the setup failure
-    const progressContent = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
+    const progressContent = renderProgressText({ stateDir });
     expect(progressContent.toLowerCase()).toContain('setup failure');
 
     // 8. Viewer log should show the error was handled
@@ -4180,8 +4390,6 @@ describe('T17: Stop run on parallel wave setup failures', () => {
       ) + '\n',
       'utf-8',
     );
-
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
 
     const spawn = (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn;
 
@@ -4365,8 +4573,6 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
       JSON.stringify({ schemaVersion: 1, tasks: [{ id: 'T1', status: 'in_progress' }] }, null, 2) + '\n',
       'utf-8',
     );
-
-    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
 
     // Create a spawn that creates a slow child process (giving time to call stop())
     const spawn = (() => {

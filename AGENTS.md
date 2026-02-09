@@ -108,7 +108,7 @@ The viewer provides:
 - SDK-only runs; no Codex/Claude/Opencode runners.
 - Viewer controls phase selection: `design`, `implement`, `review`, `complete`.
 - Prompts are in `prompts/issue.*.md` and can be edited in the viewer.
-- Minimal run artifacts: `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
+- Minimal run artifacts: progress events (DB-backed), `last-run.log`, `viewer-run.log`, `sdk-output.json`.
 
 ## Iteration Pattern (Ralph Wiggum)
 
@@ -122,15 +122,15 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 │      evaluate workflow transitions                  │
 │      if transitioned to terminal phase:             │
 │          break                                      │
-│      # Handoff via progress.txt (agent writes it)   │
+│      # Handoff via progress events (agent writes it)│
 └─────────────────────────────────────────────────────┘
 ```
 
 **Key concepts:**
 - Each iteration is a **fresh subprocess** with a new context window (no context bloat)
 - The SDK runner stays simple: one run, no retry logic
-- Handoff between iterations happens via **files** (`progress.txt`)
-- Agents read `progress.txt` at the start of each iteration to understand prior work
+- Handoff between iterations happens via the canonical **progress event log**
+- Agents read progress entries (via `state_get_progress`) at the start of each iteration to understand prior work
 - Phase completion is driven by workflow state transitions; agents end normally after their work
 - The orchestrator retains a legacy safety-net check for `<promise>COMPLETE</promise>` in terminal phases only
 
@@ -140,7 +140,7 @@ The viewer implements the "Ralph Wiggum" iteration pattern for fresh context run
 **Why this pattern:**
 1. True fresh context - no context window bloat from retries
 2. Simple SDK runner - just runs once, cleanly
-3. File-based handoff - already works (prompts read `progress.txt`)
+3. MCP/DB-backed handoff - prompts read/write canonical progress via state tools
 4. Agent-agnostic - the orchestrator doesn't care what agent runs
 
 ## Skills

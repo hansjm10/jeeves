@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
+import { renderProgressText } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -98,8 +99,9 @@ describe('mcp-state store', () => {
     await appendProgress(stateDir, 'line-one\n');
     await appendProgress(stateDir, 'line-two\n');
 
-    const raw = await fs.readFile(path.join(stateDir, 'progress.txt'), 'utf-8');
-    expect(raw).toBe('line-one\nline-two\n');
+    const raw = renderProgressText({ stateDir });
+    expect(raw).toContain('line-one');
+    expect(raw).toContain('line-two');
   });
 
   it('manages structured memory entries', async () => {

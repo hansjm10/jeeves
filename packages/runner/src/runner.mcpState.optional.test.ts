@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
+import { markMemoryEntryStaleInDb, renderProgressText, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentProvider, McpServerConfig, ProviderEvent, ProviderRunOptions } from './provider.js';
@@ -689,8 +689,7 @@ optionalDescribe('runner optional MCP state integration', () => {
       }
     }
 
-    const progressPath = path.join(stateDir, 'progress.txt');
-    const progress = await fs.readFile(progressPath, 'utf-8');
+    const progress = renderProgressText({ stateDir });
     expect(progress).toContain('MCP state test');
 
     const logPath = path.join(stateDir, 'last-run.log');

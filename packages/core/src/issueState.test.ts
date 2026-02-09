@@ -28,7 +28,6 @@ describe('issue state read/write', () => {
       expect(loaded.branch).toBe('issue/38');
 
       await expect(fs.stat(path.join(dataDir, 'issues', 'o', 'r', '38', '.runs'))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(dataDir, 'issues', 'o', 'r', '38', 'progress.txt'))).resolves.toBeDefined();
     });
   });
 

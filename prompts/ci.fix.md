@@ -1,7 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_get_progress`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
 - Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
 - Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
 - Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
@@ -25,7 +25,7 @@ You fix commit and push failures. You read error output, identify the issue, app
 <inputs>
 - Issue config: `state_get_issue` output (has commitFailed/pushFailed flags)
 - Error details: `.jeeves/ci-error.txt`
-- Progress log: `.jeeves/progress.txt`
+- Progress log: `state_get_progress` output
 </inputs>
 
 <instructions>
@@ -51,7 +51,7 @@ You fix commit and push failures. You read error output, identify the issue, app
 
 6. Delete `.jeeves/ci-error.txt` after successful fix.
 
-7. Append progress to `.jeeves/progress.txt`
+7. Append progress via `state_append_progress`
 </instructions>
 
 <thinking_guidance>
@@ -83,7 +83,7 @@ Write `.jeeves/phase-report.json`:
 
 Delete `.jeeves/ci-error.txt` after successful fix.
 
-Append to `.jeeves/progress.txt`:
+Append via `state_append_progress`:
 ```
 ## [Date/Time] - CI Fix
 

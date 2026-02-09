@@ -19,6 +19,7 @@ import { SdkOutputWriterV1 } from './outputWriter.js';
 
 const PREPENDED_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 const MAX_PROMPT_MEMORY_ENTRIES = 500;
+const ACTIVE_CONTEXT_FILE = 'active-context.json';
 
 function memoryScopeRank(scope: MemoryEntry['scope']): number {
   if (scope === 'working_set') return 1;
@@ -60,6 +61,101 @@ function listMemoryStateDirsForPrompt(stateDir: string): string[] {
   return [resolved, canonical];
 }
 
+type ActiveContextSnapshot = Readonly<{
+  schema_version: 1;
+  generated_at: string;
+  iteration: number;
+  current_objective: string;
+  open_hypotheses: string[];
+  blockers: string[];
+  next_actions: string[];
+  unresolved_questions: string[];
+  required_evidence_links: string[];
+}>;
+
+function normalizeSnapshotText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized || null;
+}
+
+function parseSnapshotList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const normalized = normalizeSnapshotText(raw);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function parseActiveContextSnapshot(raw: string): ActiveContextSnapshot | null {
+  const parsed = tryParseJsonRecord(raw);
+  if (!parsed) return null;
+  if (parsed.schema_version !== 1) return null;
+  if (typeof parsed.generated_at !== 'string') return null;
+  if (typeof parsed.iteration !== 'number' || !Number.isFinite(parsed.iteration)) return null;
+  const currentObjective = normalizeSnapshotText(parsed.current_objective);
+  if (!currentObjective) return null;
+
+  return {
+    schema_version: 1,
+    generated_at: parsed.generated_at,
+    iteration: Math.trunc(parsed.iteration),
+    current_objective: currentObjective,
+    open_hypotheses: parseSnapshotList(parsed.open_hypotheses),
+    blockers: parseSnapshotList(parsed.blockers),
+    next_actions: parseSnapshotList(parsed.next_actions),
+    unresolved_questions: parseSnapshotList(parsed.unresolved_questions),
+    required_evidence_links: parseSnapshotList(parsed.required_evidence_links),
+  };
+}
+
+async function readActiveContextSnapshotForPrompt(
+  stateDir: string,
+): Promise<Readonly<{ snapshot: ActiveContextSnapshot; sourcePath: string }> | null> {
+  const stateDirs = listMemoryStateDirsForPrompt(stateDir);
+  for (const dir of stateDirs) {
+    const filePath = path.join(dir, ACTIVE_CONTEXT_FILE);
+    const raw = await fs.readFile(filePath, 'utf-8').catch(() => null);
+    if (!raw) continue;
+    const parsed = parseActiveContextSnapshot(raw);
+    if (!parsed) continue;
+    return {
+      snapshot: parsed,
+      sourcePath: filePath,
+    };
+  }
+  return null;
+}
+
+function formatSnapshotSection(title: string, values: readonly string[]): string {
+  if (values.length === 0) return `### ${title}\n- (none)`;
+  return `### ${title}\n${values.map((value) => `- ${value}`).join('\n')}`;
+}
+
+function buildActiveContextBlock(snapshot: ActiveContextSnapshot): string {
+  return [
+    '<active_context_snapshot>',
+    'Use this active context snapshot as the primary trajectory handoff for this run.',
+    'Prioritize unresolved blockers/questions and minimal evidence links below.',
+    'Do not replay retired trajectory branches by default.',
+    `Current objective: ${snapshot.current_objective}`,
+    formatSnapshotSection('Open Hypotheses', snapshot.open_hypotheses),
+    formatSnapshotSection('Blockers', snapshot.blockers),
+    formatSnapshotSection('Next Actions', snapshot.next_actions),
+    formatSnapshotSection('Unresolved Questions', snapshot.unresolved_questions),
+    formatSnapshotSection('Required Evidence Links', snapshot.required_evidence_links),
+    '</active_context_snapshot>',
+  ].join('\n\n');
+}
+
 function listScopedMemoryEntriesForPrompt(stateDir: string): MemoryEntry[] {
   const stateDirs = listMemoryStateDirsForPrompt(stateDir);
   const merged = new Map<string, MemoryEntry>();
@@ -86,7 +182,6 @@ export type RunPhaseParams = Readonly<{
   promptPath: string;
   outputPath: string;
   logPath: string;
-  progressPath: string;
   stateDir: string;
   cwd: string;
   phaseName: string;
@@ -373,6 +468,12 @@ type MemoryBlockResult = Readonly<{
   reason: string;
 }>;
 
+type ActiveContextBlockResult = Readonly<{
+  block: string;
+  enabled: boolean;
+  reason: string;
+}>;
+
 function formatErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim()) return err.message.trim();
   return String(err);
@@ -403,9 +504,22 @@ async function buildScopedMemoryBlockIfAvailable(stateDir: string, phaseName: st
   }
 }
 
+async function buildActiveContextBlockIfAvailable(stateDir: string): Promise<ActiveContextBlockResult> {
+  const result = await readActiveContextSnapshotForPrompt(stateDir);
+  if (!result) {
+    return { block: '', enabled: false, reason: `active_context_unavailable file=${ACTIVE_CONTEXT_FILE}` };
+  }
+  return {
+    block: buildActiveContextBlock(result.snapshot),
+    enabled: true,
+    reason: `active_context_available path=${result.sourcePath} iteration=${result.snapshot.iteration}`,
+  };
+}
+
 async function buildPromptWithPrependedInstructions(
   phasePrompt: string,
   cwd: string,
+  activeContextBlock: string,
   memoryBlock: string,
 ): Promise<Readonly<{ prompt: string; prependedFiles: readonly string[] }>> {
   const sections: string[] = [];
@@ -423,6 +537,10 @@ async function buildPromptWithPrependedInstructions(
     if (!trimmed) continue;
     sections.push(`### ${fileName}\n\n${trimmed}`);
     prependedFiles.push(fileName);
+  }
+
+  if (activeContextBlock.trim()) {
+    sections.push(activeContextBlock.trim());
   }
 
   if (memoryBlock.trim()) {
@@ -452,7 +570,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
   await fs.rm(path.join(path.dirname(params.outputPath), 'tool-raw'), { recursive: true, force: true }).catch(() => void 0);
-  await ensureProgressFile(params.progressPath);
+  await ensureProgressFile(params.stateDir);
 
   if (runDbContext) {
     upsertRunSession({
@@ -467,15 +585,17 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   }
 
   const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
+  const activeContextBlockResult = await buildActiveContextBlockIfAvailable(params.stateDir);
   const memoryBlockResult = await buildScopedMemoryBlockIfAvailable(params.stateDir, params.phaseName);
   const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(
     phasePrompt,
     params.cwd,
+    activeContextBlockResult.block,
     memoryBlockResult.block,
   );
 
-  await markStarted(params.progressPath);
-  await markPhase(params.progressPath, params.phaseName);
+  await markStarted(params.stateDir);
+  await markPhase(params.stateDir, params.phaseName);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -508,6 +628,9 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     }
     await logLine(
       `[RUNNER] memory_context=${memoryBlockResult.enabled ? 'enabled' : 'disabled'} ${memoryBlockResult.reason}`,
+    );
+    await logLine(
+      `[RUNNER] active_context_snapshot=${activeContextBlockResult.enabled ? 'enabled' : 'disabled'} ${activeContextBlockResult.reason}`,
     );
 
     const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd, {
@@ -574,15 +697,15 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
 
     writer.finalize(true);
     await writer.writeIncremental({ force: true });
-    await markEnded(params.progressPath, true);
-    await appendProgress(params.progressPath, '');
+    await markEnded(params.stateDir, true);
+    await appendProgress(params.stateDir, '');
     return { success: true };
   } catch (err) {
     writer.setError(err);
     writer.finalize(false);
     await writer.writeIncremental({ force: true });
     await logLine(`[ERROR] ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-    await markEnded(params.progressPath, false);
+    await markEnded(params.stateDir, false);
     return { success: false };
   } finally {
     await logStream.close();
@@ -609,14 +732,12 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
     const promptPath = await resolvePromptPath(current, params.promptsDir, engine);
     const outputPath = path.join(params.stateDir, 'sdk-output.json');
     const logPath = path.join(params.stateDir, 'last-run.log');
-    const progressPath = path.join(params.stateDir, 'progress.txt');
 
     const phaseResult = await runPhaseOnce({
       provider: params.provider,
       promptPath,
       outputPath,
       logPath,
-      progressPath,
       stateDir: params.stateDir,
       cwd: params.cwd,
       phaseName: current,
@@ -661,14 +782,13 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
 
   const outputPath = path.join(params.stateDir, 'sdk-output.json');
   const logPath = path.join(params.stateDir, 'last-run.log');
-  const progressPath = path.join(params.stateDir, 'progress.txt');
 
   if (engine.isTerminal(phase)) {
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.mkdir(path.dirname(logPath), { recursive: true });
-    await ensureProgressFile(progressPath);
-    await markStarted(progressPath);
-    await markPhase(progressPath, phase);
+    await ensureProgressFile(params.stateDir);
+    await markStarted(params.stateDir);
+    await markPhase(params.stateDir, phase);
     await fs.writeFile(logPath, '', 'utf-8');
     const writer = new SdkOutputWriterV1({
       outputPath,
@@ -676,7 +796,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     });
     writer.finalize(true);
     await writer.writeIncremental({ force: true });
-    await markEnded(progressPath, true);
+    await markEnded(params.stateDir, true);
     return { phase, success: true };
   }
 
@@ -687,7 +807,6 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     promptPath,
     outputPath,
     logPath,
-    progressPath,
     stateDir: params.stateDir,
     cwd: params.cwd,
     phaseName: phase,

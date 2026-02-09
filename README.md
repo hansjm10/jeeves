@@ -51,7 +51,7 @@ Typical layout:
 ├── issues/
 │   └── owner/repo/123/
 │       ├── issue.json
-│       ├── progress.txt
+│       ├── active-context.json
 │       ├── last-run.log
 │       ├── viewer-run.log
 │       └── sdk-output.json

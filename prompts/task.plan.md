@@ -24,7 +24,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
 - Issue config: `state_get_issue` output (contains `status.currentTaskId`)
 - Task list: `.jeeves/tasks.json`
 - Structured memory: `state_get_memory` (`working_set`, `decisions`, `session`, `cross_run`)
-- Progress log: `.jeeves/progress.txt` (secondary/audit trail)
+- Progress log: `state_get_progress` output (secondary/audit trail)
 - Design document: Path in `designDocPath` from `state_get_issue` (reference only)
 - Task feedback: `.jeeves/task-feedback.md` (present only on retry — read for context on what went wrong)
 </inputs>
@@ -55,7 +55,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
    - `session` entries relevant to the current phase
    - `cross_run` entries relevant to the current phase
 
-   Then read `.jeeves/progress.txt` for audit/history, especially the **Codebase Patterns** section at the top.
+   Then read `state_get_progress` output for audit/history, especially the **Codebase Patterns** section at the top.
    Prefer structured memory for current facts; use progress text to fill historical context only when needed.
 
 5. If retry feedback exists

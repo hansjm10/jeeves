@@ -222,7 +222,7 @@ T5 → depends on T4
 | T2 | AppShell focused-mode wiring | Wire AppShell + Header to run the 150-200ms run-start hide transition and required transition overrides. | `apps/viewer/src/layout/AppShell.tsx`, `apps/viewer/src/layout/Header.tsx`, `apps/viewer/src/layout/AppShell.test.ts` | `W0 -> W1 -> W2` uses 150-200ms timing; explicit reopen sets override `"open"`; explicit hide in `W3` clears override to `"auto"` and enters `W2` directly; run start from `W4` enters `W2` without animation. |
 | T3 | Watch run-context controls | Add Stop action during active runs and completion outcome badge after runs end in the Watch context strip. | `apps/viewer/src/pages/WatchPage.tsx`, `apps/viewer/src/pages/WatchPage.test.ts` | Stop button is visible only while running and calls stop mutation; completion badge maps deterministically to `Complete` vs `Error` (not only presence of `completion_reason`); tests cover semantic mapping and reason formatting. |
 | T4 | Focused-mode styling + integration polish | Add/adjust shared + Watch styles for focused layout, animation timing token wiring, and run-context action/badge presentation across desktop/mobile. | `apps/viewer/src/styles/tokens.css`, `apps/viewer/src/styles.css`, `apps/viewer/src/pages/WatchPage.css`, `apps/viewer/src/pages/WatchPage.tsx` | Sidebar hide transition token is set within 150-200ms and applied to focused-mode classes; hidden sidebar consumes no layout width; Watch context controls wrap without overflow on tablet/mobile; style changes use tokens/RGBA overlays only. |
-| T5 | Workspace quality-gate verification | Execute repository quality gates after implementation to satisfy the issue-level delivery requirement. | `.jeeves/progress.txt`, `.jeeves/last-run.log` | `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass in the same post-implementation verification cycle; failures are captured and block sign-off until resolved; pass/fail evidence is recorded in `.jeeves/progress.txt` and command output is available in `.jeeves/last-run.log`. |
+| T5 | Workspace quality-gate verification | Execute repository quality gates after implementation to satisfy the issue-level delivery requirement. | canonical progress event log, `.jeeves/last-run.log` | `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass in the same post-implementation verification cycle; failures are captured and block sign-off until resolved; pass/fail evidence is recorded in canonical progress event log and command output is available in `.jeeves/last-run.log`. |
 
 ### Task Details
 
@@ -292,14 +292,14 @@ T5 → depends on T4
 **T5: Workspace quality-gate verification**
 - Summary: Run and record repository-level quality checks required by the issue before implementation handoff.
 - Files:
-  - `.jeeves/progress.txt` - append timestamped quality-gate execution summary (commands run + pass/fail).
+  - canonical progress event log - append timestamped quality-gate execution summary (commands run + pass/fail).
   - `.jeeves/last-run.log` - retain command output for `pnpm lint`, `pnpm typecheck`, and `pnpm test`.
 - Acceptance Criteria:
   1. `pnpm lint` passes with no errors.
   2. `pnpm typecheck` passes with no errors.
   3. `pnpm test` passes.
   4. Any failure in these commands blocks completion until fixed and rerun.
-  5. Quality-gate evidence is written to `.jeeves/progress.txt` with corresponding command output present in `.jeeves/last-run.log`.
+  5. Quality-gate evidence is written to canonical progress event log with corresponding command output present in `.jeeves/last-run.log`.
 - Dependencies: T4
 - Verification: `pnpm lint && pnpm typecheck && pnpm test`
 
@@ -312,7 +312,7 @@ T5 → depends on T4
 
 ### Post-Implementation Checks
 - [ ] Workspace quality-gate sequence passes: `pnpm lint && pnpm typecheck && pnpm test`
-- [ ] Quality-gate evidence is recorded in `.jeeves/progress.txt` and corresponding command output is present in `.jeeves/last-run.log`.
+- [ ] Quality-gate evidence is recorded in canonical progress event log and corresponding command output is present in `.jeeves/last-run.log`.
 - [ ] Types check: `pnpm typecheck`
 - [ ] Lint passes: `pnpm lint`
 - [ ] All tests pass: `pnpm test`

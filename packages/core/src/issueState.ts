@@ -187,15 +187,6 @@ export async function createIssueState(params: {
   const validated = issueStateWriteSchema.parse(data);
   await fs.writeFile(issueFile, `${JSON.stringify(validated, null, 2)}\n`, 'utf-8');
 
-  const progressFile = path.join(stateDir, 'progress.txt');
-  const progressExists = await fs
-    .stat(progressFile)
-    .then(() => true)
-    .catch(() => false);
-  if (!progressExists) {
-    await fs.writeFile(progressFile, '', 'utf-8');
-  }
-
   return normalizeIssueState(issueStateJsonSchema.parse(validated));
 }
 

@@ -403,7 +403,7 @@ T10 → depends on T1–T9
 | T7 | Claude provider wiring | Pass `options.mcpServers` through to Claude Agent SDK options. | `packages/runner/src/providers/claudeAgentSdk.ts` | Claude provider includes `mcpServers` when present; omits when absent. |
 | T8 | Codex provider wiring | Convert `options.mcpServers` into Codex CLI `--config mcp_servers.*` overrides for stdio servers. | `packages/runner/src/providers/codexSdk.ts` | Codex provider sets `mcp_servers.<name>.command/args/env` (no `url` / `streamable_http`). |
 | T9 | Docs | Add package docs + runner docs covering env vars and local usage. | `packages/mcp-pruner/CLAUDE.md`, `packages/runner/CLAUDE.md` | Docs include env vars, local dev run instructions, and a minimal tool example. |
-| T10 | Full validation | Run repo quality commands and record validation evidence. | `.jeeves/progress.txt`, `packages/mcp-pruner/src/index.ts`, `packages/runner/src/mcpConfig.ts`, `packages/runner/src/providers/claudeAgentSdk.ts`, `packages/runner/src/providers/codexSdk.ts` | `pnpm install`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` pass; artifact checks pass for `packages/mcp-pruner/dist/index.js` and `packages/runner/dist/mcpConfig.js`; standalone initialize smoke test passes with expected success response; and outcomes are recorded in `.jeeves/progress.txt`. |
+| T10 | Full validation | Run repo quality commands and record validation evidence. | canonical progress event log, `packages/mcp-pruner/src/index.ts`, `packages/runner/src/mcpConfig.ts`, `packages/runner/src/providers/claudeAgentSdk.ts`, `packages/runner/src/providers/codexSdk.ts` | `pnpm install`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` pass; artifact checks pass for `packages/mcp-pruner/dist/index.js` and `packages/runner/dist/mcpConfig.js`; standalone initialize smoke test passes with expected success response; and outcomes are recorded in canonical progress event log. |
 
 ### Task Details
 
@@ -530,7 +530,7 @@ T10 → depends on T1–T9
 **T10: Full validation**
 - Summary: Run repo quality commands after implementation and record outcomes in a concrete validation artifact.
 - Files:
-  - `.jeeves/progress.txt` - append a validation checkpoint with command pass/fail outcomes.
+  - canonical progress event log - append a validation checkpoint with command pass/fail outcomes.
   - `packages/mcp-pruner/src/index.ts` - validate the MCP server entrypoint changes via lint/typecheck/test.
   - `packages/runner/src/mcpConfig.ts` - validate runner MCP config wiring via lint/typecheck/test.
   - `packages/runner/src/providers/claudeAgentSdk.ts` - validate Claude provider MCP wiring via lint/typecheck/test.
@@ -540,7 +540,7 @@ T10 → depends on T1–T9
   2. `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test` all pass.
   3. Artifact checks pass: `ls packages/mcp-pruner/dist/index.js` and `ls packages/runner/dist/mcpConfig.js`.
   4. Standalone initialize smoke test command succeeds and its output includes a JSON-RPC success for `id=1` with `result.serverInfo.name="mcp-pruner"` and `result.serverInfo.version="1.0.0"`.
-  5. Validation command outcomes are recorded in `.jeeves/progress.txt`.
+  5. Validation command outcomes are recorded in canonical progress event log.
 - Dependencies: T1–T9
 - Verification: `pnpm lint && pnpm typecheck && pnpm test`
 

@@ -14,6 +14,7 @@ import {
 } from './waveResultMerge.js';
 import type { WorkerOutcome } from './parallelRunner.js';
 import type { WorkerSandbox } from './workerSandbox.js';
+import { appendProgressEvent, renderProgressText } from './sqliteStorage.js';
 
 // Mock git operations
 const mockRunGit = vi.fn();
@@ -300,9 +301,12 @@ describe('waveResultMerge', () => {
   });
 
   describe('appendMergeProgress', () => {
-    it('appends merge progress to progress.txt', async () => {
-      const progressPath = path.join(stateDir, 'progress.txt');
-      await fs.writeFile(progressPath, 'Previous content\n');
+    it('appends merge progress to the progress event log', async () => {
+      appendProgressEvent({
+        stateDir,
+        source: 'test',
+        message: 'Previous content',
+      });
 
       const mergeResult: WaveMergeResult = {
         merges: [{ taskId: 'T1', branch: 'issue/42-T1-run-123', success: true, conflict: false, commitSha: 'abc' }],
@@ -314,14 +318,12 @@ describe('waveResultMerge', () => {
 
       await appendMergeProgress(stateDir, 'wave-123', mergeResult);
 
-      const content = await fs.readFile(progressPath, 'utf-8');
+      const content = renderProgressText({ stateDir });
       expect(content).toContain('Previous content');
       expect(content).toContain('Wave Merge: wave-123');
     });
 
-    it('creates progress.txt if it does not exist', async () => {
-      const progressPath = path.join(stateDir, 'progress.txt');
-
+    it('writes merge progress without requiring a progress file', async () => {
       const mergeResult: WaveMergeResult = {
         merges: [],
         mergedCount: 0,
@@ -332,7 +334,7 @@ describe('waveResultMerge', () => {
 
       await appendMergeProgress(stateDir, 'wave-123', mergeResult);
 
-      const content = await fs.readFile(progressPath, 'utf-8');
+      const content = renderProgressText({ stateDir });
       expect(content).toContain('Wave Merge: wave-123');
     });
   });

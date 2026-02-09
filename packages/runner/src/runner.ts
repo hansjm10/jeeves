@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadWorkflowByName, resolvePromptPath, WorkflowEngine } from '@jeeves/core';
-import { appendRunLogLine, upsertRunSession } from '@jeeves/state-db';
+import { appendRunLogLine, listMemoryEntriesFromDb, type MemoryEntry, upsertRunSession } from '@jeeves/state-db';
 
 import { ensureJeevesExcludedFromGitStatus } from './gitExclude.js';
 import { buildMcpServersConfig } from './mcpConfig.js';
@@ -198,9 +198,105 @@ export function extractTaskPlanFromSdkOutput(raw: string): string {
   return assistantChunks.join('\n\n').trim();
 }
 
+function toPhaseHints(value: Record<string, unknown>): readonly string[] {
+  const hints = new Set<string>();
+  const addString = (raw: unknown): void => {
+    if (typeof raw !== 'string') return;
+    const normalized = raw.trim().toLowerCase();
+    if (normalized) hints.add(normalized);
+  };
+  const addStringArray = (raw: unknown): void => {
+    if (!Array.isArray(raw)) return;
+    for (const item of raw) addString(item);
+  };
+
+  addString(value['phase']);
+  addString(value['phaseName']);
+  addStringArray(value['phases']);
+  addStringArray(value['phaseNames']);
+  addStringArray(value['relevantPhases']);
+  return [...hints];
+}
+
+function isPhaseTaggedInKey(key: string, phaseName: string): boolean {
+  const normalizedKey = key.trim().toLowerCase();
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (!normalizedKey || !normalizedPhase) return false;
+  return (
+    normalizedKey === normalizedPhase ||
+    normalizedKey.startsWith(`${normalizedPhase}:`) ||
+    normalizedKey.endsWith(`:${normalizedPhase}`) ||
+    normalizedKey.includes(`:${normalizedPhase}:`)
+  );
+}
+
+function isSessionMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
+  const hints = toPhaseHints(entry.value);
+  if (hints.length === 0) return true;
+  return hints.includes(phaseName.trim().toLowerCase());
+}
+
+function isCrossRunMemoryRelevant(entry: MemoryEntry, phaseName: string): boolean {
+  const alwaysRelevant = entry.value['alwaysRelevant'] === true || entry.value['always'] === true;
+  if (alwaysRelevant) return true;
+  const hints = toPhaseHints(entry.value);
+  const normalizedPhase = phaseName.trim().toLowerCase();
+  if (hints.includes(normalizedPhase)) return true;
+  return isPhaseTaggedInKey(entry.key, phaseName);
+}
+
+function compactJsonRecord(value: Record<string, unknown>, maxChars = 800): string {
+  const raw = JSON.stringify(value);
+  if (raw.length <= maxChars) return raw;
+  return `${raw.slice(0, maxChars)}...[truncated]`;
+}
+
+function formatMemoryEntry(entry: MemoryEntry): string {
+  const sourceIteration = entry.sourceIteration === null ? 'n/a' : String(entry.sourceIteration);
+  const valueText = compactJsonRecord(entry.value);
+  return `- key=${entry.key} source_iteration=${sourceIteration} updated_at=${entry.updatedAt} value=${valueText}`;
+}
+
+function formatMemorySection(title: string, entries: readonly MemoryEntry[]): string {
+  if (entries.length === 0) return `### ${title}\n- (none)`;
+  return `### ${title}\n${entries.map((entry) => formatMemoryEntry(entry)).join('\n')}`;
+}
+
+function buildScopedMemoryBlock(stateDir: string, phaseName: string): string {
+  const entries = listMemoryEntriesFromDb({
+    stateDir,
+    includeStale: false,
+    limit: 500,
+  });
+
+  const workingSet = entries.filter((entry) => entry.scope === 'working_set');
+  const decisions = entries.filter((entry) => entry.scope === 'decisions');
+  const session = entries.filter((entry) => entry.scope === 'session' && isSessionMemoryRelevant(entry, phaseName));
+  const crossRun = entries.filter((entry) => entry.scope === 'cross_run' && isCrossRunMemoryRelevant(entry, phaseName));
+
+  const sections: string[] = [
+    formatMemorySection('Working Set (active)', workingSet),
+    formatMemorySection('Decisions (active)', decisions),
+  ];
+  if (session.length > 0) {
+    sections.push(formatMemorySection(`Session Context (phase=${phaseName})`, session));
+  }
+  if (crossRun.length > 0) {
+    sections.push(formatMemorySection('Cross-Run Memory (relevant)', crossRun));
+  }
+
+  return [
+    '<memory_context>',
+    'Use these structured memory entries as primary context before replaying progress history.',
+    sections.join('\n\n'),
+    '</memory_context>',
+  ].join('\n\n');
+}
+
 async function buildPromptWithPrependedInstructions(
   phasePrompt: string,
   cwd: string,
+  memoryBlock: string,
 ): Promise<Readonly<{ prompt: string; prependedFiles: readonly string[] }>> {
   const sections: string[] = [];
   const prependedFiles: string[] = [];
@@ -219,13 +315,17 @@ async function buildPromptWithPrependedInstructions(
     prependedFiles.push(fileName);
   }
 
+  if (memoryBlock.trim()) {
+    sections.push(memoryBlock.trim());
+  }
+
   if (sections.length === 0) {
     return { prompt: phasePrompt, prependedFiles };
   }
 
   const preface = [
     '<workspace_instructions>',
-    'The following repository instruction files are prepended for this run.',
+    'The following repository instructions and structured memory context are prepended for this run.',
     sections.join('\n\n'),
     '</workspace_instructions>',
   ].join('\n\n');
@@ -260,7 +360,8 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await markPhase(params.progressPath, params.phaseName);
 
   const phasePrompt = await fs.readFile(params.promptPath, 'utf-8');
-  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(phasePrompt, params.cwd);
+  const memoryBlock = buildScopedMemoryBlock(params.stateDir, params.phaseName);
+  const { prompt, prependedFiles } = await buildPromptWithPrependedInstructions(phasePrompt, params.cwd, memoryBlock);
 
   await fs.writeFile(params.logPath, '', 'utf-8');
   const logStream = await fs.open(params.logPath, 'a');
@@ -291,6 +392,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
     if (prependedFiles.length > 0) {
       await logLine(`[RUNNER] prepended_instructions=${prependedFiles.join(',')}`);
     }
+    await logLine(`[RUNNER] memory_context=enabled`);
 
     const mcpServers = params.mcpServers ?? buildMcpServersConfig(process.env, params.cwd, {
       stateDir: params.stateDir,

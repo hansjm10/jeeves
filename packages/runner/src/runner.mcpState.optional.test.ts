@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { markMemoryEntryStaleInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentProvider, McpServerConfig, ProviderEvent, ProviderRunOptions } from './provider.js';
@@ -195,16 +196,87 @@ async function callStateTool(
   return parseToolPayload(toolResponse, toolName);
 }
 
+function getMemoryEntries(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const rawEntries = payload['entries'];
+  if (!Array.isArray(rawEntries)) return [];
+  return rawEntries.filter(isRecord);
+}
+
 class McpStateExerciseProvider implements AgentProvider {
   readonly name = 'mcp-state-exercise-provider';
+  readonly mode: 'writer' | 'reader';
   readonly calledTools: string[] = [];
   seenStateServer: McpServerConfig | null = null;
+  seenPrompt: string | null = null;
+
+  constructor(mode: 'writer' | 'reader') {
+    this.mode = mode;
+  }
 
   async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
-    void prompt;
+    this.seenPrompt = prompt;
     const stateServer = options.mcpServers?.state;
     if (!stateServer) throw new Error('Expected state MCP server config');
     this.seenStateServer = stateServer;
+
+    if (this.mode === 'reader') {
+      if (!prompt.includes('key=current-task')) {
+        throw new Error('memory prompt missing working_set key=current-task');
+      }
+      if (!prompt.includes('key=schema-choice')) {
+        throw new Error('memory prompt missing decisions key=schema-choice');
+      }
+      if (!prompt.includes('key=task_phase:focus')) {
+        throw new Error('memory prompt missing session key=task_phase:focus');
+      }
+      if (!prompt.includes('key=task_phase:lint-reminder')) {
+        throw new Error('memory prompt missing cross_run key=task_phase:lint-reminder');
+      }
+      if (prompt.includes('key=deprecated-choice')) {
+        throw new Error('memory prompt includes stale/deleted key=deprecated-choice');
+      }
+
+      yield { type: 'system', subtype: 'init', content: 'MCP state optional integration provider (reader mode)' };
+
+      yield { type: 'tool_use', id: 'tool_r1', name: 'state_get_memory', input: { scope: 'decisions' } };
+      const decisions = await callStateTool(stateServer, 'state_get_memory', { scope: 'decisions' });
+      this.calledTools.push('state_get_memory');
+      yield { type: 'tool_result', toolUseId: 'tool_r1', content: JSON.stringify(decisions) };
+
+      const decisionEntries = getMemoryEntries(decisions);
+      const decisionEntry = decisionEntries.find((entry) => entry['key'] === 'schema-choice');
+      if (!decisionEntry) throw new Error('expected persisted decision key=schema-choice');
+      const decisionValue = decisionEntry['value'];
+      if (!isRecord(decisionValue) || decisionValue['version'] !== 'v2') {
+        throw new Error('expected persisted decision schema-choice version=v2');
+      }
+
+      yield { type: 'tool_use', id: 'tool_r2', name: 'state_get_memory', input: { scope: 'cross_run' } };
+      const crossRun = await callStateTool(stateServer, 'state_get_memory', { scope: 'cross_run' });
+      this.calledTools.push('state_get_memory');
+      yield { type: 'tool_result', toolUseId: 'tool_r2', content: JSON.stringify(crossRun) };
+
+      const crossRunEntries = getMemoryEntries(crossRun);
+      if (!crossRunEntries.some((entry) => entry['key'] === 'task_phase:lint-reminder')) {
+        throw new Error('expected persisted cross_run key=task_phase:lint-reminder');
+      }
+
+      yield { type: 'tool_use', id: 'tool_r3', name: 'state_get_issue', input: {} };
+      const issueReadResult = await callStateTool(stateServer, 'state_get_issue', {});
+      this.calledTools.push('state_get_issue');
+      yield { type: 'tool_result', toolUseId: 'tool_r3', content: JSON.stringify(issueReadResult) };
+
+      const issuePayload = issueReadResult['issue'];
+      if (!isRecord(issuePayload)) throw new Error('state_get_issue did not return an issue payload');
+      const statusPayload = issuePayload['status'];
+      if (!isRecord(statusPayload) || statusPayload['currentTaskId'] !== 'T2') {
+        throw new Error('expected currentTaskId=T2 in reader mode');
+      }
+
+      yield { type: 'assistant', content: 'MCP state tools executed successfully (reader).' };
+      yield { type: 'result', content: 'ok' };
+      return;
+    }
 
     const issue = {
       repo: 'acme/rocket',
@@ -293,7 +365,204 @@ class McpStateExerciseProvider implements AgentProvider {
 
     yield {
       type: 'tool_use',
-      id: 'tool_5',
+      id: 'tool_5a',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'working_set',
+        key: 'current-task',
+        value: { taskId: 'T2', summary: 'Follow-up task' },
+        source_iteration: 1,
+      },
+    };
+    const workingSetMemory = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'working_set',
+      key: 'current-task',
+      value: { taskId: 'T2', summary: 'Follow-up task' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5a', content: JSON.stringify(workingSetMemory) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5b',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'session',
+        key: 'task_phase:focus',
+        value: { phase: 'task_phase', focus: 'memory hierarchy verification' },
+        source_iteration: 1,
+      },
+    };
+    const sessionMemory = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'session',
+      key: 'task_phase:focus',
+      value: { phase: 'task_phase', focus: 'memory hierarchy verification' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5b', content: JSON.stringify(sessionMemory) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5c',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'decisions',
+        key: 'schema-choice',
+        value: { version: 'v1', reason: 'initial decision' },
+        source_iteration: 1,
+      },
+    };
+    const decisionMemoryV1 = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'decisions',
+      key: 'schema-choice',
+      value: { version: 'v1', reason: 'initial decision' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5c', content: JSON.stringify(decisionMemoryV1) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5d',
+      name: 'state_mark_memory_stale',
+      input: { scope: 'decisions', key: 'schema-choice' },
+    };
+    const staleDecision = await callStateTool(stateServer, 'state_mark_memory_stale', {
+      scope: 'decisions',
+      key: 'schema-choice',
+    });
+    this.calledTools.push('state_mark_memory_stale');
+    yield { type: 'tool_result', toolUseId: 'tool_5d', content: JSON.stringify(staleDecision) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5e',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'decisions',
+        key: 'schema-choice',
+        value: { version: 'v2', reason: 'replacement decision' },
+        source_iteration: 1,
+      },
+    };
+    const decisionMemoryV2 = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'decisions',
+      key: 'schema-choice',
+      value: { version: 'v2', reason: 'replacement decision' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5e', content: JSON.stringify(decisionMemoryV2) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5f',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'decisions',
+        key: 'deprecated-choice',
+        value: { version: 'legacy' },
+        source_iteration: 1,
+      },
+    };
+    const deprecatedDecision = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'decisions',
+      key: 'deprecated-choice',
+      value: { version: 'legacy' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5f', content: JSON.stringify(deprecatedDecision) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5g',
+      name: 'state_mark_memory_stale',
+      input: { scope: 'decisions', key: 'deprecated-choice' },
+    };
+    const staleDeprecated = await callStateTool(stateServer, 'state_mark_memory_stale', {
+      scope: 'decisions',
+      key: 'deprecated-choice',
+    });
+    this.calledTools.push('state_mark_memory_stale');
+    yield { type: 'tool_result', toolUseId: 'tool_5g', content: JSON.stringify(staleDeprecated) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5h',
+      name: 'state_delete_memory',
+      input: { scope: 'decisions', key: 'deprecated-choice' },
+    };
+    const deleteDeprecated = await callStateTool(stateServer, 'state_delete_memory', {
+      scope: 'decisions',
+      key: 'deprecated-choice',
+    });
+    this.calledTools.push('state_delete_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5h', content: JSON.stringify(deleteDeprecated) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5i',
+      name: 'state_upsert_memory',
+      input: {
+        scope: 'cross_run',
+        key: 'task_phase:lint-reminder',
+        value: { relevantPhases: ['task_phase'], reminder: 'run lint before test' },
+        source_iteration: 1,
+      },
+    };
+    const crossRunMemory = await callStateTool(stateServer, 'state_upsert_memory', {
+      scope: 'cross_run',
+      key: 'task_phase:lint-reminder',
+      value: { relevantPhases: ['task_phase'], reminder: 'run lint before test' },
+      source_iteration: 1,
+    });
+    this.calledTools.push('state_upsert_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5i', content: JSON.stringify(crossRunMemory) };
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5j',
+      name: 'state_get_memory',
+      input: { scope: 'decisions' },
+    };
+    const visibleDecisions = await callStateTool(stateServer, 'state_get_memory', {
+      scope: 'decisions',
+    });
+    this.calledTools.push('state_get_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5j', content: JSON.stringify(visibleDecisions) };
+
+    const visibleDecisionEntries = getMemoryEntries(visibleDecisions);
+    if (!visibleDecisionEntries.some((entry) => entry['key'] === 'schema-choice')) {
+      throw new Error('state_get_memory(decisions) missing schema-choice entry');
+    }
+    if (visibleDecisionEntries.some((entry) => entry['key'] === 'deprecated-choice')) {
+      throw new Error('state_get_memory(decisions) should not include deleted stale entry');
+    }
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_5k',
+      name: 'state_get_memory',
+      input: { scope: 'decisions', include_stale: true },
+    };
+    const allDecisions = await callStateTool(stateServer, 'state_get_memory', {
+      scope: 'decisions',
+      include_stale: true,
+    });
+    this.calledTools.push('state_get_memory');
+    yield { type: 'tool_result', toolUseId: 'tool_5k', content: JSON.stringify(allDecisions) };
+
+    const allDecisionEntries = getMemoryEntries(allDecisions);
+    if (!allDecisionEntries.some((entry) => entry['key'] === 'schema-choice')) {
+      throw new Error('state_get_memory(include_stale=true) missing schema-choice entry');
+    }
+
+    yield {
+      type: 'tool_use',
+      id: 'tool_6',
       name: 'state_append_progress',
       input: { entry: '## [Integration] MCP state test\nPhase writes through tools.\n' },
     };
@@ -301,12 +570,12 @@ class McpStateExerciseProvider implements AgentProvider {
       entry: '## [Integration] MCP state test\nPhase writes through tools.\n',
     });
     this.calledTools.push('state_append_progress');
-    yield { type: 'tool_result', toolUseId: 'tool_5', content: JSON.stringify(appendProgressResult) };
+    yield { type: 'tool_result', toolUseId: 'tool_6', content: JSON.stringify(appendProgressResult) };
 
-    yield { type: 'tool_use', id: 'tool_6', name: 'state_get_issue', input: {} };
+    yield { type: 'tool_use', id: 'tool_7', name: 'state_get_issue', input: {} };
     const issueReadResult = await callStateTool(stateServer, 'state_get_issue', {});
     this.calledTools.push('state_get_issue');
-    yield { type: 'tool_result', toolUseId: 'tool_6', content: JSON.stringify(issueReadResult) };
+    yield { type: 'tool_result', toolUseId: 'tool_7', content: JSON.stringify(issueReadResult) };
 
     const issuePayload = issueReadResult['issue'];
     if (!isRecord(issuePayload)) throw new Error('state_get_issue did not return an issue payload');
@@ -315,7 +584,18 @@ class McpStateExerciseProvider implements AgentProvider {
       throw new Error('state_update_issue_status did not update currentTaskId');
     }
 
-    yield { type: 'assistant', content: 'MCP state tools executed successfully.' };
+    yield { type: 'assistant', content: 'MCP state tools executed successfully (writer).' };
+    yield { type: 'result', content: 'ok' };
+  }
+}
+
+class PromptCaptureProvider implements AgentProvider {
+  readonly name = 'prompt-capture-provider';
+  seenPrompt: string | null = null;
+
+  async *run(prompt: string, options: ProviderRunOptions): AsyncIterable<ProviderEvent> {
+    void options;
+    this.seenPrompt = prompt;
     yield { type: 'result', content: 'ok' };
   }
 }
@@ -323,7 +603,7 @@ class McpStateExerciseProvider implements AgentProvider {
 const optionalDescribe = process.env.JEEVES_RUN_OPTIONAL_TESTS === 'true' ? describe : describe.skip;
 
 optionalDescribe('runner optional MCP state integration', () => {
-  it('runs a phase that calls state MCP tools and persists SQLite rows', async () => {
+  it('runs two phases with MCP state tools and preserves structured memory across iterations', async () => {
     const repoRoot = getRepoRoot();
     const stateEntrypoint = path.join(repoRoot, 'packages', 'mcp-state', 'dist', 'index.js');
     await expect(fs.stat(stateEntrypoint)).resolves.toBeDefined();
@@ -356,12 +636,12 @@ optionalDescribe('runner optional MCP state integration', () => {
     );
     await fs.writeFile(path.join(promptsDir, 'task.phase.prompt.md'), 'Optional MCP state integration prompt.\n', 'utf-8');
 
-    const provider = new McpStateExerciseProvider();
+    const writerProvider = new McpStateExerciseProvider('writer');
     const previousStatePath = process.env.JEEVES_MCP_STATE_PATH;
     process.env.JEEVES_MCP_STATE_PATH = stateEntrypoint;
     try {
-      const result = await runSinglePhaseOnce({
-        provider,
+      const writerResult = await runSinglePhaseOnce({
+        provider: writerProvider,
         workflowName: 'mcp-state-optional',
         phaseName: 'task_phase',
         workflowsDir,
@@ -370,16 +650,37 @@ optionalDescribe('runner optional MCP state integration', () => {
         cwd,
       });
 
-      expect(result).toEqual({ phase: 'task_phase', success: true });
-      expect(provider.seenStateServer).not.toBeNull();
-      expect(provider.calledTools).toEqual([
-        'state_put_issue',
-        'state_put_tasks',
-        'state_set_task_status',
-        'state_update_issue_status',
-        'state_append_progress',
-        'state_get_issue',
-      ]);
+      expect(writerResult).toEqual({ phase: 'task_phase', success: true });
+      expect(writerProvider.seenStateServer).not.toBeNull();
+      expect(writerProvider.calledTools).toEqual(
+        expect.arrayContaining([
+          'state_put_issue',
+          'state_put_tasks',
+          'state_set_task_status',
+          'state_update_issue_status',
+          'state_upsert_memory',
+          'state_mark_memory_stale',
+          'state_delete_memory',
+          'state_get_memory',
+          'state_append_progress',
+          'state_get_issue',
+        ]),
+      );
+
+      const readerProvider = new McpStateExerciseProvider('reader');
+      const readerResult = await runSinglePhaseOnce({
+        provider: readerProvider,
+        workflowName: 'mcp-state-optional',
+        phaseName: 'task_phase',
+        workflowsDir,
+        promptsDir,
+        stateDir,
+        cwd,
+      });
+      expect(readerResult).toEqual({ phase: 'task_phase', success: true });
+      expect(readerProvider.calledTools).toEqual(
+        expect.arrayContaining(['state_get_memory', 'state_get_issue']),
+      );
     } finally {
       if (previousStatePath === undefined) {
         delete process.env.JEEVES_MCP_STATE_PATH;
@@ -388,38 +689,138 @@ optionalDescribe('runner optional MCP state integration', () => {
       }
     }
 
-    const issuePath = path.join(stateDir, 'issue.json');
-    const tasksPath = path.join(stateDir, 'tasks.json');
     const progressPath = path.join(stateDir, 'progress.txt');
-    const issue = JSON.parse(await fs.readFile(issuePath, 'utf-8')) as Record<string, unknown>;
-    const tasks = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as Record<string, unknown>;
     const progress = await fs.readFile(progressPath, 'utf-8');
-    expect((issue.status as { currentTaskId?: string }).currentTaskId).toBe('T2');
-    expect(((tasks.tasks as { id: string; status: string }[])[0])?.status).toBe('passed');
     expect(progress).toContain('MCP state test');
 
     const logPath = path.join(stateDir, 'last-run.log');
     const log = await fs.readFile(logPath, 'utf-8');
-    expect(log).toContain('[TOOL] state_put_issue');
-    expect(log).toContain('[TOOL] state_update_issue_status');
+    expect(log).toContain('[RUNNER] memory_context=enabled');
+    expect(log).toContain('[TOOL] state_get_memory');
 
     const dbPath = path.join(tmp, 'jeeves.db');
     const dbStat = await fs.stat(dbPath);
     expect(dbStat.isFile()).toBe(true);
     expect(dbStat.size).toBeGreaterThan(0);
 
-    const stateServer = provider.seenStateServer;
+    const stateServer = writerProvider.seenStateServer;
     if (!stateServer) throw new Error('Missing captured state server config');
-    await fs.rm(issuePath);
-    await fs.rm(tasksPath);
 
     const issueFromDb = await callStateTool(stateServer, 'state_get_issue', {});
     const tasksFromDb = await callStateTool(stateServer, 'state_get_tasks', {});
+    const memoryFromDb = await callStateTool(stateServer, 'state_get_memory', { include_stale: true });
     const restoredIssue = issueFromDb['issue'];
     const restoredTasks = tasksFromDb['tasks'];
+    const restoredMemoryEntries = getMemoryEntries(memoryFromDb);
     expect(isRecord(restoredIssue)).toBe(true);
     expect(isRecord(restoredTasks)).toBe(true);
     expect(((restoredIssue as { status?: { currentTaskId?: string } }).status?.currentTaskId)).toBe('T2');
     expect((((restoredTasks as { tasks?: { status?: string }[] }).tasks ?? [])[0])?.status).toBe('passed');
-  }, 30_000);
+    expect(restoredMemoryEntries.some((entry) => entry['key'] === 'current-task')).toBe(true);
+    expect(restoredMemoryEntries.some((entry) => entry['key'] === 'schema-choice')).toBe(true);
+    expect(restoredMemoryEntries.some((entry) => entry['key'] === 'task_phase:focus')).toBe(true);
+    expect(restoredMemoryEntries.some((entry) => entry['key'] === 'task_phase:lint-reminder')).toBe(true);
+    expect(restoredMemoryEntries.some((entry) => entry['key'] === 'deprecated-choice')).toBe(false);
+  }, 90_000);
+
+  it('maintains deterministic memory prompt ordering across repeated fresh iterations', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-soak-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'issues', 'acme', 'rocket', '42');
+    const cwd = path.join(tmp, 'worktree');
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-soak.yaml'),
+      [
+        'workflow:',
+        '  name: memory-soak',
+        '  version: 1',
+        '  start: task_phase',
+        'phases:',
+        '  task_phase:',
+        '    type: execute',
+        '    prompt: task.phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'task.phase.prompt.md'), 'Optional memory soak prompt.\n', 'utf-8');
+
+    for (let iteration = 1; iteration <= 20; iteration += 1) {
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'working_set',
+        key: 'current-task',
+        value: { taskId: `T${iteration}`, iteration },
+        sourceIteration: iteration,
+      });
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'decisions',
+        key: 'schema-choice',
+        value: { version: 'v2', iteration },
+        sourceIteration: iteration,
+      });
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'session',
+        key: 'task_phase:focus',
+        value: { phase: 'task_phase', iteration },
+        sourceIteration: iteration,
+      });
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'cross_run',
+        key: 'task_phase:carry-forward',
+        value: { relevantPhases: ['task_phase'], iteration },
+        sourceIteration: iteration,
+      });
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'decisions',
+        key: 'stale-marker',
+        value: { iteration },
+        sourceIteration: iteration,
+      });
+      markMemoryEntryStaleInDb({
+        stateDir,
+        scope: 'decisions',
+        key: 'stale-marker',
+      });
+
+      const provider = new PromptCaptureProvider();
+      const result = await runSinglePhaseOnce({
+        provider,
+        workflowName: 'memory-soak',
+        phaseName: 'task_phase',
+        workflowsDir,
+        promptsDir,
+        stateDir,
+        cwd,
+      });
+      expect(result).toEqual({ phase: 'task_phase', success: true });
+
+      const prompt = provider.seenPrompt ?? '';
+      expect(prompt).toContain('<memory_context>');
+      expect(prompt).toContain('key=current-task');
+      expect(prompt).toContain('key=schema-choice');
+      expect(prompt).toContain('key=task_phase:focus');
+      expect(prompt).toContain('key=task_phase:carry-forward');
+      expect(prompt).not.toContain('key=stale-marker');
+
+      const workingIdx = prompt.indexOf('### Working Set (active)');
+      const decisionsIdx = prompt.indexOf('### Decisions (active)');
+      const sessionIdx = prompt.indexOf('### Session Context (phase=task_phase)');
+      const crossRunIdx = prompt.indexOf('### Cross-Run Memory (relevant)');
+      expect(workingIdx).toBeGreaterThanOrEqual(0);
+      expect(decisionsIdx).toBeGreaterThan(workingIdx);
+      expect(sessionIdx).toBeGreaterThan(decisionsIdx);
+      expect(crossRunIdx).toBeGreaterThan(sessionIdx);
+    }
+  }, 60_000);
 });

@@ -7,10 +7,14 @@ import { z } from 'zod';
 
 import {
   appendProgress,
+  deleteMemory,
   getIssue,
+  getMemory,
   getTasks,
   putIssue,
+  upsertMemory,
   putTasks,
+  markMemoryStale,
   setTaskStatus,
   updateIssueControlFields,
   updateIssueStatusFields,
@@ -53,6 +57,31 @@ const fieldPatchSchema = {
 };
 const progressSchema = {
   entry: z.string().describe('Raw text to append to progress.txt'),
+};
+const memoryScopeSchema = z
+  .enum(['session', 'working_set', 'decisions', 'cross_run'])
+  .describe('Memory scope');
+const getMemorySchema = {
+  scope: memoryScopeSchema.optional(),
+  key: z.string().min(1).optional().describe('Optional exact key filter'),
+  include_stale: z.boolean().optional().describe('Include stale entries when true'),
+  limit: z.number().int().positive().max(2000).optional().describe('Maximum entries to return'),
+};
+const upsertMemorySchema = {
+  scope: memoryScopeSchema,
+  key: z.string().min(1).describe('Stable memory key'),
+  value: z.record(z.string(), z.unknown()).describe('Structured JSON value payload'),
+  source_iteration: z.number().int().nonnegative().optional().describe('Optional source iteration'),
+  stale: z.boolean().optional().describe('Optional stale flag (defaults to false)'),
+};
+const markMemoryStaleSchema = {
+  scope: memoryScopeSchema,
+  key: z.string().min(1).describe('Stable memory key'),
+  stale: z.boolean().optional().describe('Set false to reactivate entry'),
+};
+const deleteMemorySchema = {
+  scope: memoryScopeSchema,
+  key: z.string().min(1).describe('Stable memory key'),
 };
 
 function isJsonRecord(value: unknown): value is JsonRecord {
@@ -187,6 +216,81 @@ async function main(): Promise<void> {
       try {
         await appendProgress(stateDir, args.entry);
         return jsonTextResult({ ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonTextResult({ ok: false, error: message });
+      }
+    },
+  );
+
+  server.tool(
+    'state_get_memory',
+    'List structured memory entries by scope/key.',
+    getMemorySchema,
+    async (args) => {
+      try {
+        const entries = await getMemory(stateDir, {
+          scope: args.scope,
+          key: args.key,
+          includeStale: args.include_stale,
+          limit: args.limit,
+        });
+        return jsonTextResult({ ok: true, state_dir: stateDir, count: entries.length, entries });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonTextResult({ ok: false, error: message });
+      }
+    },
+  );
+
+  server.tool(
+    'state_upsert_memory',
+    'Insert or update one structured memory entry.',
+    upsertMemorySchema,
+    async (args) => {
+      try {
+        if (!isJsonRecord(args.value)) {
+          return jsonTextResult({ ok: false, error: 'value must be an object' });
+        }
+        const entry = await upsertMemory(stateDir, {
+          scope: args.scope,
+          key: args.key,
+          value: args.value,
+          sourceIteration: args.source_iteration,
+          stale: args.stale,
+        });
+        return jsonTextResult({ ok: true, entry });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonTextResult({ ok: false, error: message });
+      }
+    },
+  );
+
+  server.tool(
+    'state_mark_memory_stale',
+    'Mark a memory entry stale (or reactivate it with stale=false).',
+    markMemoryStaleSchema,
+    async (args) => {
+      try {
+        const stale = args.stale ?? true;
+        const updated = await markMemoryStale(stateDir, args.scope, args.key, stale);
+        return jsonTextResult({ ok: true, updated, stale });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonTextResult({ ok: false, error: message });
+      }
+    },
+  );
+
+  server.tool(
+    'state_delete_memory',
+    'Delete one structured memory entry by scope/key.',
+    deleteMemorySchema,
+    async (args) => {
+      try {
+        const deleted = await deleteMemory(stateDir, args.scope, args.key);
+        return jsonTextResult({ ok: true, deleted });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonTextResult({ ok: false, error: message });

@@ -3,8 +3,14 @@ import path from 'node:path';
 
 import {
   appendProgressEvent,
+  deleteMemoryEntryFromDb,
+  listMemoryEntriesFromDb,
+  markMemoryEntryStaleInDb,
+  type MemoryEntry,
+  type MemoryScope,
   readIssueFromDb,
   readTasksFromDb,
+  upsertMemoryEntryInDb,
   writeIssueToDb,
   writeTasksToDb,
 } from '@jeeves/state-db';
@@ -94,4 +100,55 @@ export async function appendProgress(stateDir: string, entry: string): Promise<v
   const progressPath = path.join(stateDir, 'progress.txt');
   await fsp.mkdir(path.dirname(progressPath), { recursive: true });
   await fsp.appendFile(progressPath, entry, 'utf-8');
+}
+
+export async function getMemory(
+  stateDir: string,
+  options: {
+    scope?: MemoryScope;
+    key?: string;
+    includeStale?: boolean;
+    limit?: number;
+  } = {},
+): Promise<readonly MemoryEntry[]> {
+  return listMemoryEntriesFromDb({
+    stateDir,
+    scope: options.scope,
+    key: options.key,
+    includeStale: options.includeStale,
+    limit: options.limit,
+  });
+}
+
+export async function upsertMemory(
+  stateDir: string,
+  params: {
+    scope: MemoryScope;
+    key: string;
+    value: JsonRecord;
+    sourceIteration?: number | null;
+    stale?: boolean;
+  },
+): Promise<MemoryEntry> {
+  return upsertMemoryEntryInDb({
+    stateDir,
+    scope: params.scope,
+    key: params.key,
+    value: params.value,
+    sourceIteration: params.sourceIteration,
+    stale: params.stale,
+  });
+}
+
+export async function markMemoryStale(
+  stateDir: string,
+  scope: MemoryScope,
+  key: string,
+  stale = true,
+): Promise<boolean> {
+  return markMemoryEntryStaleInDb({ stateDir, scope, key, stale });
+}
+
+export async function deleteMemory(stateDir: string, scope: MemoryScope, key: string): Promise<boolean> {
+  return deleteMemoryEntryFromDb({ stateDir, scope, key });
 }

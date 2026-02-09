@@ -151,6 +151,58 @@ describe('workflowLoader', () => {
     expect(parsed).toEqual(workflow);
   });
 
+  it('round-trips phase mcp_enforcement', () => {
+    const workflow = parseWorkflowObject({
+      workflow: {
+        name: 'mcp-enforcement-roundtrip',
+        version: 1,
+        start: 'start',
+      },
+      phases: {
+        start: {
+          type: 'execute',
+          mcp_profile: 'state_with_pruner',
+          mcp_enforcement: 'allow_degraded',
+          prompt: 'Start',
+          transitions: [{ to: 'complete' }],
+        },
+        complete: { type: 'terminal' },
+      },
+    });
+
+    expect(workflow.phases.start.mcpEnforcement).toBe('allow_degraded');
+
+    const raw = toRawWorkflowJson(workflow);
+    const phases = raw.phases as Record<string, Record<string, unknown>>;
+    expect(phases.start.mcp_enforcement).toBe('allow_degraded');
+
+    const yaml = toWorkflowYaml(workflow);
+    const parsed = parseWorkflowYaml(yaml);
+    expect(parsed).toEqual(workflow);
+  });
+
+  it('rejects invalid mcp_enforcement values', () => {
+    expect(() =>
+      parseWorkflowObject({
+        workflow: {
+          name: 'mcp-enforcement-invalid',
+          version: 1,
+          start: 'start',
+        },
+        phases: {
+          start: {
+            type: 'execute',
+            mcp_profile: 'state_with_pruner',
+            mcp_enforcement: 'sometimes',
+            prompt: 'Start',
+            transitions: [{ to: 'complete' }],
+          },
+          complete: { type: 'terminal' },
+        },
+      }),
+    ).toThrow(/invalid mcp_enforcement/i);
+  });
+
   it('round-trips workflow.default_reasoning_effort (Codex)', () => {
     const workflow = parseWorkflowObject({
       workflow: {

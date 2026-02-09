@@ -49,6 +49,10 @@ function sendRequests(
         ...(server.env ?? {}),
       },
     });
+    const childEvents = child as unknown as {
+      on(event: 'error', listener: (err: unknown) => void): void;
+      on(event: 'exit', listener: () => void): void;
+    };
 
     const expectedResponses = requests.reduce((count, request) => {
       return request.id === undefined ? count : count + 1;
@@ -105,11 +109,11 @@ function sendRequests(
       stderrBuffer += chunk.toString();
     });
 
-    child.on('error', (err) => {
+    childEvents.on('error', (err: unknown) => {
       settle(() => reject(err));
     });
 
-    child.on('exit', () => {
+    childEvents.on('exit', () => {
       if (responses.length >= expectedResponses) {
         settle(() => resolve(responses));
         return;

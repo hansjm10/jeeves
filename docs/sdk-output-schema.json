@@ -165,6 +165,69 @@
         "response_truncated": {
           "type": "boolean",
           "description": "True when response_text was truncated by provider limits"
+        },
+        "response_compression": {
+          "$ref": "#/$defs/ToolResponseCompression"
+        },
+        "response_retrieval": {
+          "$ref": "#/$defs/ToolResponseRetrieval"
+        }
+      }
+    },
+    "ToolResponseCompression": {
+      "type": "object",
+      "required": ["mode", "raw_char_count", "summary_char_count"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "extractive_summary", "truncated_preview"]
+        },
+        "raw_char_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary_char_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncation_reason": {
+          "type": "string",
+          "enum": ["max_chars"]
+        },
+        "structured_summary": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ToolResponseRetrieval": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["available", "not_applicable"]
+        },
+        "handle": {
+          "type": "string"
+        },
+        "artifact_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mime": {
+          "type": "string"
+        },
+        "chunk_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "not_applicable_reason": {
+          "type": "string"
         }
       }
     }

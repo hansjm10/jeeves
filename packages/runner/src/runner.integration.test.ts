@@ -202,4 +202,103 @@ describe('runner integration', () => {
     expect(prompt.indexOf('AGENTS SENTINEL')).toBeLessThan(prompt.indexOf('CLAUDE SENTINEL'));
     expect(prompt.indexOf('CLAUDE SENTINEL')).toBeLessThan(prompt.indexOf('PHASE PROMPT SENTINEL'));
   });
+
+  it('fails fast when required MCP servers are missing for strict enforcement', async () => {
+    const tmp = await makeTempDir('jeeves-runner-mcp-strict-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'mcp-strict-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: mcp-strict-fixture',
+        '  version: 1',
+        '  start: phase_one',
+        'phases:',
+        '  phase_one:',
+        '    type: execute',
+        '    mcp_profile: state_with_pruner',
+        '    prompt: phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'phase.prompt.md'), 'strict mcp prompt', 'utf-8');
+
+    const result = await runSinglePhaseOnce({
+      provider: new FakeProvider(),
+      workflowName: 'mcp-strict-fixture',
+      phaseName: 'phase_one',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'phase_one', success: false });
+
+    const log = await fs.readFile(path.join(stateDir, 'last-run.log'), 'utf-8');
+    expect(log).toContain('[MCP] FAIL_FAST');
+    expect(log).toContain('Missing required MCP servers');
+  });
+
+  it('allows explicit degraded mode when mcp_enforcement=allow_degraded', async () => {
+    const tmp = await makeTempDir('jeeves-runner-mcp-degraded-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'mcp-degraded-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: mcp-degraded-fixture',
+        '  version: 1',
+        '  start: phase_one',
+        'phases:',
+        '  phase_one:',
+        '    type: execute',
+        '    mcp_profile: state_with_pruner',
+        '    mcp_enforcement: allow_degraded',
+        '    prompt: phase.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'phase.prompt.md'), 'degraded mcp prompt', 'utf-8');
+
+    const result = await runSinglePhaseOnce({
+      provider: new FakeProvider(),
+      workflowName: 'mcp-degraded-fixture',
+      phaseName: 'phase_one',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+      mcpServers: {
+        state: {
+          command: 'node',
+          args: ['/tmp/fake-mcp-state.js'],
+        },
+      },
+    });
+
+    expect(result).toEqual({ phase: 'phase_one', success: true });
+    const log = await fs.readFile(path.join(stateDir, 'last-run.log'), 'utf-8');
+    expect(log).toContain('[MCP] DEGRADED_MODE');
+  });
 });

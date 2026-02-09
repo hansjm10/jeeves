@@ -13,6 +13,9 @@ export type CodexModelId = (typeof codexModels)[number];
 export const codexReasoningEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type CodexReasoningEffortId = (typeof codexReasoningEfforts)[number];
 
+export const mcpEnforcementModes = ['strict', 'allow_degraded'] as const;
+export type McpEnforcementMode = (typeof mcpEnforcementModes)[number];
+
 /** Claude thinking budget IDs */
 export const claudeThinkingBudgets = ['none', 'low', 'medium', 'high', 'max'] as const;
 export type ClaudeThinkingBudgetId = (typeof claudeThinkingBudgets)[number];
@@ -57,6 +60,7 @@ export type Phase = Readonly<{
   type: PhaseType;
   provider?: string;
   mcpProfile?: string;
+  mcpEnforcement?: McpEnforcementMode;
   prompt?: string;
   command?: string;
   description?: string;

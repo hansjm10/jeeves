@@ -117,4 +117,49 @@ describe('SdkOutputWriterV1', () => {
     expect(snap.stats.cache_read_input_tokens).toBeUndefined();
     expect(snap.stats.cache_creation_input_tokens).toBeUndefined();
   });
+
+  it('persists raw tool output artifacts and attaches retrieval metadata', async () => {
+    const tmp = await makeTempDir('jeeves-output-writer-');
+    const outputPath = path.join(tmp, 'sdk-output.json');
+
+    const writer = new SdkOutputWriterV1({ outputPath });
+    const rawOutput = 'A'.repeat(4096);
+
+    writer.addProviderEvent({
+      type: 'tool_use',
+      name: 'Bash',
+      input: { command: 'pnpm test' },
+      id: 'tool_raw_1',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    });
+
+    writer.addProviderEvent({
+      type: 'tool_result',
+      toolUseId: 'tool_raw_1',
+      content: 'summary',
+      response_text: 'summary',
+      response_truncated: true,
+      response_raw_text: rawOutput,
+      response_compression: {
+        mode: 'extractive_summary',
+        raw_char_count: rawOutput.length,
+        summary_char_count: 7,
+      },
+      timestamp: '2026-01-01T00:00:01.000Z',
+    });
+
+    await writer.writeIncremental({ force: true });
+    const snap = writer.snapshot();
+    const retrieval = snap.tool_calls[0]?.response_retrieval;
+
+    expect(retrieval?.status).toBe('available');
+    expect(retrieval?.handle).toBeDefined();
+    expect(retrieval?.artifact_paths?.length).toBe(1);
+    expect(snap.tool_calls[0]?.response_compression?.mode).toBe('extractive_summary');
+
+    const artifactPath = retrieval?.artifact_paths?.[0];
+    expect(artifactPath).toBeDefined();
+    const rawFromDisk = await fs.readFile(path.join(tmp, artifactPath!), 'utf-8');
+    expect(rawFromDisk).toBe(rawOutput);
+  });
 });

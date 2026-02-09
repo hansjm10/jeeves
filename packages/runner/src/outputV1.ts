@@ -1,3 +1,5 @@
+import type { ToolResponseCompression, ToolResponseRetrieval } from './toolResultMetadata.js';
+
 export type SdkOutputV1Message = Readonly<{
   type: 'system' | 'user' | 'assistant' | 'tool_result' | 'result';
   timestamp: string;
@@ -18,6 +20,8 @@ export type SdkOutputV1ToolCall = Readonly<{
   is_error?: boolean;
   response_text?: string;
   response_truncated?: boolean;
+  response_compression?: ToolResponseCompression;
+  response_retrieval?: ToolResponseRetrieval;
   [key: string]: unknown;
 }>;
 

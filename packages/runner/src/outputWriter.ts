@@ -5,9 +5,24 @@ import { appendRunSdkEvent, upsertRunArtifact } from '@jeeves/state-db';
 
 import type { ProviderEvent, UsageData } from './provider.js';
 import type { SdkOutputV1, SdkOutputV1Message, SdkOutputV1ToolCall } from './outputV1.js';
+import type { ToolResponseRetrieval } from './toolResultMetadata.js';
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function sanitizeToolUseId(toolUseId: string): string {
+  const safe = toolUseId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+  return safe || 'tool';
+}
+
+function chunkText(input: string, maxChars: number): string[] {
+  if (input.length <= maxChars) return [input];
+  const chunks: string[] = [];
+  for (let idx = 0; idx < input.length; idx += maxChars) {
+    chunks.push(input.slice(idx, idx + maxChars));
+  }
+  return chunks;
 }
 
 async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
@@ -25,7 +40,10 @@ async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
 }
 
 export class SdkOutputWriterV1 {
+  private static readonly RAW_TOOL_OUTPUT_CHUNK_CHARS = 64_000;
+
   private readonly outputPath: string;
+  private readonly rawToolOutputDir: string;
   private readonly dbContext: Readonly<{
     dataDir: string;
     runId: string;
@@ -43,6 +61,12 @@ export class SdkOutputWriterV1 {
   private usage: UsageData | null = null;
   private lastWriteAtMs = 0;
   private completionEventEmitted = false;
+  private readonly pendingRawArtifactWrites: {
+    absPath: string;
+    relPath: string;
+    content: string;
+  }[] = [];
+  private readonly retrievalMetaByToolUseId = new Map<string, ToolResponseRetrieval>();
 
   constructor(params: {
     outputPath: string;
@@ -54,6 +78,7 @@ export class SdkOutputWriterV1 {
     }> | null;
   }) {
     this.outputPath = params.outputPath;
+    this.rawToolOutputDir = path.join(path.dirname(params.outputPath), 'tool-raw');
     this.startedAt = nowIso();
     const db = params.dbContext;
     this.dbContext = db
@@ -64,6 +89,68 @@ export class SdkOutputWriterV1 {
           taskId: db.taskId ?? '',
         }
       : null;
+  }
+
+  private scheduleRawToolOutput(toolUseId: string, rawText: string): ToolResponseRetrieval {
+    const existing = this.retrievalMetaByToolUseId.get(toolUseId);
+    if (existing && existing.status === 'available') return existing;
+
+    if (rawText.length === 0) {
+      const notApplicable: ToolResponseRetrieval = {
+        status: 'not_applicable',
+        not_applicable_reason: 'tool output was empty',
+      };
+      this.retrievalMetaByToolUseId.set(toolUseId, notApplicable);
+      return notApplicable;
+    }
+
+    const safeId = sanitizeToolUseId(toolUseId);
+    const chunks = chunkText(rawText, SdkOutputWriterV1.RAW_TOOL_OUTPUT_CHUNK_CHARS);
+    const artifactPaths: string[] = [];
+
+    for (let idx = 0; idx < chunks.length; idx += 1) {
+      const relPath = path.posix.join('tool-raw', `${safeId}.part-${String(idx + 1).padStart(3, '0')}.txt`);
+      artifactPaths.push(relPath);
+      const absPath = path.join(path.dirname(this.outputPath), relPath);
+      this.pendingRawArtifactWrites.push({
+        absPath,
+        relPath,
+        content: chunks[idx] ?? '',
+      });
+    }
+
+    const retrieval: ToolResponseRetrieval = {
+      status: 'available',
+      handle: `tool-output://${safeId}`,
+      artifact_paths: artifactPaths,
+      mime: 'text/plain; charset=utf-8',
+      chunk_count: chunks.length,
+    };
+    this.retrievalMetaByToolUseId.set(toolUseId, retrieval);
+    return retrieval;
+  }
+
+  private async flushPendingRawArtifacts(): Promise<void> {
+    if (this.pendingRawArtifactWrites.length === 0) return;
+
+    await fs.mkdir(this.rawToolOutputDir, { recursive: true });
+    while (this.pendingRawArtifactWrites.length > 0) {
+      const next = this.pendingRawArtifactWrites.shift();
+      if (!next) continue;
+      await fs.mkdir(path.dirname(next.absPath), { recursive: true });
+      await fs.writeFile(next.absPath, next.content, 'utf-8');
+      if (this.dbContext) {
+        upsertRunArtifact({
+          dataDir: this.dbContext.dataDir,
+          runId: this.dbContext.runId,
+          scope: this.dbContext.scope,
+          taskId: this.dbContext.taskId,
+          name: next.relPath,
+          mime: 'text/plain; charset=utf-8',
+          content: Buffer.from(next.content, 'utf-8'),
+        });
+      }
+    }
   }
 
   setSessionId(sessionId: string | null): void {
@@ -124,19 +211,30 @@ export class SdkOutputWriterV1 {
     }
 
     if (event.type === 'tool_result') {
+      const responseText = event.response_text ?? event.content;
+      const responseRetrieval = event.response_raw_text !== undefined
+        ? this.scheduleRawToolOutput(event.toolUseId, event.response_raw_text)
+        : event.response_retrieval_not_applicable_reason
+          ? {
+              status: 'not_applicable' as const,
+              not_applicable_reason: event.response_retrieval_not_applicable_reason,
+            }
+          : undefined;
+
       const message: SdkOutputV1Message = {
         type: 'tool_result',
         timestamp,
         tool_use_id: event.toolUseId,
         content: event.content,
         ...(event.isError ? { is_error: true } : {}),
+        ...(event.response_compression ? { response_compression: event.response_compression } : {}),
+        ...(responseRetrieval ? { response_retrieval: responseRetrieval } : {}),
       };
       this.messages.push(message);
       this.emitMessageEvent(message, timestamp);
 
       const idx = this.toolCallIndexById.get(event.toolUseId);
       const toolName = idx !== undefined ? this.toolCalls[idx]?.name : undefined;
-      const responseText = event.response_text ?? event.content;
       if (idx !== undefined) {
         const prev = this.toolCalls[idx];
         this.toolCalls[idx] = {
@@ -145,6 +243,8 @@ export class SdkOutputWriterV1 {
           ...(event.isError ? { is_error: true } : {}),
           response_text: responseText,
           ...(event.response_truncated !== undefined ? { response_truncated: event.response_truncated } : {}),
+          ...(event.response_compression ? { response_compression: event.response_compression } : {}),
+          ...(responseRetrieval ? { response_retrieval: responseRetrieval } : {}),
         };
       }
       this.emitSdkEvent(
@@ -156,6 +256,8 @@ export class SdkOutputWriterV1 {
           is_error: event.isError ?? false,
           response_text: responseText,
           ...(event.response_truncated !== undefined ? { response_truncated: event.response_truncated } : {}),
+          ...(event.response_compression ? { response_compression: event.response_compression } : {}),
+          ...(responseRetrieval ? { response_retrieval: responseRetrieval } : {}),
         },
         timestamp,
       );
@@ -270,6 +372,7 @@ export class SdkOutputWriterV1 {
     const force = options?.force ?? false;
     const nowMs = Date.now();
     if (!force && nowMs - this.lastWriteAtMs < minIntervalMs) return;
+    await this.flushPendingRawArtifacts();
     const snapshot = this.snapshot();
     await writeJsonAtomic(this.outputPath, snapshot);
     if (this.dbContext) {

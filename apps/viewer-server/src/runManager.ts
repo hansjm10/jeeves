@@ -1791,6 +1791,9 @@ export class RunManager {
     copyIfExists(path.join(this.stateDir, 'sdk-output.json'), 'sdk-output.json');
     copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
     copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
+    copies.push(
+      fs.cp(path.join(this.stateDir, 'tool-raw'), path.join(iterDir, 'tool-raw'), { recursive: true }).catch(() => void 0),
+    );
     await Promise.allSettled(copies);
 
     if (params.tool_usage_diagnostics) {

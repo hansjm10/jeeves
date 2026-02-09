@@ -157,6 +157,14 @@
           "type": "boolean",
           "default": false,
           "description": "Whether the tool call resulted in an error"
+        },
+        "response_text": {
+          "type": "string",
+          "description": "Truncated preview of the tool response payload"
+        },
+        "response_truncated": {
+          "type": "boolean",
+          "description": "True when response_text was truncated by provider limits"
         }
       }
     }

@@ -225,6 +225,44 @@ describe('grep tool', () => {
 
       expect(result.content[0].text).toMatch(/^Error: /);
     });
+
+    it('includes context lines in fallback mode when context_lines is set', async () => {
+      const result = await handleGrep(
+        { pattern: 'foo', path: path.join(tmpDir, 'match.txt'), context_lines: 1 },
+        { grepCommand: null },
+      );
+
+      expect(result.content[0].text).toContain('1-hello world');
+      expect(result.content[0].text).toContain('2:foo bar');
+      expect(result.content[0].text).toContain('3-hello again');
+    });
+  });
+
+  describe('extended arguments', () => {
+    it('supports batch patterns with sectioned output', async () => {
+      const result = await handleGrep({
+        patterns: ['hello', 'foo'],
+        path: path.join(tmpDir, 'match.txt'),
+      });
+
+      expect(result.content[0].text).toContain('== pattern: hello ==');
+      expect(result.content[0].text).toContain('== pattern: foo ==');
+      expect(result.content[0].text).toContain('hello world');
+      expect(result.content[0].text).toContain('foo bar');
+    });
+
+    it('truncates output when max_matches is exceeded', async () => {
+      const result = await handleGrep(
+        {
+          pattern: '.',
+          path: path.join(tmpDir, 'match.txt'),
+          max_matches: 1,
+        },
+        { grepCommand: null },
+      );
+
+      expect(result.content[0].text).toContain('(truncated');
+    });
   });
 
   describe('command execution', () => {

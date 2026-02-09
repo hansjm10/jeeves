@@ -9,6 +9,8 @@ export type ToolState = {
   input: Record<string, unknown>;
   status: ToolStatus;
   duration_ms?: number;
+  response_text?: string;
+  response_truncated?: boolean;
   timestamp: number;
   order: number;
 };
@@ -45,6 +47,8 @@ export function useToolState(sdkEvents: readonly SdkEvent[]): ToolState[] {
             ...existing,
             status: data.is_error ? 'error' : 'completed',
             duration_ms: data.duration_ms,
+            ...(data.response_text !== undefined ? { response_text: data.response_text } : {}),
+            ...(data.response_truncated !== undefined ? { response_truncated: data.response_truncated } : {}),
           });
         }
       }

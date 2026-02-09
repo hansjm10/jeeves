@@ -1,8 +1,11 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
+- Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
+- Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 # CI Fix Phase
@@ -20,13 +23,13 @@ You fix commit and push failures. You read error output, identify the issue, app
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (has commitFailed/pushFailed flags)
+- Issue config: `state_get_issue` output (has commitFailed/pushFailed flags)
 - Error details: `.jeeves/ci-error.txt`
 - Progress log: `.jeeves/progress.txt`
 </inputs>
 
 <instructions>
-1. Read `.jeeves/issue.json` to determine failure type:
+1. Read `state_get_issue` output to determine failure type:
    - `status.commitFailed` = commit failed (pre-commit hooks, lint)
    - `status.pushFailed` = push failed (pre-push hooks, remote rejection)
 

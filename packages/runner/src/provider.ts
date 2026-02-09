@@ -45,6 +45,8 @@ export type ProviderEvent =
       content: string;
       isError?: boolean;
       durationMs?: number | null;
+      response_text?: string;
+      response_truncated?: boolean;
       timestamp?: string;
     }>
   | Readonly<{

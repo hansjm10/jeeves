@@ -2,12 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SdkEvent, SdkInitData, SdkCompleteData } from '../../api/types.js';
 import { useToolState } from './useToolState.js';
 import { ToolCard } from './ToolCard.js';
+import { buildTimelineEntries, entryMatchesFilter, type TimelineMessage } from './timelineEntries.js';
 
 type Props = {
   sdkEvents: readonly SdkEvent[];
   filter: string;
   onCopy: (data: Record<string, unknown>) => void;
 };
+
+function MessageCard({ message }: { message: TimelineMessage }) {
+  return (
+    <div className="sdk-message-card" data-role={message.type}>
+      <div className="sdk-message-card-header">
+        <span className="sdk-message-role">{message.type}</span>
+      </div>
+      <pre className="sdk-message-content">{message.content}</pre>
+    </div>
+  );
+}
 
 function SessionHeader({ data }: { data: SdkInitData }) {
   return (
@@ -66,29 +78,24 @@ function SessionFooter({ data }: { data: SdkCompleteData }) {
 export function SdkTimeline({ sdkEvents, filter, onCopy }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const prevToolsLength = useRef(0);
+  const prevEntryLength = useRef(0);
 
   const tools = useToolState(sdkEvents);
+  const entries = buildTimelineEntries(sdkEvents, tools);
 
   // Find init and complete events
   const initEvent = sdkEvents.find(e => e.event === 'sdk-init');
   const completeEvent = sdkEvents.find(e => e.event === 'sdk-complete');
 
-  // Filter tools based on search
-  const filteredTools = filter.trim()
-    ? tools.filter(t =>
-        t.name.toLowerCase().includes(filter.toLowerCase()) ||
-        JSON.stringify(t.input).toLowerCase().includes(filter.toLowerCase())
-      )
-    : tools;
+  const filteredEntries = entries.filter(entry => entryMatchesFilter(entry, filter));
 
-  // Auto-scroll when new tools arrive
+  // Auto-scroll when new timeline entries arrive
   useEffect(() => {
-    if (autoScroll && containerRef.current && tools.length > prevToolsLength.current) {
+    if (autoScroll && containerRef.current && entries.length > prevEntryLength.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-    prevToolsLength.current = tools.length;
-  }, [tools.length, autoScroll]);
+    prevEntryLength.current = entries.length;
+  }, [entries.length, autoScroll]);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -101,7 +108,7 @@ export function SdkTimeline({ sdkEvents, filter, onCopy }: Props) {
     onCopy(input);
   }, [onCopy]);
 
-  if (tools.length === 0 && !initEvent) {
+  if (entries.length === 0 && !initEvent) {
     return (
       <div className="sdk-timeline-empty">
         <div className="sdk-empty-icon">
@@ -111,8 +118,8 @@ export function SdkTimeline({ sdkEvents, filter, onCopy }: Props) {
             <path d="M2 12l10 5 10-5"/>
           </svg>
         </div>
-        <p className="sdk-empty-title">Waiting for tool executions</p>
-        <p className="sdk-empty-subtitle">Tools will appear here as they run</p>
+        <p className="sdk-empty-title">Waiting for timeline events</p>
+        <p className="sdk-empty-subtitle">Messages and tools will appear here as they run</p>
       </div>
     );
   }
@@ -126,25 +133,40 @@ export function SdkTimeline({ sdkEvents, filter, onCopy }: Props) {
       <div className="sdk-timeline-track">
         {initEvent && <SessionHeader data={initEvent.data as SdkInitData} />}
 
-        {filteredTools.map(tool => (
-          <div key={tool.tool_use_id} className="sdk-timeline-item">
-            <div className="sdk-timeline-connector" />
-            <div className="sdk-timeline-dot" data-status={tool.status} />
-            <div className="sdk-timeline-content">
-              <ToolCard
-                tool={tool}
-                onCopy={() => handleCopy(tool.input)}
-              />
+        {filteredEntries.map(entry => {
+          if (entry.kind === 'tool') {
+            const tool = entry.tool;
+            return (
+              <div key={entry.key} className="sdk-timeline-item">
+                <div className="sdk-timeline-connector" />
+                <div className="sdk-timeline-dot" data-status={tool.status} />
+                <div className="sdk-timeline-content">
+                  <ToolCard
+                    tool={tool}
+                    onCopy={() => handleCopy(tool.input)}
+                  />
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={entry.key} className="sdk-timeline-item">
+              <div className="sdk-timeline-connector" />
+              <div className="sdk-timeline-dot" data-status={entry.message.type} />
+              <div className="sdk-timeline-content">
+                <MessageCard message={entry.message} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {completeEvent && <SessionFooter data={completeEvent.data as SdkCompleteData} />}
       </div>
 
-      {filter && filteredTools.length === 0 && (
+      {filter && filteredEntries.length === 0 && (
         <div className="sdk-timeline-no-results">
-          <p>No tools match "{filter}"</p>
+          <p>No timeline events match "{filter}"</p>
         </div>
       )}
     </div>

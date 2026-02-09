@@ -1,8 +1,11 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Investigation loop is mandatory: (1) run `3-6` targeted locator greps to find anchors, (2) stop locator searching and read surrounding code with `mcp:pruner/read` before making behavior claims, (3) confirm expected behavior in related tests with at least one targeted test-file grep/read.
+- Treat grep hits as evidence of existence only. Any claim about behavior, ordering, races, error handling, or correctness MUST be backed by surrounding code read output.
+- Do not repeat an identical grep query in the same investigation pass unless the previous call failed or the search scope changed.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 <role>
@@ -15,11 +18,10 @@ This phase exists to catch missing or incomplete task coverage before entering t
 - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files)
 - Workflow position: After `task_decomposition`, before `implement_task`
 - Allowed modifications:
-  - `.jeeves/issue.json`
-  - `.jeeves/progress.txt`
+  - `.jeeves/phase-report.json`
   - `.jeeves/issue.md` (cache of issue/work-item content)
 - **Prohibited modifications**:
-  - `.jeeves/tasks.json` — you MUST NOT modify this file
+  - Canonical task state (must remain read-only in this phase)
   - Any source files
 - Purpose: Verify task coverage and design doc existence before implementation
 - The `.jeeves/` directory is in your current working directory
@@ -27,25 +29,27 @@ This phase exists to catch missing or incomplete task coverage before entering t
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json`
-  - Contains `issue.number` and `issue.repo`
-  - Contains `designDocPath`
-- Task list: `.jeeves/tasks.json` (read-only)
-- Progress log: `.jeeves/progress.txt`
+- Issue config: `state_get_issue`
+  - Contains `issue.number`, `issue.repo`, and `designDocPath`
+- Task list: `state_get_tasks` (read-only)
+- Progress log: `state_append_progress`
 - Issue source (provider-aware): GitHub `gh issue view <number> --repo <repo> --json title,body` or Azure DevOps `az boards work-item show --id <id> --organization <org> --project <project> --output json`, with `.jeeves/issue.md` cache fallback
 </inputs>
 
 <constraints>
 IMPORTANT: This is a **read-only evaluation phase** for source files.
 
-You MUST NOT modify `.jeeves/tasks.json`
+You MUST NOT modify canonical task state in this phase.
 
 You MUST NOT modify any source code files
 
 You MAY ONLY modify:
-- `.jeeves/issue.json` (to set status flags)
-- `.jeeves/progress.txt` (to log results)
+- `.jeeves/phase-report.json` (to set status flags)
 - `.jeeves/issue.md` (to cache issue content)
+
+You MUST append progress entries via `state_append_progress` (do not write `.jeeves/progress.txt` directly).
+
+You MUST obtain issue/task state via `state_get_issue` and `state_get_tasks` (do not read `state_get_issue` output or `.jeeves/tasks.json` directly).
 
 On failure, you force a rerun of `task_decomposition` via workflow transition — you do NOT fix tasks yourself.
 </constraints>
@@ -53,11 +57,11 @@ On failure, you force a rerun of `task_decomposition` via workflow transition �
 <instructions>
 ## 1. Load authoritative inputs
 
-Read `.jeeves/issue.json` to obtain:
+Call `state_get_issue` to obtain:
 - `issue.number` and `issue.repo`
 - `designDocPath`
 
-Load `.jeeves/tasks.json` to get the decomposed task list.
+Call `state_get_tasks` to load the decomposed task list.
 
 ## 2. Verify design document is git-tracked (HARD FAIL)
 
@@ -103,8 +107,8 @@ az boards work-item show --id <id> --organization <org> --project <project> --ou
 
 ## 4. Verify task list structural validity (HARD FAIL)
 
-Check `.jeeves/tasks.json`:
-- File exists and parses as valid JSON
+Check the `state_get_tasks` response:
+- Response exists and is a valid JSON object
 - Contains a `tasks` array
 - Each task has:
   - `id` (non-empty string)
@@ -149,7 +153,7 @@ If no explicit section is found, extract ALL markdown task-list items (`- [ ] ..
 
 ### Step 5c: Provider-structured fallback (deterministic)
 If Steps 5a/5b yield zero requirements, build a deterministic requirement list from accessible authoritative fields:
-1. Include issue title from `.jeeves/issue.json.issue.title` as requirement #1.
+1. Include issue title from `state_get_issue.issue.title` as requirement #1.
 2. In `.jeeves/issue.md`, locate these headings (case-insensitive): "Description", "Expected Result", "Suggested Fix", "Impact", "Steps to Reproduce".
 3. For each heading, include each non-empty line/paragraph as a requirement candidate.
 4. Normalize whitespace and deduplicate exact matches.
@@ -165,7 +169,7 @@ If all methods yield zero requirements → HARD FAIL:
 ## 6. Map requirements to tasks (100% COVERAGE REQUIRED)
 
 For each must-have requirement:
-1. Search the task list (`tasks.json`) for tasks whose `title`, `summary`, or `acceptanceCriteria` plausibly cover the requirement
+1. Search the task list (`state_get_tasks`) for tasks whose `title`, `summary`, or `acceptanceCriteria` plausibly cover the requirement
 2. Record a mapping: `Requirement → Task ID(s)` with a 1-2 sentence justification
 
 **Coverage rules:**
@@ -212,7 +216,7 @@ If any answer is "no" or uncertain → investigate further before deciding.
 
 **CRITICAL**: Every exit path (PASS or FAIL) MUST:
 1. Write `.jeeves/phase-report.json` with BOTH status flags (`preCheckPassed` and `preCheckFailed`)
-2. Append the required progress log entry
+2. Append the required progress log entry via `state_append_progress`
 
 ## If PASS
 
@@ -229,7 +233,7 @@ Write `.jeeves/phase-report.json`:
 }
 ```
 
-Append progress entry and proceed to `implement_task`.
+Append progress entry via `state_append_progress` and proceed to `implement_task`.
 
 ## If FAIL
 
@@ -246,7 +250,7 @@ Write `.jeeves/phase-report.json`:
 }
 ```
 
-Append progress entry with:
+Append progress entry via `state_append_progress` with:
 - List of uncovered requirements
 - Suggested task additions (but do NOT create them—`task_decomposition` will handle that)
 

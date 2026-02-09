@@ -639,6 +639,21 @@
   border-color: var(--color-accent-red);
 }
 
+.sdk-timeline-dot[data-status="assistant"] {
+  background: var(--color-accent-blue);
+  border-color: var(--color-accent-blue);
+}
+
+.sdk-timeline-dot[data-status="user"] {
+  background: var(--color-accent-green);
+  border-color: var(--color-accent-green);
+}
+
+.sdk-timeline-dot[data-status="result"] {
+  background: var(--color-accent-orange);
+  border-color: var(--color-accent-orange);
+}
+
 @keyframes dotPulse {
   0%, 100% { box-shadow: 0 0 4px var(--color-accent-amber); }
   50% { box-shadow: 0 0 12px var(--color-accent-amber); }
@@ -741,6 +756,50 @@
   text-align: center;
   color: var(--color-text-dim);
   font-size: 13px;
+}
+
+.sdk-message-card {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.sdk-message-card[data-role="assistant"] {
+  border-color: rgba(88, 166, 255, 0.35);
+}
+
+.sdk-message-card[data-role="user"] {
+  border-color: rgba(63, 185, 80, 0.35);
+}
+
+.sdk-message-card[data-role="result"] {
+  border-color: rgba(255, 166, 87, 0.35);
+}
+
+.sdk-message-card-header {
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.sdk-message-role {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sdk-message-content {
+  margin: 0;
+  padding: var(--space-5) var(--space-6);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Tool Card */
@@ -898,6 +957,46 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.sdk-tool-response {
+  margin-top: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.sdk-tool-response-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-ui-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sdk-tool-response-truncated {
+  color: var(--color-accent-amber);
+}
+
+.sdk-tool-response-body {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sdk-tool-response-json {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 /* Tool-Specific Renderers */

@@ -615,7 +615,7 @@ SDK stream (from `sdk-output.json` snapshots):
 - `sdk-init`: `{ session_id: string, started_at?: unknown, status: "running" | "complete" }`
 - `sdk-message`: `{ message: unknown, index: number, total: number }` (initial snapshot) or `{ message: unknown, index: number, total: number }` (incremental)
 - `sdk-tool-start`: `{ tool_use_id: string, name?: unknown, input: unknown }`
-- `sdk-tool-complete`: `{ tool_use_id: string, name?: unknown, duration_ms: number, is_error: boolean }`
+- `sdk-tool-complete`: `{ tool_use_id: string, name?: unknown, duration_ms: number, is_error: boolean, response_text?: string, response_truncated?: boolean }`
 - `sdk-complete`: `{ status: "success" | "error", summary: unknown }`
 
 Provider status:

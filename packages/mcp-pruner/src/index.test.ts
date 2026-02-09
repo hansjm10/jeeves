@@ -360,4 +360,125 @@ describe("mcp-pruner server", () => {
       expect(toolResponse!.error!.message).toBe("Invalid params");
     });
   });
+
+  describe("extended read/grep params", () => {
+    it("returns -32602 when grep omits both pattern and patterns", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: { name: "grep", arguments: { path: "." } },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error?.code).toBe(-32602);
+      expect(toolResponse!.error?.message).toBe("Invalid params");
+    });
+
+    it("returns -32602 when grep includes both pattern and patterns", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "grep",
+            arguments: { pattern: "foo", patterns: ["foo"], path: "." },
+          },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error?.code).toBe(-32602);
+      expect(toolResponse!.error?.message).toBe("Invalid params");
+    });
+
+    it("returns -32602 when read provides only one range boundary", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "read",
+            arguments: { file_path: "package.json", start_line: 1 },
+          },
+        },
+      ]);
+
+      const toolResponse = responses.find((r) => r.id === 2);
+      expect(toolResponse).toBeDefined();
+      expect(toolResponse!.error?.code).toBe(-32602);
+      expect(toolResponse!.error?.message).toBe("Invalid params");
+    });
+
+    it("supports batch grep and emits duplicate diagnostics on repeated queries", async () => {
+      const responses = await sendRequests([
+        {
+          jsonrpc: "2.0",
+          method: "initialize",
+          id: 1,
+          params: { capabilities: {} },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 2,
+          params: {
+            name: "grep",
+            arguments: {
+              patterns: ["\"name\"", "\"version\""],
+              path: "package.json",
+            },
+          },
+        },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 3,
+          params: {
+            name: "grep",
+            arguments: {
+              patterns: ["\"name\"", "\"version\""],
+              path: "package.json",
+            },
+          },
+        },
+      ]);
+
+      const first = responses.find((r) => r.id === 2);
+      const second = responses.find((r) => r.id === 3);
+
+      expect(first?.error).toBeUndefined();
+      expect(second?.error).toBeUndefined();
+
+      const firstText = ((((first?.result ?? {}) as { content?: { text?: unknown }[] }).content ?? [])[0]?.text ?? "") as string;
+      const secondText = ((((second?.result ?? {}) as { content?: { text?: unknown }[] }).content ?? [])[0]?.text ?? "") as string;
+
+      expect(firstText).toContain("== pattern:");
+      expect(secondText).toContain("[diagnostic] duplicate grep query detected");
+    });
+  });
 });

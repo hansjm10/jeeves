@@ -136,12 +136,15 @@ export class SdkOutputWriterV1 {
 
       const idx = this.toolCallIndexById.get(event.toolUseId);
       const toolName = idx !== undefined ? this.toolCalls[idx]?.name : undefined;
+      const responseText = event.response_text ?? event.content;
       if (idx !== undefined) {
         const prev = this.toolCalls[idx];
         this.toolCalls[idx] = {
           ...prev,
           ...(event.durationMs !== undefined ? { duration_ms: event.durationMs } : {}),
           ...(event.isError ? { is_error: true } : {}),
+          response_text: responseText,
+          ...(event.response_truncated !== undefined ? { response_truncated: event.response_truncated } : {}),
         };
       }
       this.emitSdkEvent(
@@ -151,6 +154,8 @@ export class SdkOutputWriterV1 {
           name: toolName,
           duration_ms: event.durationMs ?? 0,
           is_error: event.isError ?? false,
+          response_text: responseText,
+          ...(event.response_truncated !== undefined ? { response_truncated: event.response_truncated } : {}),
         },
         timestamp,
       );

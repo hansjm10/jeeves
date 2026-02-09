@@ -5,6 +5,12 @@
 
 Jeeves is a proof-of-concept, SDK-only agent runner with a real-time viewer. The viewer is the primary interface for init, run control, and prompt editing.
 
+## Tooling Guidance
+
+- Use MCP state tools for issue/task/progress state updates instead of editing `.jeeves` state files directly.
+- When searching across file contents, you MUST use MCP pruner tools first when they are available in the current phase (`mcp:pruner/grep` for discovery, `mcp:pruner/read` for known paths).
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient; if you use shell fallback, note the reason in progress output.
+
 ## Quickstart
 
 ```bash
@@ -94,7 +100,7 @@ The viewer provides:
   - Linux: `$XDG_DATA_HOME/jeeves` or `~/.local/share/jeeves`
   - macOS: `~/Library/Application Support/jeeves`
   - Windows: `%LOCALAPPDATA%\\jeeves`
-- Issue state lives at `.../issues/<owner>/<repo>/<issue>/issue.json`.
+- Issue state is managed under `.../issues/<owner>/<repo>/<issue>/` via MCP state tools.
 - Worktrees live under `.../worktrees/<owner>/<repo>/issue-<N>/`.
 
 ## Patterns
@@ -102,7 +108,7 @@ The viewer provides:
 - SDK-only runs; no Codex/Claude/Opencode runners.
 - Viewer controls phase selection: `design`, `implement`, `review`, `complete`.
 - Prompts are in `prompts/issue.*.md` and can be edited in the viewer.
-- Minimal run artifacts: `issue.json`, `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
+- Minimal run artifacts: `progress.txt`, `last-run.log`, `viewer-run.log`, `sdk-output.json`.
 
 ## Iteration Pattern (Ralph Wiggum)
 

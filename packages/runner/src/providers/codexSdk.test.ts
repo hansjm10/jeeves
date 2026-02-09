@@ -84,6 +84,8 @@ describe('mapCodexEventToProviderEvents', () => {
         type: 'tool_result',
         toolUseId: 'cmd1',
         content: 'hello\n[exit_code] 2',
+        response_text: 'hello\n[exit_code] 2',
+        response_truncated: false,
         isError: true,
         durationMs: 500,
         timestamp: 't1500',
@@ -145,6 +147,62 @@ describe('mapCodexEventToProviderEvents', () => {
     expect(fatal).toEqual([
       { type: 'system', subtype: 'error', content: 'Codex stream error: bad', timestamp: 'ts' },
     ]);
+  });
+
+  it('sets response_truncated for oversized MCP results', () => {
+    const state = makeState();
+    const longValue = 'x'.repeat(2500);
+
+    const startEvents = mapCodexEventToProviderEvents(
+      {
+        type: 'item.started',
+        item: {
+          id: 'mcp1',
+          type: 'mcp_tool_call',
+          server: 'pruner',
+          tool: 'read',
+          arguments: { file_path: 'a.ts' },
+        },
+      } as unknown as CodexThreadEvent,
+      state,
+      () => 0,
+      () => 'ts-start',
+    );
+    expect(startEvents[0]).toMatchObject({
+      type: 'tool_use',
+      id: 'mcp1',
+      name: 'mcp:pruner/read',
+    });
+
+    const completeEvents = mapCodexEventToProviderEvents(
+      {
+        type: 'item.completed',
+        item: {
+          id: 'mcp1',
+          type: 'mcp_tool_call',
+          server: 'pruner',
+          tool: 'read',
+          status: 'completed',
+          result: {
+            structured_content: { content: longValue },
+          },
+        },
+      } as unknown as CodexThreadEvent,
+      state,
+      () => 25,
+      () => 'ts-complete',
+    );
+
+    expect(completeEvents).toHaveLength(1);
+    expect(completeEvents[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'mcp1',
+      response_truncated: true,
+      timestamp: 'ts-complete',
+    });
+    const toolResult = completeEvents[0] as { content?: string; response_text?: string };
+    expect(toolResult.content?.length).toBe(2000);
+    expect(toolResult.response_text?.length).toBe(2000);
   });
 });
 

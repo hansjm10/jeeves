@@ -5,8 +5,25 @@ type Props = {
 };
 
 export function ReadTool({ input }: Props) {
-  const data = input as ReadToolInput;
-  const hasRange = data.offset !== undefined || data.limit !== undefined;
+  const data = input as ReadToolInput & {
+    start_line?: number;
+    end_line?: number;
+  };
+  const hasRange =
+    data.offset !== undefined ||
+    data.limit !== undefined ||
+    data.start_line !== undefined ||
+    data.end_line !== undefined;
+
+  const rangeText = data.start_line !== undefined || data.end_line !== undefined
+    ? [
+        data.start_line !== undefined ? `line ${data.start_line}` : '',
+        data.end_line !== undefined ? `line ${data.end_line}` : '',
+      ].filter(Boolean).join(' to ')
+    : [
+        data.offset !== undefined ? `from line ${data.offset}` : '',
+        data.limit !== undefined ? `${data.limit} lines` : '',
+      ].filter(Boolean).join(', ');
 
   return (
     <div className="sdk-tool-read">
@@ -19,9 +36,7 @@ export function ReadTool({ input }: Props) {
       </div>
       {hasRange && (
         <span className="sdk-file-range">
-          {data.offset !== undefined && `from line ${data.offset}`}
-          {data.offset !== undefined && data.limit !== undefined && ', '}
-          {data.limit !== undefined && `${data.limit} lines`}
+          {rangeText}
         </span>
       )}
     </div>

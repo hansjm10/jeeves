@@ -29,6 +29,8 @@ describe('SdkOutputWriterV1', () => {
       type: 'tool_result',
       toolUseId: 't1',
       content: 'ok',
+      response_text: 'ok',
+      response_truncated: false,
       isError: true,
       durationMs: 123,
       timestamp: '2026-01-01T00:00:01.000Z',
@@ -39,6 +41,8 @@ describe('SdkOutputWriterV1', () => {
     expect(snap.tool_calls[0]?.tool_use_id).toBe('t1');
     expect(snap.tool_calls[0]?.duration_ms).toBe(123);
     expect(snap.tool_calls[0]?.is_error).toBe(true);
+    expect(snap.tool_calls[0]?.response_text).toBe('ok');
+    expect(snap.tool_calls[0]?.response_truncated).toBe(false);
   });
 
   it('includes usage data in snapshot stats', async () => {
@@ -114,4 +118,3 @@ describe('SdkOutputWriterV1', () => {
     expect(snap.stats.cache_creation_input_tokens).toBeUndefined();
   });
 });
-

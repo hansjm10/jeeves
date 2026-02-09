@@ -142,7 +142,14 @@ export class SdkOutputTailer {
     success: boolean | undefined;
     newMessages: { message: unknown; index: number; total: number }[];
     toolStarts: { tool_use_id: string; name?: unknown; input?: unknown }[];
-    toolCompletes: { tool_use_id: string; name?: unknown; duration_ms?: unknown; is_error?: unknown }[];
+    toolCompletes: {
+      tool_use_id: string;
+      name?: unknown;
+      duration_ms?: unknown;
+      is_error?: unknown;
+      response_text?: unknown;
+      response_truncated?: unknown;
+    }[];
     justEnded: boolean;
     stats: unknown;
   } {
@@ -166,7 +173,14 @@ export class SdkOutputTailer {
     this.lastMessageCount = messages.length;
 
     const toolStarts: { tool_use_id: string; name?: unknown; input?: unknown }[] = [];
-    const toolCompletes: { tool_use_id: string; name?: unknown; duration_ms?: unknown; is_error?: unknown }[] = [];
+    const toolCompletes: {
+      tool_use_id: string;
+      name?: unknown;
+      duration_ms?: unknown;
+      is_error?: unknown;
+      response_text?: unknown;
+      response_truncated?: unknown;
+    }[] = [];
 
     for (const tc of toolCalls) {
       const toolUseId = typeof tc.tool_use_id === 'string' ? tc.tool_use_id : '';
@@ -185,6 +199,8 @@ export class SdkOutputTailer {
           name: tc.name,
           duration_ms: tc.duration_ms,
           is_error: tc.is_error,
+          response_text: tc.response_text,
+          response_truncated: tc.response_truncated,
         });
       }
     }

@@ -79,18 +79,24 @@ describe('mapCodexEventToProviderEvents', () => {
       nowIso,
     );
 
-    expect(completeEvents).toEqual([
-      {
-        type: 'tool_result',
-        toolUseId: 'cmd1',
-        content: 'hello\n[exit_code] 2',
-        response_text: 'hello\n[exit_code] 2',
-        response_truncated: false,
-        isError: true,
-        durationMs: 500,
-        timestamp: 't1500',
-      },
-    ]);
+    expect(completeEvents).toHaveLength(1);
+    expect(completeEvents[0]).toMatchObject({
+      type: 'tool_result',
+      toolUseId: 'cmd1',
+      content: 'hello\n[exit_code] 2',
+      response_text: 'hello\n[exit_code] 2',
+      response_truncated: false,
+      response_raw_text: 'hello\n[exit_code] 2',
+      isError: true,
+      durationMs: 500,
+      timestamp: 't1500',
+    });
+    const complete = completeEvents[0] as {
+      response_compression?: { mode?: string; raw_char_count?: number; summary_char_count?: number };
+    };
+    expect(complete.response_compression?.mode).toBe('none');
+    expect(complete.response_compression?.raw_char_count).toBe(19);
+    expect(complete.response_compression?.summary_char_count).toBe(19);
   });
 
   it('maps agent_message completion to assistant', () => {

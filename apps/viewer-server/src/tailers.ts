@@ -149,6 +149,8 @@ export class SdkOutputTailer {
       is_error?: unknown;
       response_text?: unknown;
       response_truncated?: unknown;
+      response_compression?: unknown;
+      response_retrieval?: unknown;
     }[];
     justEnded: boolean;
     stats: unknown;
@@ -180,6 +182,8 @@ export class SdkOutputTailer {
       is_error?: unknown;
       response_text?: unknown;
       response_truncated?: unknown;
+      response_compression?: unknown;
+      response_retrieval?: unknown;
     }[] = [];
 
     for (const tc of toolCalls) {
@@ -199,8 +203,10 @@ export class SdkOutputTailer {
           name: tc.name,
           duration_ms: tc.duration_ms,
           is_error: tc.is_error,
-          response_text: tc.response_text,
-          response_truncated: tc.response_truncated,
+          ...(tc.response_text !== undefined ? { response_text: tc.response_text } : {}),
+          ...(tc.response_truncated !== undefined ? { response_truncated: tc.response_truncated } : {}),
+          ...(tc.response_compression !== undefined ? { response_compression: tc.response_compression } : {}),
+          ...(tc.response_retrieval !== undefined ? { response_retrieval: tc.response_retrieval } : {}),
         });
       }
     }

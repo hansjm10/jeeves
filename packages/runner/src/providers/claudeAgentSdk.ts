@@ -15,6 +15,7 @@ import {
   type SDKStatusMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { summarizeToolResponse } from '../toolResultSummary.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -38,11 +39,6 @@ function safeCompactString(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function truncateWithMeta(input: string, max = 2000): { text: string; truncated: boolean } {
-  if (input.length <= max) return { text: input, truncated: false };
-  return { text: input.slice(0, max), truncated: true };
 }
 
 function extractTextFromMessageParam(message: SDKUserMessage['message']): string {
@@ -83,6 +79,36 @@ function extractTextFromAssistantMessage(message: SDKAssistantMessage['message']
 function extractResultContent(result: SDKResultMessage): string {
   if (result.subtype === 'success') return result.result;
   return result.errors.join('\n');
+}
+
+function inferCommandFromToolInput(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === 'bash' || normalized.endsWith('/bash') || normalized.endsWith(':bash')) {
+    return typeof input.command === 'string' ? input.command : toolName;
+  }
+  if (normalized === 'read' || normalized.endsWith('/read') || normalized.endsWith(':read')) {
+    if (typeof input.file_path === 'string') return `read ${input.file_path}`;
+    return toolName;
+  }
+  if (normalized === 'grep' || normalized.endsWith('/grep') || normalized.endsWith(':grep')) {
+    const pattern = typeof input.pattern === 'string' ? input.pattern : '';
+    const searchPath = typeof input.path === 'string' ? input.path : '';
+    if (pattern && searchPath) return `grep ${pattern} ${searchPath}`;
+    if (pattern) return `grep ${pattern}`;
+    return toolName;
+  }
+  return toolName || undefined;
+}
+
+function parseExitCodeFromToolOutput(rawText: string): number | undefined {
+  const match = rawText.match(/\[exit(?:[_ ]code)?[:\]]\s*(-?\d+)\]?/i);
+  if (!match?.[1]) return undefined;
+  const parsed = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed;
 }
 
 const CLAUDE_MODEL_ALIASES: Record<string, string> = {
@@ -221,6 +247,7 @@ export class ClaudeAgentProvider implements AgentProvider {
 
     const pendingEvents: ProviderEvent[] = [];
     const toolStartMsById = new Map<string, number>();
+    const toolContextById = new Map<string, { name: string; input: Record<string, unknown> }>();
     const canUseTool: CanUseTool = async (toolName, input, permissionOptions) => {
       const blockReason = getDangerousBashCommandBlockReason(toolName, input, process.env);
       if (blockReason) {
@@ -236,10 +263,15 @@ export class ClaudeAgentProvider implements AgentProvider {
             async (input: HookInput) => {
               if (input.hook_event_name !== 'PreToolUse') return { continue: true };
               toolStartMsById.set(input.tool_use_id, Date.now());
+              const toolInput = toRecord(input.tool_input);
+              toolContextById.set(input.tool_use_id, {
+                name: input.tool_name,
+                input: toolInput,
+              });
               pendingEvents.push({
                 type: 'tool_use',
                 name: input.tool_name,
-                input: toRecord(input.tool_input),
+                input: toolInput,
                 id: input.tool_use_id,
                 timestamp: nowIso(),
               });
@@ -255,13 +287,26 @@ export class ClaudeAgentProvider implements AgentProvider {
               if (input.hook_event_name !== 'PostToolUse') return { continue: true };
               const startedMs = toolStartMsById.get(input.tool_use_id);
               const durationMs = startedMs ? Date.now() - startedMs : null;
-              const response = truncateWithMeta(safeCompactString(input.tool_response));
+              const context = toolContextById.get(input.tool_use_id);
+              const toolName = context?.name ?? input.tool_name;
+              const toolInput = context?.input ?? toRecord(input.tool_input);
+              const rawText = safeCompactString(input.tool_response);
+              const summarized = summarizeToolResponse({
+                rawText,
+                command: inferCommandFromToolInput(toolName, toolInput),
+                exitCode: parseExitCodeFromToolOutput(rawText),
+              });
+              toolContextById.delete(input.tool_use_id);
               pendingEvents.push({
                 type: 'tool_result',
                 toolUseId: input.tool_use_id,
-                content: response.text,
-                response_text: response.text,
-                response_truncated: response.truncated,
+                content: summarized.summaryText,
+                response_text: summarized.summaryText,
+                response_truncated: summarized.responseTruncated,
+                ...(rawText.length > 0
+                  ? { response_raw_text: rawText }
+                  : { response_retrieval_not_applicable_reason: 'tool output was empty' }),
+                response_compression: summarized.compression,
                 durationMs,
                 isError: false,
                 timestamp: nowIso(),
@@ -278,13 +323,26 @@ export class ClaudeAgentProvider implements AgentProvider {
               if (input.hook_event_name !== 'PostToolUseFailure') return { continue: true };
               const startedMs = toolStartMsById.get(input.tool_use_id);
               const durationMs = startedMs ? Date.now() - startedMs : null;
-              const response = truncateWithMeta(input.error);
+              const context = toolContextById.get(input.tool_use_id);
+              const toolName = context?.name ?? input.tool_name;
+              const toolInput = context?.input ?? toRecord(input.tool_input);
+              const rawText = input.error;
+              const summarized = summarizeToolResponse({
+                rawText,
+                command: inferCommandFromToolInput(toolName, toolInput),
+                forceStructuredSummary: true,
+              });
+              toolContextById.delete(input.tool_use_id);
               pendingEvents.push({
                 type: 'tool_result',
                 toolUseId: input.tool_use_id,
-                content: response.text,
-                response_text: response.text,
-                response_truncated: response.truncated,
+                content: summarized.summaryText,
+                response_text: summarized.summaryText,
+                response_truncated: summarized.responseTruncated,
+                ...(rawText.length > 0
+                  ? { response_raw_text: rawText }
+                  : { response_retrieval_not_applicable_reason: 'tool output was empty' }),
+                response_compression: summarized.compression,
                 durationMs,
                 isError: true,
                 timestamp: nowIso(),

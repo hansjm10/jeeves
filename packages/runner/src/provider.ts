@@ -1,3 +1,5 @@
+import type { ToolResponseCompression } from './toolResultMetadata.js';
+
 export type McpServerConfig = Readonly<{
   command: string;
   args?: readonly string[];
@@ -47,6 +49,9 @@ export type ProviderEvent =
       durationMs?: number | null;
       response_text?: string;
       response_truncated?: boolean;
+      response_raw_text?: string;
+      response_retrieval_not_applicable_reason?: string;
+      response_compression?: ToolResponseCompression;
       timestamp?: string;
     }>
   | Readonly<{

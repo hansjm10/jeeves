@@ -23,6 +23,7 @@ export type RunPhaseParams = Readonly<{
   phaseName: string;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
   mcpProfile?: string;
+  mcpEnforcement?: string;
   permissionMode?: string;
 }>;
 
@@ -32,6 +33,10 @@ type RunDbContext = Readonly<{
   scope: string;
   taskId: string;
 }>;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
 
 function resolveRunDbContextFromEnv(): RunDbContext | null {
   const dataDir = process.env.JEEVES_DATA_DIR?.trim() ?? '';
@@ -125,6 +130,48 @@ function extractAssistantChunk(content: string): string | null {
   return trimmed;
 }
 
+type NormalizedMcpProfile = 'default' | 'none' | 'pruner' | 'state' | 'state_with_pruner';
+type McpEnforcementMode = 'strict' | 'allow_degraded' | 'off';
+
+function normalizeMcpProfileForEnforcement(raw: string | undefined): NormalizedMcpProfile {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (!value) return 'default';
+  if (value === 'none') return 'none';
+  if (value === 'pruner') return 'pruner';
+  if (value === 'state') return 'state';
+  if (value === 'state_with_pruner' || value === 'state+pruner' || value === 'state-pruner') {
+    return 'state_with_pruner';
+  }
+  return 'default';
+}
+
+function requiredMcpServersForProfile(profile: NormalizedMcpProfile): string[] {
+  if (profile === 'pruner') return ['pruner'];
+  if (profile === 'state') return ['state'];
+  if (profile === 'state_with_pruner') return ['state', 'pruner'];
+  return [];
+}
+
+function normalizeMcpEnforcementMode(
+  raw: string | undefined,
+  profile: NormalizedMcpProfile,
+): McpEnforcementMode {
+  const normalized = (raw ?? '').trim().toLowerCase();
+  if (normalized === 'strict') return 'strict';
+  if (
+    normalized === 'allow_degraded' ||
+    normalized === 'allow-degraded' ||
+    normalized === 'degraded'
+  ) {
+    return 'allow_degraded';
+  }
+
+  if (profile === 'state' || profile === 'pruner' || profile === 'state_with_pruner') {
+    return 'strict';
+  }
+  return 'off';
+}
+
 export function extractTaskPlanFromSdkOutput(raw: string): string {
   const parsed = JSON.parse(raw) as { messages?: unknown };
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
@@ -194,6 +241,7 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
   await ensureJeevesExcludedFromGitStatus(params.cwd).catch(() => void 0);
   await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
   await fs.mkdir(path.dirname(params.logPath), { recursive: true });
+  await fs.rm(path.join(path.dirname(params.outputPath), 'tool-raw'), { recursive: true, force: true }).catch(() => void 0);
   await ensureProgressFile(params.progressPath);
 
   if (runDbContext) {
@@ -248,6 +296,42 @@ export async function runPhaseOnce(params: RunPhaseParams): Promise<{ success: b
       stateDir: params.stateDir,
       profile: params.mcpProfile,
     });
+    const normalizedMcpProfile = normalizeMcpProfileForEnforcement(params.mcpProfile);
+    const requiredMcpServers = requiredMcpServersForProfile(normalizedMcpProfile);
+    const enforcementMode = normalizeMcpEnforcementMode(params.mcpEnforcement, normalizedMcpProfile);
+    const availableMcpServers = mcpServers ? Object.keys(mcpServers).sort() : [];
+    const missingMcpServers = requiredMcpServers.filter((serverName) => !(mcpServers && mcpServers[serverName]));
+
+    if (requiredMcpServers.length > 0) {
+      await logLine(
+        `[MCP] profile=${normalizedMcpProfile} enforcement=${enforcementMode} required=${requiredMcpServers.join(',')} available=${availableMcpServers.join(',') || 'none'}`,
+      );
+    }
+
+    if (missingMcpServers.length > 0) {
+      const missingMessage =
+        `Missing required MCP servers (${missingMcpServers.join(', ')}) for profile ` +
+        `'${normalizedMcpProfile}' in phase '${params.phaseName}'.`;
+
+      if (enforcementMode === 'allow_degraded') {
+        await logLine(`[MCP] DEGRADED_MODE ${missingMessage} Continuing with reduced tool set.`);
+        writer.addProviderEvent({
+          type: 'system',
+          subtype: 'error',
+          content: `[mcp] degraded mode: ${missingMessage}`,
+          timestamp: nowIso(),
+        });
+      } else if (enforcementMode === 'strict') {
+        await logLine(`[MCP] FAIL_FAST ${missingMessage}`);
+        writer.addProviderEvent({
+          type: 'system',
+          subtype: 'error',
+          content: `[mcp] fail-fast: ${missingMessage}`,
+          timestamp: nowIso(),
+        });
+        throw new Error(`[MCP_ENFORCEMENT] ${missingMessage}`);
+      }
+    }
 
     for await (const evt of params.provider.run(prompt, { cwd: params.cwd, ...(mcpServers ? { mcpServers } : {}), ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}) })) {
       writer.addProviderEvent(evt);
@@ -320,6 +404,7 @@ export async function runWorkflowOnce(params: RunWorkflowParams): Promise<{ fina
       phaseName: current,
       mcpServers: params.mcpServers,
       mcpProfile: workflow.phases[current]?.mcpProfile,
+      mcpEnforcement: workflow.phases[current]?.mcpEnforcement,
     });
 
     if (!phaseResult.success) {
@@ -390,6 +475,7 @@ export async function runSinglePhaseOnce(params: RunSinglePhaseParams): Promise<
     phaseName: phase,
     mcpServers: params.mcpServers,
     mcpProfile: phaseConfig?.mcpProfile,
+    mcpEnforcement: phaseConfig?.mcpEnforcement,
     permissionMode: phaseConfig?.permissionMode,
   });
 

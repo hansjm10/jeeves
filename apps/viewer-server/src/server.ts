@@ -424,6 +424,8 @@ function emitSdkSnapshot(send: (event: string, data: unknown) => void, snapshot:
     const isError = (tc as { is_error?: unknown }).is_error;
     const responseText = (tc as { response_text?: unknown }).response_text;
     const responseTruncated = (tc as { response_truncated?: unknown }).response_truncated;
+    const responseCompression = (tc as { response_compression?: unknown }).response_compression;
+    const responseRetrieval = (tc as { response_retrieval?: unknown }).response_retrieval;
     if (durationMs !== undefined || isError !== undefined) {
       send('sdk-tool-complete', {
         tool_use_id: toolUseId,
@@ -432,6 +434,8 @@ function emitSdkSnapshot(send: (event: string, data: unknown) => void, snapshot:
         is_error: isError ?? false,
         ...(responseText !== undefined ? { response_text: responseText } : {}),
         ...(responseTruncated !== undefined ? { response_truncated: responseTruncated } : {}),
+        ...(responseCompression !== undefined ? { response_compression: responseCompression } : {}),
+        ...(responseRetrieval !== undefined ? { response_retrieval: responseRetrieval } : {}),
       });
     }
   }

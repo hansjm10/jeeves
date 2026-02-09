@@ -8,11 +8,13 @@ import {
   claudeModels,
   isValidClaudeThinkingBudget,
   isValidCodexReasoningEffort,
+  mcpEnforcementModes,
   phaseTypes,
   supportsCodexReasoningEffort,
   validModels,
   type ClaudeThinkingBudgetId,
   type CodexReasoningEffortId,
+  type McpEnforcementMode,
   type Phase,
   type PhaseType,
   type Transition,
@@ -60,6 +62,22 @@ function parseClaudeThinkingBudget(value: unknown, context: string): ClaudeThink
   return value;
 }
 
+function parseMcpEnforcement(value: unknown, context: string): McpEnforcementMode | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new WorkflowValidationError(
+      `${context}: mcp_enforcement must be a string`,
+    );
+  }
+  const normalized = value.trim().toLowerCase();
+  if ((mcpEnforcementModes as readonly string[]).includes(normalized)) {
+    return normalized as McpEnforcementMode;
+  }
+  throw new WorkflowValidationError(
+    `${context}: invalid mcp_enforcement '${String(value)}'. must be one of: ${mcpEnforcementModes.join(', ')}`,
+  );
+}
+
 const transitionSchema = z
   .object({
     to: z.string().min(1),
@@ -80,6 +98,7 @@ const rawPhaseSchema = z
     type: z.unknown().optional(),
     provider: z.unknown().optional(),
     mcp_profile: z.string().optional(),
+    mcp_enforcement: z.unknown().optional(),
     prompt: z.string().optional(),
     command: z.string().optional(),
     description: z.string().optional(),
@@ -130,6 +149,10 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
     validateModel(phaseRaw.model, `Phase '${phaseName}' model`);
     const reasoningEffort = parseCodexReasoningEffort(phaseRaw.reasoning_effort, `Phase '${phaseName}' reasoning_effort`);
     const thinkingBudget = parseClaudeThinkingBudget(phaseRaw.thinking_budget, `Phase '${phaseName}' thinking_budget`);
+    const mcpEnforcement = parseMcpEnforcement(
+      phaseRaw.mcp_enforcement,
+      `Phase '${phaseName}'`,
+    );
 
     const transitions = [...phaseRaw.transitions].sort((a, b) => a.priority - b.priority);
     phases[phaseName] = {
@@ -137,6 +160,7 @@ function normalizeWorkflow(raw: z.output<typeof rawWorkflowSchema>, sourceName: 
       type: phaseType,
       provider: typeof phaseRaw.provider === 'string' ? phaseRaw.provider : undefined,
       mcpProfile: phaseRaw.mcp_profile,
+      mcpEnforcement,
       prompt: phaseRaw.prompt,
       command: phaseRaw.command,
       description: phaseRaw.description,
@@ -345,6 +369,7 @@ export function toRawWorkflowJson(workflow: Workflow): UnknownRecord {
 
     if (phase.provider) phaseJson.provider = phase.provider;
     if (phase.mcpProfile) phaseJson.mcp_profile = phase.mcpProfile;
+    if (phase.mcpEnforcement) phaseJson.mcp_enforcement = phase.mcpEnforcement;
     if (phase.prompt) phaseJson.prompt = phase.prompt;
     if (phase.command) phaseJson.command = phase.command;
     if (phase.allowedWrites.length !== 1 || phase.allowedWrites[0] !== '.jeeves/*') {
@@ -396,6 +421,7 @@ export function toWorkflowYaml(workflow: Workflow): string {
     };
     if (phase.provider) phaseJson.provider = phase.provider;
     if (phase.mcpProfile) phaseJson.mcp_profile = phase.mcpProfile;
+    if (phase.mcpEnforcement) phaseJson.mcp_enforcement = phase.mcpEnforcement;
     if (phase.prompt) phaseJson.prompt = phase.prompt;
     if (phase.command) phaseJson.command = phase.command;
     if (phase.description) phaseJson.description = phase.description;

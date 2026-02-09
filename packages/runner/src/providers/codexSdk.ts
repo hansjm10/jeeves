@@ -1,4 +1,5 @@
 import type { AgentProvider, ProviderEvent, ProviderRunOptions, UsageData } from '../provider.js';
+import { summarizeToolResponse } from '../toolResultSummary.js';
 
 // NOTE: Keep all Codex CLI integration in this file so the rest of the runner is provider-agnostic.
 import { spawn } from 'node:child_process';
@@ -12,11 +13,6 @@ function nowIso(): string {
 function truncate(input: string, max = 2000): string {
   if (input.length <= max) return input;
   return input.slice(0, max);
-}
-
-function truncateWithMeta(input: string, max = 2000): { text: string; truncated: boolean } {
-  if (input.length <= max) return { text: input, truncated: false };
-  return { text: input.slice(0, max), truncated: true };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -95,45 +91,118 @@ function toolResultForItem(itemType: string, item: Record<string, unknown>): {
   content: string;
   isError: boolean;
   responseTruncated: boolean;
+  responseRawText?: string;
+  responseRetrievalNotApplicableReason?: string;
+  responseCompression: ReturnType<typeof summarizeToolResponse>['compression'];
 } {
+  const withRawPayload = (rawText: string): {
+    responseRawText?: string;
+    responseRetrievalNotApplicableReason?: string;
+  } => {
+    if (rawText.length === 0) {
+      return { responseRetrievalNotApplicableReason: 'tool output was empty' };
+    }
+    return { responseRawText: rawText };
+  };
+
   if (itemType === 'command_execution') {
     const aggregated = getString(item, 'aggregated_output') ?? '';
     const exitCode = getNumber(item, 'exit_code');
     const status = getString(item, 'status');
     const isError = status === 'failed' || (typeof exitCode === 'number' && exitCode !== 0);
     const suffix = typeof exitCode === 'number' ? `\n[exit_code] ${exitCode}` : '';
-    const truncated = truncateWithMeta(`${aggregated}${suffix}`.trim());
-    return { content: truncated.text, isError, responseTruncated: truncated.truncated };
+    const rawText = `${aggregated}${suffix}`.trim();
+    const summarized = summarizeToolResponse({
+      rawText,
+      command: getString(item, 'command') ?? undefined,
+      exitCode,
+    });
+    return {
+      content: summarized.summaryText,
+      isError,
+      responseTruncated: summarized.responseTruncated,
+      responseCompression: summarized.compression,
+      ...withRawPayload(rawText),
+    };
   }
 
   if (itemType === 'mcp_tool_call') {
+    const server = getString(item, 'server') ?? 'unknown';
+    const tool = getString(item, 'tool') ?? 'unknown';
     const status = getString(item, 'status');
     const isError = status === 'failed';
     if (isError) {
       const err = getRecord(item, 'error');
-      const truncated = truncateWithMeta(getString(err ?? {}, 'message') ?? 'unknown error');
-      return { content: truncated.text, isError: true, responseTruncated: truncated.truncated };
+      const rawText = getString(err ?? {}, 'message') ?? 'unknown error';
+      const summarized = summarizeToolResponse({
+        rawText,
+        command: `mcp:${server}/${tool}`,
+        forceStructuredSummary: true,
+      });
+      return {
+        content: summarized.summaryText,
+        isError: true,
+        responseTruncated: summarized.responseTruncated,
+        responseCompression: summarized.compression,
+        ...withRawPayload(rawText),
+      };
     }
     const result = getRecord(item, 'result');
     const structured = result ? result.structured_content : undefined;
-    const truncated = truncateWithMeta(safeCompactString(structured ?? result ?? ''));
-    return { content: truncated.text, isError: false, responseTruncated: truncated.truncated };
+    const rawText = safeCompactString(structured ?? result ?? '');
+    const summarized = summarizeToolResponse({
+      rawText,
+      command: `mcp:${server}/${tool}`,
+    });
+    return {
+      content: summarized.summaryText,
+      isError: false,
+      responseTruncated: summarized.responseTruncated,
+      responseCompression: summarized.compression,
+      ...withRawPayload(rawText),
+    };
   }
 
   if (itemType === 'web_search') {
-    return { content: 'web_search completed', isError: false, responseTruncated: false };
+    const rawText = 'web_search completed';
+    const summarized = summarizeToolResponse({ rawText, command: 'web_search' });
+    return {
+      content: summarized.summaryText,
+      isError: false,
+      responseTruncated: summarized.responseTruncated,
+      responseCompression: summarized.compression,
+      ...withRawPayload(rawText),
+    };
   }
 
   if (itemType === 'file_change') {
     const status = getString(item, 'status') ?? 'completed';
     const isError = status === 'failed';
-    const details = truncate(safeCompactString(item.changes));
-    const truncated = truncateWithMeta(`file_change ${status}\n${details}`.trim());
-    return { content: truncated.text, isError, responseTruncated: truncated.truncated };
+    const details = safeCompactString(item.changes);
+    const rawText = `file_change ${status}\n${details}`.trim();
+    const summarized = summarizeToolResponse({
+      rawText,
+      command: 'file_change',
+      forceStructuredSummary: true,
+    });
+    return {
+      content: summarized.summaryText,
+      isError,
+      responseTruncated: summarized.responseTruncated,
+      responseCompression: summarized.compression,
+      ...withRawPayload(rawText),
+    };
   }
 
-  const truncated = truncateWithMeta(safeCompactString(item));
-  return { content: truncated.text, isError: false, responseTruncated: truncated.truncated };
+  const rawText = safeCompactString(item);
+  const summarized = summarizeToolResponse({ rawText });
+  return {
+    content: summarized.summaryText,
+    isError: false,
+    responseTruncated: summarized.responseTruncated,
+    responseCompression: summarized.compression,
+    ...withRawPayload(rawText),
+  };
 }
 
 function extractMessageText(item: Record<string, unknown>): string | null {
@@ -324,6 +393,11 @@ export function mapCodexEventToProviderEvents(
         content: result.content,
         response_text: result.content,
         response_truncated: result.responseTruncated,
+        ...(result.responseRawText !== undefined ? { response_raw_text: result.responseRawText } : {}),
+        ...(result.responseRetrievalNotApplicableReason
+          ? { response_retrieval_not_applicable_reason: result.responseRetrievalNotApplicableReason }
+          : {}),
+        response_compression: result.responseCompression,
         ...(result.isError ? { isError: true } : {}),
         durationMs,
         timestamp: nowIsoFn(),
@@ -397,6 +471,12 @@ export class CodexSdkProvider implements AgentProvider {
     let rl: readline.Interface | null = null;
     const stderrChunks: Buffer[] = [];
     const child = spawn(process.execPath, [codexEntry, ...args], { cwd: options.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const childEvents = child as unknown as {
+      once(event: 'exit', listener: (code: number | null) => void): void;
+      once(event: 'close', listener: (code: number | null) => void): void;
+      once(event: 'error', listener: (err: unknown) => void): void;
+      removeAllListeners(): void;
+    };
     const completion = new Promise<number>((resolve) => {
       let settled = false;
       const settle = (code: number) => {
@@ -404,9 +484,9 @@ export class CodexSdkProvider implements AgentProvider {
         settled = true;
         resolve(code);
       };
-      child.once('exit', (code) => settle(code ?? 0));
-      child.once('close', (code) => settle(code ?? 0));
-      child.once('error', (err) => {
+      childEvents.once('exit', (code: number | null) => settle(code ?? 0));
+      childEvents.once('close', (code: number | null) => settle(code ?? 0));
+      childEvents.once('error', (err: unknown) => {
         spawnError = err;
         try {
           rl?.close();
@@ -511,7 +591,7 @@ export class CodexSdkProvider implements AgentProvider {
       } catch {
         // ignore
       }
-      child.removeAllListeners();
+      childEvents.removeAllListeners();
       try {
         if (!child.killed) child.kill();
       } catch {

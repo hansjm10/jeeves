@@ -852,6 +852,17 @@ export class RunManager {
         params.viewerLogPath,
         `[TRAJECTORY] active_tokens=${diagnostics.active_snapshot_token_size} retired=${diagnostics.retired_branch_count} repeated_rate=${diagnostics.repeated_context_rate.toFixed(3)}`,
       );
+      const reflectionStatus = diagnostics.reflection_used ? 'used' : 'skipped';
+      const reflectionReason = diagnostics.reflection_skipped_reason
+        ? ` reason=${diagnostics.reflection_skipped_reason}`
+        : '';
+      const reflectionInput = diagnostics.reflection_input_tokens ?? 'n/a';
+      const reflectionOutput = diagnostics.reflection_output_tokens ?? 'n/a';
+      const reflectionLatency = diagnostics.reflection_latency_ms ?? 'n/a';
+      await this.appendViewerLog(
+        params.viewerLogPath,
+        `[TRAJECTORY] reflection=${reflectionStatus}${reflectionReason} input_tokens=${reflectionInput} output_tokens=${reflectionOutput} latency_ms=${reflectionLatency}`,
+      );
       for (const warning of diagnostics.warnings) {
         await this.appendViewerLog(params.viewerLogPath, `[TRAJECTORY] ${warning}`);
       }

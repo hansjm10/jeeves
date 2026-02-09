@@ -9,6 +9,7 @@
     "jeeves-viewer-server": "./dist/bin.js"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.32",
     "@fastify/cors": "^10.1.0",
     "@fastify/websocket": "^11.0.0",
     "@jeeves/core": "workspace:*",

@@ -116,6 +116,7 @@ describe('trajectoryReduction', () => {
     const first = await computeTrajectoryReduction({
       stateDir,
       iteration: 1,
+      reflection: { enabled: false },
     });
 
     expect(first.snapshot.current_objective).toContain('Add iteration trajectory reduction');
@@ -133,6 +134,8 @@ describe('trajectoryReduction', () => {
       ]),
     );
     expect(first.diagnostics.retired_branch_count).toBe(0);
+    expect(first.diagnostics.reflection_used).toBe(false);
+    expect(first.diagnostics.reflection_skipped_reason).toBe('disabled');
 
     expect(markMemoryEntryStaleInDb({ stateDir, scope: 'working_set', key: 'hypothesis:memory-first' })).toBe(true);
     upsertMemoryEntryInDb({
@@ -146,6 +149,7 @@ describe('trajectoryReduction', () => {
     const second = await computeTrajectoryReduction({
       stateDir,
       iteration: 2,
+      reflection: { enabled: false },
     });
     expect(second.retired.length).toBeGreaterThan(0);
     expect(
@@ -154,6 +158,8 @@ describe('trajectoryReduction', () => {
     expect(second.diagnostics.retired_branch_count).toBeGreaterThan(0);
     expect(second.diagnostics.active_snapshot_token_size).toBeGreaterThan(0);
     expect(second.diagnostics.repeated_context_rate).toBeGreaterThanOrEqual(0);
+    expect(second.diagnostics.reflection_used).toBe(false);
+    expect(second.diagnostics.reflection_skipped_reason).toBe('disabled');
 
     const summary = mergeTrajectoryReductionSummary(
       mergeTrajectoryReductionSummary(null, first.diagnostics),
@@ -205,6 +211,7 @@ describe('trajectoryReduction', () => {
     const first = await computeTrajectoryReduction({
       stateDir,
       iteration: 1,
+      reflection: { enabled: false },
     });
     expect(first.diagnostics.active_item_count).toBeGreaterThan(25);
     expect(first.diagnostics.repeated_item_count).toBe(0);
@@ -212,9 +219,218 @@ describe('trajectoryReduction', () => {
     const second = await computeTrajectoryReduction({
       stateDir,
       iteration: 2,
+      reflection: { enabled: false },
     });
     expect(second.diagnostics.active_item_count).toBe(first.diagnostics.active_item_count);
     expect(second.diagnostics.repeated_item_count).toBe(second.diagnostics.active_item_count);
     expect(second.diagnostics.repeated_context_rate).toBe(1);
+    expect(second.diagnostics.reflection_used).toBe(false);
+    expect(second.diagnostics.reflection_skipped_reason).toBe('disabled');
+  });
+
+  it('uses reflection output when enabled and savings pass the acceptance gate', async () => {
+    const stateDir = await makeStateDir('jeeves-trajectory-reflection-used-');
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: 'acme/rocket',
+          issue: { number: 119, title: 'Evaluate reflection gating' },
+          phase: 'implement_task',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify({ tasks: [{ id: 'T1', title: 'Stabilize CI', status: 'in_progress' }] }, null, 2) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'hypothesis:ordering',
+      value: { hypothesis: 'Snapshot regression is tied to integration suite order.' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'blocker:ci-red',
+      value: {
+        blocker: 'CI red due to failing integration tests and snapshot regression in viewer-server.',
+      },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'next:rerun-ci',
+      value: {
+        nextAction: 'Rerun integration tests and inspect logs in apps/viewer-server/src/trajectoryReduction.ts.',
+      },
+      sourceIteration: 1,
+    });
+
+    const reduction = await computeTrajectoryReduction({
+      stateDir,
+      iteration: 1,
+      reflection: {
+        enabled: true,
+        minSnapshotTokens: 1,
+        minSavingsTokens: 1,
+        queryFn: () =>
+          (async function* () {
+            yield {
+              type: 'assistant',
+              message: {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      current_objective: 'Evaluate reflection gating for CI stability',
+                      open_hypotheses: ['Snapshot regression tied to integration suite order'],
+                      blockers: ['CI red due to failing integration tests'],
+                      next_actions: ['Rerun integration tests and inspect logs'],
+                      unresolved_questions: [],
+                      required_evidence_links: ['apps/viewer-server/src/trajectoryReduction.ts'],
+                      dropped: [{ value: 'stale note', reason: 'stale' }],
+                    }),
+                  },
+                ],
+              },
+            };
+            yield {
+              type: 'result',
+              usage: { input_tokens: 300, output_tokens: 120 },
+            };
+          })(),
+      },
+    });
+
+    expect(reduction.diagnostics.reflection_used).toBe(true);
+    expect(reduction.diagnostics.reflection_skipped_reason).toBeNull();
+    expect(reduction.diagnostics.reflection_input_tokens).toBe(300);
+    expect(reduction.diagnostics.reflection_output_tokens).toBe(120);
+    expect(reduction.snapshot.blockers).toContain('CI red due to failing integration tests');
+    expect(reduction.snapshot.open_hypotheses).toContain('Snapshot regression tied to integration suite order');
+  });
+
+  it('falls back to deterministic snapshot when reflection JSON parsing fails', async () => {
+    const stateDir = await makeStateDir('jeeves-trajectory-reflection-invalid-json-');
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: 'acme/rocket',
+          issue: { number: 119, title: 'Evaluate reflection gating' },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'tasks.json'), JSON.stringify({ tasks: [] }, null, 2) + '\n', 'utf-8');
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'blocker:ci-red',
+      value: { blocker: 'CI red due to failing integration tests.' },
+      sourceIteration: 1,
+    });
+
+    const reduction = await computeTrajectoryReduction({
+      stateDir,
+      iteration: 1,
+      reflection: {
+        enabled: true,
+        minSnapshotTokens: 1,
+        minSavingsTokens: 1,
+        queryFn: () =>
+          (async function* () {
+            yield {
+              type: 'assistant',
+              message: {
+                content: [{ type: 'text', text: 'not-json' }],
+              },
+            };
+          })(),
+      },
+    });
+
+    expect(reduction.diagnostics.reflection_used).toBe(false);
+    expect(reduction.diagnostics.reflection_skipped_reason).toBe('invalid_json');
+    expect(reduction.snapshot.blockers.some((entry) => entry.includes('blocker:ci-red'))).toBe(true);
+  });
+
+  it('rejects reflection output when savings are below threshold', async () => {
+    const stateDir = await makeStateDir('jeeves-trajectory-reflection-savings-gate-');
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: 'acme/rocket',
+          issue: { number: 119, title: 'Evaluate reflection gating' },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'tasks.json'), JSON.stringify({ tasks: [] }, null, 2) + '\n', 'utf-8');
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'hypothesis:context',
+      value: { hypothesis: 'Context reduction quality needs semantic ranking.' },
+      sourceIteration: 1,
+    });
+
+    const reduction = await computeTrajectoryReduction({
+      stateDir,
+      iteration: 1,
+      reflection: {
+        enabled: true,
+        minSnapshotTokens: 1,
+        minSavingsTokens: 9999,
+        queryFn: () =>
+          (async function* () {
+            yield {
+              type: 'assistant',
+              message: {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      current_objective: 'Context reduction quality needs semantic ranking',
+                      open_hypotheses: ['Context reduction quality needs semantic ranking'],
+                      blockers: [],
+                      next_actions: [],
+                      unresolved_questions: [],
+                      required_evidence_links: [],
+                      dropped: [],
+                    }),
+                  },
+                ],
+              },
+            };
+            yield {
+              type: 'result',
+              usage: { input_tokens: 200, output_tokens: 80 },
+            };
+          })(),
+      },
+    });
+
+    expect(reduction.diagnostics.reflection_used).toBe(false);
+    expect(reduction.diagnostics.reflection_skipped_reason).toBe('insufficient_savings');
   });
 });

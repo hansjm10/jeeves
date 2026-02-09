@@ -900,18 +900,16 @@ export function listMemoryEntriesFromDb(params: {
   scope?: MemoryScope;
   key?: string;
   includeStale?: boolean;
-  limit?: number;
+  limit?: number | null;
 }): MemoryEntry[] {
   const dataDir = deriveDataDirFromStateDir(params.stateDir);
   const normalizedStateDir = path.resolve(params.stateDir);
   const scope = params.scope ?? null;
   const key = typeof params.key === 'string' && params.key.trim().length > 0 ? params.key.trim() : null;
   const includeStale = params.includeStale === true ? 1 : 0;
-  const limit = Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 500;
+  const limit = params.limit === null ? null : Number.isInteger(params.limit) ? Math.max(1, Number(params.limit)) : 500;
   return withDb(dataDir, (db) => {
-    const rows = db
-      .prepare(
-        `
+    const baseQuery = `
         SELECT state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
         FROM issue_memory
         WHERE state_dir = ?
@@ -928,18 +926,28 @@ export function listMemoryEntriesFromDb(params: {
           END ASC,
           key ASC,
           updated_at ASC
-        LIMIT ?
-        `,
-      )
-      .all(
+      `;
+
+    const rows = (limit === null
+      ? db.prepare(baseQuery).all(
         normalizedStateDir,
         scope,
         scope,
         key,
         key,
         includeStale,
-        limit,
-      ) as {
+      )
+      : db
+        .prepare(`${baseQuery}\nLIMIT ?`)
+        .all(
+          normalizedStateDir,
+          scope,
+          scope,
+          key,
+          key,
+          includeStale,
+          limit,
+        )) as {
       state_dir: string;
       scope: string;
       key: string;
@@ -1037,6 +1045,62 @@ export function upsertMemoryEntryInDb(params: {
       throw new Error(`failed to parse memory entry for ${params.scope}:${normalizedKey}`);
     }
     return parsed;
+  });
+}
+
+export function upsertMemoryEntriesInDb(params: {
+  stateDir: string;
+  entries: readonly Readonly<{
+    scope: MemoryScope;
+    key: string;
+    value: JsonRecord;
+    sourceIteration?: number | null;
+    stale?: boolean;
+  }>[];
+}): void {
+  if (params.entries.length === 0) return;
+
+  const dataDir = deriveDataDirFromStateDir(params.stateDir);
+  const normalizedStateDir = path.resolve(params.stateDir);
+  withDb(dataDir, (db) => {
+    const upsertStmt = db.prepare(
+      `
+      INSERT INTO issue_memory (
+        state_dir, scope, key, value_json, source_iteration, stale, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(state_dir, scope, key) DO UPDATE SET
+        value_json = excluded.value_json,
+        source_iteration = excluded.source_iteration,
+        stale = excluded.stale,
+        updated_at = excluded.updated_at
+      `,
+    );
+    const tx = db.transaction((entries: typeof params.entries) => {
+      for (const entry of entries) {
+        const normalizedKey = entry.key.trim();
+        if (!normalizedKey) throw new Error('memory key must be a non-empty string');
+        const sourceIteration =
+          typeof entry.sourceIteration === 'number' &&
+            Number.isInteger(entry.sourceIteration) &&
+            entry.sourceIteration >= 0
+            ? entry.sourceIteration
+            : null;
+        const stale = entry.stale === true ? 1 : 0;
+        const createdAt = nowIso();
+        const updatedAt = createdAt;
+        upsertStmt.run(
+          normalizedStateDir,
+          entry.scope,
+          normalizedKey,
+          JSON.stringify(entry.value),
+          sourceIteration,
+          stale,
+          createdAt,
+          updatedAt,
+        );
+      }
+    });
+    tx(params.entries);
   });
 }
 

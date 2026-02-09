@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { upsertMemoryEntryInDb } from '@jeeves/state-db';
+import { upsertMemoryEntriesInDb, upsertMemoryEntryInDb } from '@jeeves/state-db';
 import { describe, expect, it } from 'vitest';
 
 import { main } from './cli.js';
@@ -392,6 +392,152 @@ describe('runner integration', () => {
     expect(prompt).not.toContain('key=design_review:carry-forward');
     expect(prompt).toContain('MEMORY PROMPT SENTINEL');
   });
+
+  it('loads canonical issue memory when running from a worker sandbox state dir', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-worker-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const canonicalStateDir = path.join(tmp, 'issues', 'acme', 'rocket', '42');
+    const workerStateDir = path.join(canonicalStateDir, '.runs', 'run-123', 'workers', 'T1');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(canonicalStateDir, { recursive: true });
+    await fs.mkdir(workerStateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-worker-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-worker-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: memory.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'memory.prompt.md'), 'WORKER MEMORY PROMPT SENTINEL', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'working_set',
+      key: 'current-task',
+      value: { taskId: 'T42' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'session',
+      key: 'implement_task:focus',
+      value: { phase: 'implement_task', focus: 'canonical memory is visible' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir: canonicalStateDir,
+      scope: 'cross_run',
+      key: 'implement_task:carry-forward',
+      value: { relevantPhases: ['implement_task'], reminder: 'canonical cross-run memory is visible' },
+      sourceIteration: 1,
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-worker-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir: workerStateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt).toContain('key=current-task');
+    expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:carry-forward');
+    expect(prompt).toContain('WORKER MEMORY PROMPT SENTINEL');
+  });
+
+  it('applies memory cap after relevance filtering so relevant context is retained', async () => {
+    const tmp = await makeTempDir('jeeves-runner-memory-limit-');
+    const workflowsDir = path.join(tmp, 'workflows');
+    const promptsDir = path.join(tmp, 'prompts');
+    const stateDir = path.join(tmp, 'state');
+    const cwd = path.join(tmp, 'work');
+
+    await fs.mkdir(workflowsDir, { recursive: true });
+    await fs.mkdir(promptsDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+
+    await fs.writeFile(
+      path.join(workflowsDir, 'memory-limit-fixture.yaml'),
+      [
+        'workflow:',
+        '  name: memory-limit-fixture',
+        '  version: 1',
+        '  start: implement_task',
+        'phases:',
+        '  implement_task:',
+        '    type: execute',
+        '    prompt: memory.prompt.md',
+        '    transitions: []',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(promptsDir, 'memory.prompt.md'), 'MEMORY LIMIT PROMPT SENTINEL', 'utf-8');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'implement_task:focus',
+      value: { phase: 'implement_task', focus: 'must survive relevance filtering' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'cross_run',
+      key: 'implement_task:carry-forward',
+      value: { relevantPhases: ['implement_task'], reminder: 'must survive relevance filtering' },
+      sourceIteration: 2,
+    });
+    upsertMemoryEntriesInDb({
+      stateDir,
+      entries: Array.from({ length: 510 }, (_, i) => ({
+        scope: 'session' as const,
+        key: `design_plan:noise-${String(i).padStart(3, '0')}`,
+        value: { phase: 'design_plan', i },
+        sourceIteration: 1,
+      })),
+    });
+
+    const provider = new PromptCaptureProvider();
+    const result = await runSinglePhaseOnce({
+      provider,
+      workflowName: 'memory-limit-fixture',
+      phaseName: 'implement_task',
+      workflowsDir,
+      promptsDir,
+      stateDir,
+      cwd,
+    });
+
+    expect(result).toEqual({ phase: 'implement_task', success: true });
+    const prompt = provider.seenPrompt ?? '';
+    expect(prompt).toContain('<memory_context>');
+    expect(prompt).toContain('key=implement_task:focus');
+    expect(prompt).toContain('key=implement_task:carry-forward');
+    expect(prompt).not.toContain('key=design_plan:noise-000');
+    expect(prompt).toContain('MEMORY LIMIT PROMPT SENTINEL');
+  }, 60_000);
 
   it('fails fast when required MCP servers are missing for strict enforcement', async () => {
     const tmp = await makeTempDir('jeeves-runner-mcp-strict-');

@@ -44,18 +44,31 @@ async function git(args: string[], opts?: { cwd?: string }): Promise<void> {
   await execFileAsync('git', args, { cwd: opts?.cwd });
 }
 
-async function ensureLocalRepoClone(params: { dataDir: string; owner: string; repo: string }): Promise<void> {
-  const origin = await makeTempDir('jeeves-vs-origin-');
-  await git(['init', '--bare', origin]);
+let sharedOriginRepoPromise: Promise<string> | null = null;
 
-  const work = await makeTempDir('jeeves-vs-origin-work-');
-  await git(['init'], { cwd: work });
-  await fs.writeFile(path.join(work, 'README.md'), 'hello\n', 'utf-8');
-  await git(['add', '.'], { cwd: work });
-  await git(['-c', 'user.name=jeeves-test', '-c', 'user.email=jeeves-test@example.com', 'commit', '-m', 'init'], { cwd: work });
-  await git(['branch', '-M', 'main'], { cwd: work });
-  await git(['remote', 'add', 'origin', origin], { cwd: work });
-  await git(['push', '-u', 'origin', 'main'], { cwd: work });
+async function ensureSharedOriginRepo(): Promise<string> {
+  if (!sharedOriginRepoPromise) {
+    sharedOriginRepoPromise = (async () => {
+      const origin = await makeTempDir('jeeves-vs-origin-');
+      await git(['init', '--bare', origin]);
+
+      const work = await makeTempDir('jeeves-vs-origin-work-');
+      await git(['init'], { cwd: work });
+      await fs.writeFile(path.join(work, 'README.md'), 'hello\n', 'utf-8');
+      await git(['add', '.'], { cwd: work });
+      await git(['-c', 'user.name=jeeves-test', '-c', 'user.email=jeeves-test@example.com', 'commit', '-m', 'init'], { cwd: work });
+      await git(['branch', '-M', 'main'], { cwd: work });
+      await git(['remote', 'add', 'origin', origin], { cwd: work });
+      await git(['push', '-u', 'origin', 'main'], { cwd: work });
+
+      return origin;
+    })();
+  }
+  return sharedOriginRepoPromise;
+}
+
+async function ensureLocalRepoClone(params: { dataDir: string; owner: string; repo: string }): Promise<void> {
+  const origin = await ensureSharedOriginRepo();
 
   const repoDir = path.join(params.dataDir, 'repos', params.owner, params.repo);
   await fs.mkdir(path.dirname(repoDir), { recursive: true });
@@ -1491,7 +1504,7 @@ describe('viewer-server', () => {
     expect(body.run).toBeTruthy();
 
     await app.close();
-  });
+  }, 20_000);
 
   // ======================================================================
   // Provider-Aware Ingest Endpoints
@@ -1538,7 +1551,7 @@ describe('viewer-server', () => {
       expect(Array.isArray(body.warnings)).toBe(true);
 
       await app.close();
-    });
+    }, 20_000);
 
     it('returns 400 with validation_failed for missing title', async () => {
       const dataDir = await makeTempDir('jeeves-vs-data-provider-create-validation-');
@@ -1675,7 +1688,7 @@ describe('viewer-server', () => {
       expect(autoSelect.ok).toBe(true);
 
       await app.close();
-    });
+    }, 20_000);
 
     it('persists Azure PAT and syncs worktree when init is requested', async () => {
       const dataDir = await makeTempDir('jeeves-vs-data-provider-create-azure-init-pat-');

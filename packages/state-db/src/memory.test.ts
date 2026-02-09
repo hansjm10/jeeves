@@ -11,6 +11,7 @@ import {
   markMemoryEntryStaleInDb,
   readIssueFromDb,
   readMemoryEntryFromDb,
+  upsertMemoryEntriesInDb,
   upsertMemoryEntryInDb,
   writeIssueToDb,
 } from './index.js';
@@ -27,6 +28,71 @@ function dataDirFromStateDir(stateDir: string): string {
 }
 
 describe('state-db memory entries', () => {
+  it('supports bulk upsert in a single call', async () => {
+    const stateDir = await makeStateDir('jeeves-state-db-memory-bulk-');
+
+    upsertMemoryEntriesInDb({
+      stateDir,
+      entries: [
+        {
+          scope: 'session',
+          key: 'implement_task:a',
+          value: { phase: 'implement_task', note: 'a' },
+          sourceIteration: 1,
+        },
+        {
+          scope: 'session',
+          key: 'implement_task:b',
+          value: { phase: 'implement_task', note: 'b' },
+          sourceIteration: 2,
+        },
+        {
+          scope: 'cross_run',
+          key: 'implement_task:carry',
+          value: { relevantPhases: ['implement_task'] },
+          sourceIteration: 3,
+        },
+      ],
+    });
+
+    expect(listMemoryEntriesFromDb({ stateDir, scope: 'session', limit: null }).map((entry) => entry.key)).toEqual([
+      'implement_task:a',
+      'implement_task:b',
+    ]);
+    expect(listMemoryEntriesFromDb({ stateDir, scope: 'cross_run', limit: null }).map((entry) => entry.key)).toEqual([
+      'implement_task:carry',
+    ]);
+  });
+
+  it('supports disabling the default cap with limit=null', async () => {
+    const stateDir = await makeStateDir('jeeves-state-db-memory-limit-');
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'a',
+      value: { phase: 'implement_task' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'b',
+      value: { phase: 'implement_task' },
+      sourceIteration: 1,
+    });
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'session',
+      key: 'c',
+      value: { phase: 'implement_task' },
+      sourceIteration: 1,
+    });
+
+    expect(listMemoryEntriesFromDb({ stateDir, scope: 'session', limit: 2 })).toHaveLength(2);
+    expect(listMemoryEntriesFromDb({ stateDir, scope: 'session', limit: null })).toHaveLength(3);
+  });
+
   it('supports query by scope and key and lists entries in deterministic scope order', async () => {
     const stateDir = await makeStateDir('jeeves-state-db-memory-');
 

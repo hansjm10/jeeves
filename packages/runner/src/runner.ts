@@ -18,6 +18,68 @@ import { appendProgress, ensureProgressFile, markEnded, markPhase, markStarted }
 import { SdkOutputWriterV1 } from './outputWriter.js';
 
 const PREPENDED_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+const MAX_PROMPT_MEMORY_ENTRIES = 500;
+
+function memoryScopeRank(scope: MemoryEntry['scope']): number {
+  if (scope === 'working_set') return 1;
+  if (scope === 'decisions') return 2;
+  if (scope === 'session') return 3;
+  return 4;
+}
+
+function compareMemoryEntries(a: MemoryEntry, b: MemoryEntry): number {
+  const scopeDiff = memoryScopeRank(a.scope) - memoryScopeRank(b.scope);
+  if (scopeDiff !== 0) return scopeDiff;
+
+  const keyDiff = a.key.localeCompare(b.key);
+  if (keyDiff !== 0) return keyDiff;
+
+  const updatedDiff = a.updatedAt.localeCompare(b.updatedAt);
+  if (updatedDiff !== 0) return updatedDiff;
+
+  return a.stateDir.localeCompare(b.stateDir);
+}
+
+function deriveCanonicalStateDirFromWorkerStateDir(stateDir: string): string | null {
+  const resolved = path.resolve(stateDir);
+  const marker = `${path.sep}.runs${path.sep}`;
+  const markerIdx = resolved.lastIndexOf(marker);
+  if (markerIdx === -1) return null;
+
+  const suffix = resolved.slice(markerIdx + marker.length).split(path.sep).filter((segment) => segment.length > 0);
+  if (suffix.length < 3 || suffix[1] !== 'workers') return null;
+
+  const canonical = resolved.slice(0, markerIdx);
+  return canonical || null;
+}
+
+function listMemoryStateDirsForPrompt(stateDir: string): string[] {
+  const resolved = path.resolve(stateDir);
+  const canonical = deriveCanonicalStateDirFromWorkerStateDir(resolved);
+  if (!canonical || canonical === resolved) return [resolved];
+  return [resolved, canonical];
+}
+
+function listScopedMemoryEntriesForPrompt(stateDir: string): MemoryEntry[] {
+  const stateDirs = listMemoryStateDirsForPrompt(stateDir);
+  const merged = new Map<string, MemoryEntry>();
+
+  for (const dir of stateDirs) {
+    const entries = listMemoryEntriesFromDb({
+      stateDir: dir,
+      includeStale: false,
+      limit: null,
+    });
+    for (const entry of entries) {
+      const entryId = `${entry.scope}\u0000${entry.key}`;
+      if (!merged.has(entryId)) {
+        merged.set(entryId, entry);
+      }
+    }
+  }
+
+  return [...merged.values()].sort(compareMemoryEntries);
+}
 
 export type RunPhaseParams = Readonly<{
   provider: AgentProvider;
@@ -272,16 +334,19 @@ function formatMemorySection(title: string, entries: readonly MemoryEntry[]): st
 }
 
 function buildScopedMemoryBlock(stateDir: string, phaseName: string): string {
-  const entries = listMemoryEntriesFromDb({
-    stateDir,
-    includeStale: false,
-    limit: 500,
-  });
+  const entries = listScopedMemoryEntriesForPrompt(stateDir);
 
-  const workingSet = entries.filter((entry) => entry.scope === 'working_set');
-  const decisions = entries.filter((entry) => entry.scope === 'decisions');
-  const session = entries.filter((entry) => entry.scope === 'session' && isSessionMemoryRelevant(entry, phaseName));
-  const crossRun = entries.filter((entry) => entry.scope === 'cross_run' && isCrossRunMemoryRelevant(entry, phaseName));
+  const relevantEntries = entries.filter((entry) => {
+    if (entry.scope === 'session') return isSessionMemoryRelevant(entry, phaseName);
+    if (entry.scope === 'cross_run') return isCrossRunMemoryRelevant(entry, phaseName);
+    return true;
+  });
+  const limitedEntries = relevantEntries.slice(0, MAX_PROMPT_MEMORY_ENTRIES);
+
+  const workingSet = limitedEntries.filter((entry) => entry.scope === 'working_set');
+  const decisions = limitedEntries.filter((entry) => entry.scope === 'decisions');
+  const session = limitedEntries.filter((entry) => entry.scope === 'session');
+  const crossRun = limitedEntries.filter((entry) => entry.scope === 'cross_run');
 
   const sections: string[] = [
     formatMemorySection('Working Set (active)', workingSet),

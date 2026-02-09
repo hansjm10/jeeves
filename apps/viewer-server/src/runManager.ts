@@ -51,6 +51,14 @@ import {
   type ToolUsageDiagnostics,
   type ToolUsageDiagnosticsSummary,
 } from './toolUsageDiagnostics.js';
+import {
+  ACTIVE_CONTEXT_FILE,
+  RETIRED_TRAJECTORY_FILE,
+  computeTrajectoryReduction,
+  mergeTrajectoryReductionSummary,
+  type TrajectoryReductionDiagnostics,
+  type TrajectoryReductionSummary,
+} from './trajectoryReduction.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -303,6 +311,7 @@ export class RunManager {
   private stopReason: string | null = null;
   private runArchiveMeta: Record<string, unknown> | null = null;
   private toolUsageDiagnosticsSummary: ToolUsageDiagnosticsSummary | null = null;
+  private trajectoryReductionSummary: TrajectoryReductionSummary | null = null;
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private stopRequested = false;
@@ -436,6 +445,7 @@ export class RunManager {
     this.stopReason = null;
     this.runArchiveMeta = null;
     this.toolUsageDiagnosticsSummary = null;
+    this.trajectoryReductionSummary = null;
     // Reset effectiveMaxParallelTasks to avoid carrying stale values across runs
     this.effectiveMaxParallelTasks = null;
     this.runId = makeRunId();
@@ -826,6 +836,41 @@ export class RunManager {
     return diagnostics;
   }
 
+  private async computeIterationTrajectoryReduction(params: {
+    viewerLogPath: string;
+    iteration: number;
+  }): Promise<TrajectoryReductionDiagnostics | null> {
+    if (!this.stateDir) return null;
+
+    try {
+      const reduction = await computeTrajectoryReduction({
+        stateDir: this.stateDir,
+        iteration: params.iteration,
+      });
+      const diagnostics = reduction.diagnostics;
+      this.trajectoryReductionSummary = mergeTrajectoryReductionSummary(
+        this.trajectoryReductionSummary,
+        diagnostics,
+      );
+
+      await this.appendViewerLog(
+        params.viewerLogPath,
+        `[TRAJECTORY] active_tokens=${diagnostics.active_snapshot_token_size} retired=${diagnostics.retired_branch_count} repeated_rate=${diagnostics.repeated_context_rate.toFixed(3)}`,
+      );
+      for (const warning of diagnostics.warnings) {
+        await this.appendViewerLog(params.viewerLogPath, `[TRAJECTORY] ${warning}`);
+      }
+      return diagnostics;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.appendViewerLog(
+        params.viewerLogPath,
+        `[TRAJECTORY] Could not compute trajectory reduction diagnostics: ${msg}`,
+      );
+      return null;
+    }
+  }
+
   private async runLoop(params: {
     provider: 'claude' | 'fake' | 'codex';
     maxIterations: number;
@@ -1172,6 +1217,10 @@ export class RunManager {
         const toolUsageDiagnostics = await this.computeIterationToolUsageDiagnostics({
           viewerLogPath,
         });
+        const trajectoryReductionDiagnostics = await this.computeIterationTrajectoryReduction({
+          viewerLogPath,
+          iteration,
+        });
 
         await this.archiveIteration({
           iteration,
@@ -1186,6 +1235,7 @@ export class RunManager {
           phase_report_committed_fields: Object.keys(phaseCommitResult?.committedStatusUpdates ?? {}).sort(),
           phase_report_ignored_fields: (phaseCommitResult?.ignoredStatusKeys ?? []).slice(),
           tool_usage_diagnostics: toolUsageDiagnostics,
+          trajectory_reduction_diagnostics: trajectoryReductionDiagnostics,
         });
 
         if (exitCode !== 0) {
@@ -1768,6 +1818,7 @@ export class RunManager {
     phase_report_committed_fields?: string[];
     phase_report_ignored_fields?: string[];
     tool_usage_diagnostics?: ToolUsageDiagnostics | null;
+    trajectory_reduction_diagnostics?: TrajectoryReductionDiagnostics | null;
   }): Promise<void> {
     if (!this.stateDir || !this.runId) return;
     if (this.dbTelemetryEnabled()) {
@@ -1791,6 +1842,8 @@ export class RunManager {
     copyIfExists(path.join(this.stateDir, 'sdk-output.json'), 'sdk-output.json');
     copyIfExists(path.join(this.stateDir, 'progress.txt'), 'progress.txt');
     copyIfExists(path.join(this.stateDir, PHASE_REPORT_FILE), PHASE_REPORT_FILE);
+    copyIfExists(path.join(this.stateDir, ACTIVE_CONTEXT_FILE), ACTIVE_CONTEXT_FILE);
+    copyIfExists(path.join(this.stateDir, RETIRED_TRAJECTORY_FILE), RETIRED_TRAJECTORY_FILE);
     copies.push(
       fs.cp(path.join(this.stateDir, 'tool-raw'), path.join(iterDir, 'tool-raw'), { recursive: true }).catch(() => void 0),
     );
@@ -1810,6 +1863,23 @@ export class RunManager {
       await writeJsonAtomic(
         path.join(iterDir, 'tool-usage-diagnostics.json'),
         params.tool_usage_diagnostics,
+      ).catch(() => void 0);
+    }
+
+    if (params.trajectory_reduction_diagnostics) {
+      if (this.dbTelemetryEnabled()) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: `trajectory-reduction-diagnostics-${String(params.iteration).padStart(3, '0')}.json`,
+          mime: 'application/json',
+          content: Buffer.from(`${JSON.stringify(params.trajectory_reduction_diagnostics, null, 2)}\n`, 'utf-8'),
+        });
+      }
+      await writeJsonAtomic(
+        path.join(iterDir, 'trajectory-reduction-diagnostics.json'),
+        params.trajectory_reduction_diagnostics,
       ).catch(() => void 0);
     }
 
@@ -1859,6 +1929,29 @@ export class RunManager {
         mime: 'text/plain; charset=utf-8',
         content: Buffer.from(progressText, 'utf-8'),
       });
+
+      const activeContextRaw = await fs.readFile(path.join(this.stateDir, ACTIVE_CONTEXT_FILE), 'utf-8').catch(() => null);
+      if (activeContextRaw) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: 'final-active-context.json',
+          mime: 'application/json',
+          content: Buffer.from(activeContextRaw, 'utf-8'),
+        });
+      }
+      const retiredTrajectoryRaw = await fs.readFile(path.join(this.stateDir, RETIRED_TRAJECTORY_FILE), 'utf-8').catch(() => null);
+      if (retiredTrajectoryRaw) {
+        upsertRunArtifact({
+          dataDir: this.dataDir,
+          runId: this.runId,
+          scope: 'viewer',
+          name: 'retired-trajectory.jsonl',
+          mime: 'application/x-ndjson',
+          content: Buffer.from(retiredTrajectoryRaw, 'utf-8'),
+        });
+      }
     }
     if (!this.runDir) return;
     await fs.copyFile(path.join(this.stateDir, 'viewer-run.log'), path.join(this.runDir, 'viewer-run.log')).catch(() => void 0);
@@ -1872,6 +1965,8 @@ export class RunManager {
     }
     const progressText = renderProgressText({ stateDir: this.stateDir });
     await fs.writeFile(path.join(this.runDir, 'final-progress.txt'), progressText, 'utf-8').catch(() => void 0);
+    await fs.copyFile(path.join(this.stateDir, ACTIVE_CONTEXT_FILE), path.join(this.runDir, 'final-active-context.json')).catch(() => void 0);
+    await fs.copyFile(path.join(this.stateDir, RETIRED_TRAJECTORY_FILE), path.join(this.runDir, RETIRED_TRAJECTORY_FILE)).catch(() => void 0);
 
     await this.persistRunArchiveMeta({
       run_id: this.runId,
@@ -1890,6 +1985,9 @@ export class RunManager {
       command: this.status.command,
       ...(this.toolUsageDiagnosticsSummary
         ? { tool_usage_diagnostics_summary: this.toolUsageDiagnosticsSummary }
+        : {}),
+      ...(this.trajectoryReductionSummary
+        ? { trajectory_reduction_summary: this.trajectoryReductionSummary }
         : {}),
     });
   }

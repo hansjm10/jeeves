@@ -11,7 +11,9 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.32",
     "@jeeves/core": "workspace:*",
+    "@jeeves/mcp-state": "workspace:*",
     "@jeeves/mcp-pruner": "workspace:*",
+    "@jeeves/state-db": "workspace:*",
     "@openai/codex": "^0.98.0"
   }
 }

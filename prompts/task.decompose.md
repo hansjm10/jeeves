@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress state changes (`state_get_issue`, `state_put_tasks`, `state_update_issue_status`, `state_append_progress`) instead of editing `.jeeves/issue.json` or `.jeeves/tasks.json` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -19,19 +20,19 @@ You are a senior software architect breaking down a design document into small, 
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains `designDocPath`)
-- Progress log: `.jeeves/progress.txt`
-- Design document: Read from path in `.jeeves/issue.json.designDocPath`
+- Issue config: `mcp:state/state_get_issue` (contains `designDocPath`)
+- Progress log: `mcp:state/state_append_progress`
+- Design document: Read from path in `issue.designDocPath` returned by `state_get_issue`
 </inputs>
 
 <instructions>
-1. Read `.jeeves/issue.json` to get the design document path.
+1. Call `state_get_issue` to get the design document path.
 
 2. Read the design document at the specified `designDocPath`.
 
 3. Check for issue hierarchy context
 
-   Read `.jeeves/issue.json` and check if `issue.source` and `issue.source.hierarchy` exist.
+   Use `state_get_issue` and check if `issue.source` and `issue.source.hierarchy` exist.
    When hierarchy context is available (e.g., Azure DevOps work items with parent/children):
    - Use the parent work item's title and context to understand the broader epic or feature
    - Review child work items if present to identify which parts of the broader scope this issue addresses
@@ -59,7 +60,7 @@ You are a senior software architect breaking down a design document into small, 
    - Functions before tests that exercise them
    - Configuration before code that reads it
 
-7. Write the task list to `.jeeves/tasks.json`:
+7. Write the task list with `state_put_tasks`:
    ```json
    {
      "schemaVersion": 1,
@@ -78,11 +79,11 @@ You are a senior software architect breaking down a design document into small, 
    }
    ```
 
-8. Update `.jeeves/issue.json`:
-   - Set `status.taskDecompositionComplete` to `true`
-   - Set `status.currentTaskId` to the first task's ID (e.g., "T1")
+8. Update issue status with `state_update_issue_status`:
+   - Set `taskDecompositionComplete` to `true`
+   - Set `currentTaskId` to the first task's ID (e.g., "T1")
 
-9. Append progress to `.jeeves/progress.txt`.
+9. Append progress with `state_append_progress`.
 </instructions>
 
 <task_guidelines>
@@ -124,22 +125,22 @@ Before creating tasks, think through:
 
 <completion>
 The phase is complete when:
-- `.jeeves/tasks.json` exists with 5-15 tasks
+- `state_get_tasks` returns 5-15 tasks
 - Each task has all required fields
 - `status.taskDecompositionComplete` is `true`
 - `status.currentTaskId` is set to the first task
 
-Update `.jeeves/issue.json`:
+Call `state_update_issue_status`:
 ```json
 {
-  "status": {
+  "fields": {
     "taskDecompositionComplete": true,
     "currentTaskId": "T1"
   }
 }
 ```
 
-Append to `.jeeves/progress.txt`:
+Call `state_append_progress` with an entry like:
 ```
 ## [Date/Time] - Task Decomposition
 

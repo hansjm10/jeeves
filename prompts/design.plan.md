@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -24,9 +25,9 @@ You think in terms of: "What's the smallest testable unit? What files change? Ho
 </design_phase_quality_policy>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains designDocPath)
-- Design document: Read from `.jeeves/issue.json.designDocPath` (Sections 1-4 complete)
-- Progress log: `.jeeves/progress.txt`
+- Issue state: `state_get_issue` (contains designDocPath)
+- Design document: Read from `issue.designDocPath` (Sections 1-4 complete)
+- Progress updates: `state_append_progress`
 </inputs>
 
 ---
@@ -124,12 +125,11 @@ T5 → depends on T3, T4
 
 ### Step 4: Update Status
 
-Update `.jeeves/issue.json`:
+Update issue state via MCP tools:
+1. `state_get_issue`
+2. `state_put_issue` with:
 ```json
 {
-  "status": {
-    "designPlanComplete": true
-  },
   "tasks": [
     {
       "id": "T1",
@@ -141,8 +141,14 @@ Update `.jeeves/issue.json`:
   ]
 }
 ```
+3. `state_update_issue_status` with:
+```json
+{
+  "designPlanComplete": true
+}
+```
 
-Append to `.jeeves/progress.txt`:
+Append via `state_append_progress`:
 ```
 ## [Date] - Design Plan
 

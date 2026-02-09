@@ -35,6 +35,8 @@ import {
 } from './workerSandbox.js';
 import { readIssueJson, writeIssueJson } from './issueJson.js';
 import { writeJsonAtomic } from './jsonAtomic.js';
+import { appendProgressEvent } from './sqliteStorage.js';
+import { readTasksJson as readTasksStateJson, writeTasksJson as writeTasksStateJson } from './tasksStore.js';
 import {
   mergePassedBranches,
   updateWaveSummaryWithMerge,
@@ -182,6 +184,20 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+async function appendCanonicalProgress(stateDir: string, entry: string, source: string): Promise<void> {
+  const progressPath = path.join(stateDir, 'progress.txt');
+  try {
+    await fs.appendFile(progressPath, entry, 'utf-8');
+  } catch {
+    await fs.writeFile(progressPath, entry, 'utf-8');
+  }
+  appendProgressEvent({
+    stateDir,
+    source,
+    message: entry,
+  });
+}
+
 /**
  * Converts exit event to exit code.
  */
@@ -200,20 +216,16 @@ function exitCodeFromExitEvent(code: number | null, signal: NodeJS.Signals | nul
  * Reads tasks.json from a directory.
  */
 async function readTasksJson(dir: string): Promise<TasksFile | null> {
-  const tasksPath = path.join(dir, 'tasks.json');
-  try {
-    const raw = await fs.readFile(tasksPath, 'utf-8');
-    return JSON.parse(raw) as TasksFile;
-  } catch {
-    return null;
-  }
+  const json = await readTasksStateJson(dir);
+  if (!json) return null;
+  return json as unknown as TasksFile;
 }
 
 /**
  * Writes tasks.json to a directory.
  */
 async function writeTasksJson(dir: string, data: TasksFile): Promise<void> {
-  await writeJsonAtomic(path.join(dir, 'tasks.json'), data);
+  await writeTasksStateJson(dir, data as unknown as Record<string, unknown>);
 }
 
 /**
@@ -642,7 +654,6 @@ export async function appendWaveProgressEntry(
   specCheckResult: WaveResult | null,
   mergeResult: WaveMergeResult | null,
 ): Promise<void> {
-  const progressPath = path.join(stateDir, 'progress.txt');
   const now = new Date().toISOString();
 
   const lines: string[] = [];
@@ -738,13 +749,7 @@ export async function appendWaveProgressEntry(
   lines.push('');
 
   const entry = lines.join('\n');
-
-  try {
-    await fs.appendFile(progressPath, entry, 'utf-8');
-  } catch {
-    // If append fails, try to create the file
-    await fs.writeFile(progressPath, entry, 'utf-8');
-  }
+  await appendCanonicalProgress(stateDir, entry, 'parallel-runner');
 }
 
 /**
@@ -1790,10 +1795,9 @@ export class ParallelRunner {
     const timeoutType = this.timeoutType ?? 'unknown';
 
     // 1. Mark all wave tasks as failed in canonical tasks.json
-    const tasksPath = path.join(this.options.canonicalStateDir, 'tasks.json');
     try {
-      const tasksRaw = await fs.readFile(tasksPath, 'utf-8');
-      const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+      const tasksJson = await readTasksJson(this.options.canonicalStateDir);
+      if (!tasksJson) throw new Error('tasks.json not found');
 
       for (const outcome of outcomes) {
         const task = tasksJson.tasks.find((t) => t.id === outcome.taskId);
@@ -1802,7 +1806,7 @@ export class ParallelRunner {
         }
       }
 
-      await writeJsonAtomic(tasksPath, tasksJson);
+      await writeTasksJson(this.options.canonicalStateDir, tasksJson);
       await this.options.appendLog(
         `[PARALLEL] Marked ${outcomes.length} task(s) as failed due to timeout`,
       );
@@ -1879,10 +1883,9 @@ export class ParallelRunner {
     const timeoutType = this.timeoutType ?? 'unknown';
 
     // 1. Mark ALL wave tasks as failed in canonical tasks.json (not based on individual outcomes)
-    const tasksPath = path.join(this.options.canonicalStateDir, 'tasks.json');
     try {
-      const tasksRaw = await fs.readFile(tasksPath, 'utf-8');
-      const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+      const tasksJson = await readTasksJson(this.options.canonicalStateDir);
+      if (!tasksJson) throw new Error('tasks.json not found');
 
       for (const outcome of outcomes) {
         const task = tasksJson.tasks.find((t) => t.id === outcome.taskId);
@@ -1891,7 +1894,7 @@ export class ParallelRunner {
         }
       }
 
-      await writeJsonAtomic(tasksPath, tasksJson);
+      await writeTasksJson(this.options.canonicalStateDir, tasksJson);
       await this.options.appendLog(
         `[PARALLEL] Marked ${outcomes.length} task(s) as failed due to timeout`,
       );
@@ -1963,7 +1966,6 @@ export class ParallelRunner {
     phase: WorkerPhase,
     outcomes: WorkerOutcome[],
   ): Promise<void> {
-    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
     const timeoutType = this.timeoutType ?? 'unknown';
     const progressEntry = `\n## [${nowIso()}] - Parallel Wave Timeout\n\n` +
       `### Wave\n` +
@@ -1980,7 +1982,7 @@ export class ParallelRunner {
       `- No branches merged (due to timeout)\n` +
       `- Run ended as failed (eligible for retry)\n\n` +
       `---\n`;
-    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+    await appendCanonicalProgress(this.options.canonicalStateDir, progressEntry, 'parallel-runner-timeout');
   }
 
   /**
@@ -2000,7 +2002,6 @@ export class ParallelRunner {
     errorMessage: string,
     errorStack?: string,
   ): Promise<void> {
-    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
     const failureStage = startedWorkerTaskIds.length > 0
       ? 'worker spawn'
       : 'sandbox creation';
@@ -2034,7 +2035,7 @@ export class ParallelRunner {
       `### Artifacts\n` +
       `- Wave summary: ${this.options.canonicalStateDir}/.runs/${this.effectiveRunId}/waves/${waveId}.json\n\n` +
       `---\n`;
-    await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+    await appendCanonicalProgress(this.options.canonicalStateDir, progressEntry, 'parallel-runner-setup-failure');
   }
 
   /**
@@ -2050,7 +2051,6 @@ export class ParallelRunner {
     canonicalPhase: WorkerPhase,
     parallelStatePhase: WorkerPhase,
   ): Promise<void> {
-    const progressPath = path.join(this.options.canonicalStateDir, 'progress.txt');
     const warningEntry = `\n## [${nowIso()}] - Parallel State Corruption Warning\n\n` +
       `### Mismatch Detected\n` +
       `- Canonical issue.json.phase: ${canonicalPhase}\n` +
@@ -2065,7 +2065,7 @@ export class ParallelRunner {
       `This mismatch can occur if the orchestrator crashed between updating issue.json.phase ` +
       `and status.parallel.activeWavePhase, or if external tooling modified the state files.\n\n` +
       `---\n`;
-    await fs.appendFile(progressPath, warningEntry, 'utf-8').catch(() => void 0);
+    await appendCanonicalProgress(this.options.canonicalStateDir, warningEntry, 'parallel-runner-corruption');
     await this.options.appendLog(
       `[PARALLEL] Warning: activeWavePhase mismatch (${parallelStatePhase} vs ${canonicalPhase}), correcting`,
     );
@@ -2104,6 +2104,9 @@ export class ParallelRunner {
     const env: Record<string, string | undefined> = {
       ...process.env,
       JEEVES_DATA_DIR: this.options.dataDir,
+      JEEVES_RUN_ID: this.options.runId,
+      JEEVES_RUN_SCOPE: 'worker',
+      JEEVES_RUN_TASK_ID: taskId,
     };
     if (this.options.model) {
       env.JEEVES_MODEL = this.options.model;
@@ -2369,10 +2372,9 @@ export async function handleWaveTimeoutCleanup(
 
   // 1. Mark all activeWaveTaskIds as failed in canonical tasks.json
   // Per §6.2.8: ALL wave tasks should be marked failed on timeout, regardless of their individual outcomes
-  const tasksPath = path.join(stateDir, 'tasks.json');
   try {
-    const tasksRaw = await fs.readFile(tasksPath, 'utf-8');
-    const tasksJson = JSON.parse(tasksRaw) as { tasks: { id: string; status: string }[] };
+    const tasksJson = await readTasksJson(stateDir);
+    if (!tasksJson) throw new Error('tasks.json not found');
 
     for (const task of tasksJson.tasks) {
       if (activeWaveTaskIds.includes(task.id)) {
@@ -2381,7 +2383,7 @@ export async function handleWaveTimeoutCleanup(
       }
     }
 
-    await writeJsonAtomic(tasksPath, tasksJson);
+    await writeTasksJson(stateDir, tasksJson);
   } catch {
     // If we can't read/write tasks.json, continue with cleanup
   }
@@ -2421,7 +2423,6 @@ export async function handleWaveTimeoutCleanup(
   }
 
   // 5. Append progress entry
-  const progressPath = path.join(stateDir, 'progress.txt');
   const progressEntry = `\n## [${nowIso()}] - Parallel Wave Timeout\n\n` +
     `### Wave\n` +
     `- Wave ID: ${activeWaveId}\n` +
@@ -2434,7 +2435,7 @@ export async function handleWaveTimeoutCleanup(
     `- Parallel state cleared from issue.json\n` +
     `- Run ended as failed (eligible for retry)\n\n` +
     `---\n`;
-  await fs.appendFile(progressPath, progressEntry, 'utf-8').catch(() => void 0);
+  await appendCanonicalProgress(stateDir, progressEntry, 'parallel-runner-timeout');
 
   return result;
 }

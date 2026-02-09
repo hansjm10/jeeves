@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -25,8 +26,8 @@ You do not design solutions yet. You establish scope and constraints that will g
 </design_phase_quality_policy>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains issue number, repo, notes)
-- Progress log: `.jeeves/progress.txt`
+- Issue state: `state_get_issue` (contains issue number, repo, notes)
+- Progress updates: `state_append_progress`
 - Issue details (provider-aware):
   - GitHub: `gh issue view <number>`
   - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
@@ -38,14 +39,14 @@ You do not design solutions yet. You establish scope and constraints that will g
 
 ### Step 1: Gather Context
 
-1. Read `.jeeves/issue.json` to get the issue/work-item identifier and provider context:
+1. Call `state_get_issue` to get the issue/work-item identifier and provider context:
    - Prefer `issue.source.provider` when present
    - If provider is missing but `status.azureDevops.organization` and `status.azureDevops.project` are present, treat provider as `azure_devops`
    - Otherwise treat provider as `github`
 2. Fetch full requirements with provider-appropriate command:
    - GitHub: `gh issue view <issueNumber>`
    - Azure DevOps: `az boards work-item show --id <issueId> --organization <org> --project <project> --output json`
-3. Read `.jeeves/progress.txt` for any prior context
+3. Review prior context from `state_get_issue` and existing design/progress artifacts as needed.
 4. Explore the codebase to understand:
    - Where this feature would live
    - What existing patterns apply
@@ -75,7 +76,7 @@ You MUST answer ALL of these questions explicitly before writing the design docu
 ### Step 3: Create Design Document
 
 Determine the design document path:
-- If `.jeeves/issue.json.designDocPath` exists, use that path
+- If `issue.designDocPath` exists, use that path
 - Otherwise, create: `docs/issue-<issueNumber>-design.md`
 
 Create the document with Section 1 filled in:
@@ -127,22 +128,27 @@ Create the document with Section 1 filled in:
 
 ### Step 4: Update Status
 
-Update `.jeeves/issue.json`:
+Update issue state via MCP tools:
+1. `state_get_issue`
+2. `state_put_issue` with:
 ```json
 {
-  "designDocPath": "docs/issue-<N>-design.md",
-  "status": {
-    "designClassifyComplete": true,
-    "featureTypes": {
-      "workflow": true/false,
-      "api": true/false,
-      "data": true/false
-    }
+  "designDocPath": "docs/issue-<N>-design.md"
+}
+```
+3. `state_update_issue_status` with:
+```json
+{
+  "designClassifyComplete": true,
+  "featureTypes": {
+    "workflow": true/false,
+    "api": true/false,
+    "data": true/false
   }
 }
 ```
 
-Append to `.jeeves/progress.txt`:
+Append using `state_append_progress`:
 ```
 ## [Date] - Design Classification
 
@@ -171,4 +177,4 @@ Before completing this phase, verify:
 - [ ] Non-Goals explicitly exclude adjacent scope
 - [ ] Feature types are based on actual changes needed, not assumed
 - [ ] Design document created with Section 1 complete
-- [ ] Status updated with feature type flags
+- [ ] Issue status updated with feature type flags via MCP state tools

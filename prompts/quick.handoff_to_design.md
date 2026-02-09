@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -19,36 +20,26 @@ You are escalating a change that started as a quick fix into the full design-fir
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json`
-- Progress log: `.jeeves/progress.txt`
+- Issue state: `state_get_issue`
+- Progress updates: `state_append_progress`
 </inputs>
 
 <instructions>
-1. Read `.jeeves/issue.json` and identify the current repo + issue number.
+1. Read issue state with `state_get_issue` and identify the current repo + issue number.
 
-2. Update `.jeeves/issue.json` to hand off to the default workflow:
-   - Set `workflow = "default"`
-   - Do NOT set `phase` directly
-   - Keep `status.needsDesign` context in the phase report (below)
-
-3. Write `.jeeves/phase-report.json`:
+2. Write `.jeeves/phase-report.json`:
    - `handoffComplete = true`
    - `needsDesign = true`
 
-4. Append to `.jeeves/progress.txt`:
+3. Append a concise entry using `state_append_progress`:
    - Why the work exceeded quick-fix scope
    - What work is already done (if any)
    - Next steps for the design phases
+
+4. Do NOT edit `.jeeves/issue.json` directly. The orchestrator will switch from `quick-fix` to `default` when `handoffComplete = true`.
 </instructions>
 
 <completion>
-Update `.jeeves/issue.json`:
-```json
-{
-  "workflow": "default"
-}
-```
-
 Write `.jeeves/phase-report.json`:
 ```json
 {
@@ -61,4 +52,6 @@ Write `.jeeves/phase-report.json`:
   }
 }
 ```
+
+Then append progress via `state_append_progress`.
 </completion>

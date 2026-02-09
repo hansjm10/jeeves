@@ -7,6 +7,7 @@
     "typecheck": "tsc -b --pretty false",
     "build": "tsc -b --pretty false",
     "test": "vitest run",
+    "test:optional": "pnpm build && JEEVES_RUN_OPTIONAL_TESTS=true vitest run",
     "run:fixture": "pnpm exec jeeves-runner run-fixture",
     "dev:viewer-server": "pnpm build && node apps/viewer-server/dist/bin.js --host 127.0.0.1 --port 8081",
     "dev:viewer": "pnpm --filter @jeeves/viewer dev",

@@ -6,12 +6,13 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getIssueStateDir, getWorktreePath } from '@jeeves/core';
 
 import { RunManager } from './runManager.js';
 import { readIssueJson } from './issueJson.js';
+import { installStateDbFsShim } from './testStateDbShim.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,6 +72,17 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 25));
   }
 }
+
+let uninstallFsShim: (() => void) | null = null;
+
+beforeEach(() => {
+  uninstallFsShim = installStateDbFsShim();
+});
+
+afterEach(() => {
+  uninstallFsShim?.();
+  uninstallFsShim = null;
+});
 
 describe('RunManager', () => {
   it('does not treat tool output containing the promise as completion', async () => {
@@ -1634,7 +1646,7 @@ describe('RunManager quick-fix workflow switching', () => {
       const phaseIdx = args.findIndex((a) => a === '--phase');
       const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
       if (phase === 'quick_fix') {
-        // Simulate a quick-fix phase handing off to the default workflow by editing issue.json.
+        // Simulate a quick-fix phase handing off to the default workflow via canonical issue state.
         // We write before the process exits so RunManager observes the workflow change after exitCode=0.
         void fs.writeFile(
           path.join(stateDir, 'issue.json'),
@@ -1673,6 +1685,87 @@ describe('RunManager quick-fix workflow switching', () => {
     expect(secondCall).toContain('default');
   });
 
+  it('switches from quick-fix handoff to default when handoffComplete is reported', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-switch-handoff-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-switch-handoff-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 792;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        { repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'design_handoff', workflow: 'quick-fix', branch: 'issue/792', notes: '' },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const calls: string[][] = [];
+    const spawn = ((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      const phaseIdx = args.findIndex((a) => a === '--phase');
+      const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
+      if (phase === 'design_handoff') {
+        void fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify(
+            {
+              schemaVersion: 1,
+              phase: 'design_handoff',
+              outcome: 'handoff_complete',
+              statusUpdates: { handoffComplete: true, needsDesign: true },
+            },
+            null,
+            2,
+          ) + '\n',
+          'utf-8',
+        );
+      }
+      return makeFakeChild(0, 50);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const firstCall = calls.find((c) => c.includes('--phase') && c.includes('design_handoff'));
+    expect(firstCall).toBeDefined();
+    expect(firstCall).toContain('--workflow');
+    expect(firstCall).toContain('quick-fix');
+
+    const secondCall = calls.find((c) => c.includes('--phase') && c.includes('design_classify'));
+    expect(secondCall).toBeDefined();
+    expect(secondCall).toContain('--workflow');
+    expect(secondCall).toContain('default');
+
+    const updatedIssue = await readIssueJson(stateDir);
+    expect(updatedIssue?.workflow).toBe('default');
+    expect(updatedIssue?.phase).toBe('design_classify');
+  });
+
   it('restores workflow on non-zero exit from a workflow-switching phase', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-switch-fail-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-switch-fail-');
@@ -1708,7 +1801,7 @@ describe('RunManager quick-fix workflow switching', () => {
       const phaseIdx = args.findIndex((a) => a === '--phase');
       const phase = phaseIdx >= 0 ? args[phaseIdx + 1] : '';
       if (phase === 'design_handoff') {
-        // Simulate a failed handoff attempt that persisted a workflow switch before exiting.
+        // Simulate a failed handoff attempt that persisted a workflow switch in canonical state.
         void fs.writeFile(
           path.join(stateDir, 'issue.json'),
           JSON.stringify(
@@ -4253,4 +4346,76 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     expect(viewerLog).toContain('[STOP]');
     expect(viewerLog).toContain('skipping phase transition');
   }, 30000);
+
+  it('drains queued viewer-log writes before truncating viewer-run.log for a new run', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-log-drain-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-log-drain-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 777;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'hello',
+          workflow: 'fixture-trivial',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+    await rm.setIssue(issueRef);
+
+    const viewerLogPath = path.join(stateDir, 'viewer-run.log');
+    const originalAppendFile = fs.appendFile.bind(fs);
+    const appendSpy = vi.spyOn(fs, 'appendFile').mockImplementation(async (...args: Parameters<typeof fs.appendFile>) => {
+      const [filePath, data] = args;
+      if (filePath === viewerLogPath && String(data).includes('[PREVIOUS-RUN-LINE]')) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return originalAppendFile(...args);
+    });
+
+    const pendingPreviousRunWrite = (rm as unknown as {
+      appendViewerLog: (path: string, line: string) => Promise<void>;
+    }).appendViewerLog(viewerLogPath, '[PREVIOUS-RUN-LINE]');
+
+    try {
+      await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+      await waitFor(() => rm.getStatus().running === false, 5000);
+      await pendingPreviousRunWrite;
+    } finally {
+      appendSpy.mockRestore();
+    }
+
+    const viewerLog = await fs.readFile(viewerLogPath, 'utf-8');
+    expect(viewerLog).not.toContain('[PREVIOUS-RUN-LINE]');
+  }, 10000);
 });

@@ -1,6 +1,7 @@
 <tooling_guidance>
 - When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
 - When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
 - Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
 </tooling_guidance>
 
@@ -25,18 +26,18 @@ You are a senior software architect revising a design document based on review f
 </design_phase_quality_policy>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains `designDocPath` and `status.designFeedback`)
-- Progress log: `.jeeves/progress.txt`
-- Design document: Read from path in `.jeeves/issue.json.designDocPath`
-- Review feedback: `.jeeves/issue.json.status.designFeedback`
+- Issue state: `state_get_issue` (contains `designDocPath` and `status.designFeedback`)
+- Progress updates: `state_append_progress`
+- Design document: Read from path in `issue.designDocPath`
+- Review feedback: `issue.status.designFeedback`
 </inputs>
 
 <instructions>
-1. Read `.jeeves/issue.json` to get:
+1. Call `state_get_issue` to get:
    - The design document path (`designDocPath`)
    - The review feedback (`status.designFeedback`)
 
-2. Read `.jeeves/progress.txt` to understand the review context.
+2. Review prior progress context from existing artifacts as needed.
 
 3. Read the current design document.
 
@@ -49,12 +50,12 @@ You are a senior software architect revising a design document based on review f
    - Does each feedback item have a corresponding change?
    - Did you avoid introducing unrelated changes?
 
-6. If the feedback revealed issues with the task breakdown, update `.jeeves/issue.json.tasks` accordingly.
+6. If the feedback revealed issues with the task breakdown, update issue `tasks` using `state_get_issue` + `state_put_issue`.
 
 7. Save the updated design document.
    - The viewer-server will auto-commit the design doc checkpoint after a successful design phase.
 
-8. Append a progress entry to `.jeeves/progress.txt`:
+8. Append a progress entry using `state_append_progress`:
    ```
    ## [Date/Time] - Design Edit
 
@@ -67,7 +68,8 @@ You are a senior software architect revising a design document based on review f
    ---
    ```
 
-9. Update `.jeeves/issue.json` to clear the feedback flags.
+9. Clear feedback flags using `state_update_issue_status`:
+   - `designFeedback = null`
 </instructions>
 
 <quality_criteria>
@@ -89,12 +91,10 @@ Before making changes, think through:
 </thinking_guidance>
 
 <completion>
-After addressing all feedback, update `.jeeves/issue.json`:
+After addressing all feedback, call `state_update_issue_status`:
 ```json
 {
-  "status": {
-    "designFeedback": null
-  }
+  "designFeedback": null
 }
 ```
 
@@ -112,5 +112,5 @@ Write `.jeeves/phase-report.json`:
 
 Note: Do NOT set `designApproved` to true. That is determined by the next `design_review` phase.
 
-If you cannot address all feedback (e.g., feedback is unclear, requires external input), write your progress to `.jeeves/progress.txt` explaining what was addressed and what remains unclear. The next iteration will continue from where you left off.
+If you cannot address all feedback (e.g., feedback is unclear, requires external input), append progress with `state_append_progress` explaining what was addressed and what remains unclear. The next iteration will continue from where you left off.
 </completion>

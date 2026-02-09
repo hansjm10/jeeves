@@ -1,3 +1,7 @@
+<tooling_guidance>
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
+</tooling_guidance>
+
 <role>
 You are a senior software architect running a deep research pass before detailed design. Your job is to gather high-signal context from the repository and relevant external sources, then capture concrete implementation guidance.
 </role>
@@ -11,9 +15,9 @@ You are a senior software architect running a deep research pass before detailed
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (issue number, repo, notes, designDocPath)
-- Progress log: `.jeeves/progress.txt`
-- Existing design document path from `.jeeves/issue.json.designDocPath`
+- Issue state: `state_get_issue` (issue number, repo, notes, designDocPath)
+- Progress updates: `state_append_progress`
+- Existing design document path from `issue.designDocPath`
 - Issue details (provider-aware):
   - GitHub: `gh issue view <number> --repo <owner/repo>`
   - Azure DevOps: `az boards work-item show --id <id> --organization <org> --project <project> --output json`
@@ -25,11 +29,11 @@ You are a senior software architect running a deep research pass before detailed
 
 ### Step 1: Load context and establish research targets
 
-1. Read `.jeeves/issue.json`.
+1. Call `state_get_issue`.
 2. Determine the design document path:
-   - Use `.jeeves/issue.json.designDocPath` if present
+   - Use `issue.designDocPath` if present
    - Otherwise use `docs/issue-<issueNumber>-design.md`
-3. Read `.jeeves/progress.txt`.
+3. Review prior progress context from existing artifacts as needed.
 4. Resolve provider and retrieve issue details with the matching CLI:
    - Provider resolution: `issue.source.provider` first; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub.
    - If retrieval fails, continue using local context and note the failure.
@@ -104,14 +108,16 @@ Then add or replace this section near the top (before Section 1 when possible):
 
 ### Step 6: Update status and progress
 
-Update `.jeeves/issue.json`:
-- `designDocPath` set to the resolved path
-- `status.designResearchComplete = true`
-- `status.designResearchExternalUnavailable = true|false`
+Update issue state via MCP tools:
+1. `state_get_issue`
+2. `state_put_issue` with `designDocPath` set to the resolved path
+3. `state_update_issue_status`:
+   - `designResearchComplete = true`
+   - `designResearchExternalUnavailable = true|false`
 
-Set `status.designResearchExternalUnavailable = true` when any required external lookup failed.
+Set `designResearchExternalUnavailable = true` when any required external lookup failed.
 
-Append to `.jeeves/progress.txt`:
+Append via `state_append_progress`:
 
 ```text
 ## [Date/Time] - Design Research
@@ -140,5 +146,5 @@ Before completing this phase, verify:
 - [ ] Findings include concrete repo paths
 - [ ] External guidance is sourced when relevant (or failures explicitly documented)
 - [ ] Recommended direction is actionable for `design_workflow`, `design_api`, and `design_data`
-- [ ] `.jeeves/issue.json` status fields were updated
-- [ ] `.jeeves/progress.txt` has a research entry
+- [ ] Issue status fields were updated via MCP state tools
+- [ ] Progress includes a research entry via `state_append_progress`

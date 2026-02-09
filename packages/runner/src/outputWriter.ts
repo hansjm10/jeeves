@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { appendRunSdkEvent, upsertRunArtifact } from '@jeeves/state-db';
+
 import type { ProviderEvent, UsageData } from './provider.js';
 import type { SdkOutputV1, SdkOutputV1Message, SdkOutputV1ToolCall } from './outputV1.js';
 
@@ -24,6 +26,12 @@ async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
 
 export class SdkOutputWriterV1 {
   private readonly outputPath: string;
+  private readonly dbContext: Readonly<{
+    dataDir: string;
+    runId: string;
+    scope: string;
+    taskId: string;
+  }> | null;
   private readonly startedAt: string;
   private readonly messages: SdkOutputV1Message[] = [];
   private readonly toolCalls: SdkOutputV1ToolCall[] = [];
@@ -34,14 +42,56 @@ export class SdkOutputWriterV1 {
   private sessionId: string | null = null;
   private usage: UsageData | null = null;
   private lastWriteAtMs = 0;
+  private completionEventEmitted = false;
 
-  constructor(params: { outputPath: string }) {
+  constructor(params: {
+    outputPath: string;
+    dbContext?: Readonly<{
+      dataDir: string;
+      runId: string;
+      scope: string;
+      taskId?: string;
+    }> | null;
+  }) {
     this.outputPath = params.outputPath;
     this.startedAt = nowIso();
+    const db = params.dbContext;
+    this.dbContext = db
+      ? {
+          dataDir: db.dataDir,
+          runId: db.runId,
+          scope: db.scope,
+          taskId: db.taskId ?? '',
+        }
+      : null;
   }
 
   setSessionId(sessionId: string | null): void {
     this.sessionId = sessionId;
+  }
+
+  private emitSdkEvent(event: string, data: Record<string, unknown>, ts: string): void {
+    if (!this.dbContext) return;
+    appendRunSdkEvent({
+      dataDir: this.dbContext.dataDir,
+      runId: this.dbContext.runId,
+      scope: this.dbContext.scope,
+      taskId: this.dbContext.taskId,
+      ts,
+      event: { event, data },
+    });
+  }
+
+  private emitMessageEvent(message: SdkOutputV1Message, ts: string): void {
+    this.emitSdkEvent(
+      'sdk-message',
+      {
+        message,
+        index: this.messages.length - 1,
+        total: this.messages.length,
+      },
+      ts,
+    );
   }
 
   addProviderEvent(event: ProviderEvent): void {
@@ -61,19 +111,31 @@ export class SdkOutputWriterV1 {
         timestamp,
       });
       this.toolCallIndexById.set(event.id, idx);
+      this.emitSdkEvent(
+        'sdk-tool-start',
+        {
+          tool_use_id: event.id,
+          name: event.name,
+          input: event.input,
+        },
+        timestamp,
+      );
       return;
     }
 
     if (event.type === 'tool_result') {
-      this.messages.push({
+      const message: SdkOutputV1Message = {
         type: 'tool_result',
         timestamp,
         tool_use_id: event.toolUseId,
         content: event.content,
         ...(event.isError ? { is_error: true } : {}),
-      });
+      };
+      this.messages.push(message);
+      this.emitMessageEvent(message, timestamp);
 
       const idx = this.toolCallIndexById.get(event.toolUseId);
+      const toolName = idx !== undefined ? this.toolCalls[idx]?.name : undefined;
       if (idx !== undefined) {
         const prev = this.toolCalls[idx];
         this.toolCalls[idx] = {
@@ -82,25 +144,50 @@ export class SdkOutputWriterV1 {
           ...(event.isError ? { is_error: true } : {}),
         };
       }
+      this.emitSdkEvent(
+        'sdk-tool-complete',
+        {
+          tool_use_id: event.toolUseId,
+          name: toolName,
+          duration_ms: event.durationMs ?? 0,
+          is_error: event.isError ?? false,
+        },
+        timestamp,
+      );
       return;
     }
 
     if (event.type === 'system') {
-      this.messages.push({
+      const message: SdkOutputV1Message = {
         type: 'system',
         timestamp,
         subtype: event.subtype ?? null,
         content: event.content,
         session_id: event.sessionId ?? this.sessionId,
-      });
+      };
+      this.messages.push(message);
+      this.emitMessageEvent(message, timestamp);
+      if (event.sessionId) {
+        this.emitSdkEvent(
+          'sdk-init',
+          {
+            session_id: event.sessionId,
+            started_at: this.startedAt,
+            status: 'running',
+          },
+          timestamp,
+        );
+      }
       return;
     }
 
-    this.messages.push({
+    const message: SdkOutputV1Message = {
       type: event.type,
       timestamp,
       content: event.content,
-    });
+    };
+    this.messages.push(message);
+    this.emitMessageEvent(message, timestamp);
   }
 
   setError(err: unknown): void {
@@ -114,6 +201,18 @@ export class SdkOutputWriterV1 {
   finalize(success: boolean): void {
     this.success = success;
     this.endedAt = nowIso();
+    if (!this.completionEventEmitted) {
+      const snapshot = this.snapshot();
+      this.emitSdkEvent(
+        'sdk-complete',
+        {
+          status: success ? 'success' : 'error',
+          summary: snapshot.stats,
+        },
+        this.endedAt,
+      );
+      this.completionEventEmitted = true;
+    }
   }
 
   snapshot(): SdkOutputV1 {
@@ -166,7 +265,20 @@ export class SdkOutputWriterV1 {
     const force = options?.force ?? false;
     const nowMs = Date.now();
     if (!force && nowMs - this.lastWriteAtMs < minIntervalMs) return;
-    await writeJsonAtomic(this.outputPath, this.snapshot());
+    const snapshot = this.snapshot();
+    await writeJsonAtomic(this.outputPath, snapshot);
+    if (this.dbContext) {
+      const content = Buffer.from(`${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8');
+      upsertRunArtifact({
+        dataDir: this.dbContext.dataDir,
+        runId: this.dbContext.runId,
+        scope: this.dbContext.scope,
+        taskId: this.dbContext.taskId,
+        name: 'sdk-output.json',
+        mime: 'application/json',
+        content,
+      });
+    }
     this.lastWriteAtMs = nowMs;
   }
 }

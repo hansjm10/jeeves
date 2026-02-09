@@ -39,6 +39,7 @@ import {
   POSITIVE_INTEGER_STRING_PATTERN,
   MAX_REMOTE_URL_LENGTH,
 } from './providerIssueState.js';
+import { installStateDbFsShim } from './testStateDbShim.js';
 
 // ============================================================================
 // Test helpers
@@ -46,12 +47,16 @@ import {
 
 describe('providerIssueState', () => {
   let tempDir: string;
+  let uninstallFsShim: (() => void) | null = null;
 
   beforeEach(async () => {
+    uninstallFsShim = installStateDbFsShim();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-issue-state-test-'));
   });
 
   afterEach(async () => {
+    uninstallFsShim?.();
+    uninstallFsShim = null;
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => void 0);
   });
 

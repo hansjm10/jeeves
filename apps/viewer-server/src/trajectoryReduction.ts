@@ -92,7 +92,13 @@ function toComparableKey(input: string): string {
   return input.trim().toLowerCase();
 }
 
-function dedupeList(values: readonly string[]): string[] {
+function dedupeList(
+  values: readonly string[],
+  options?: {
+    maxItems?: number | null;
+  },
+): string[] {
+  const maxItems = options?.maxItems === undefined ? MAX_CATEGORY_ITEMS : options.maxItems;
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of values) {
@@ -102,7 +108,7 @@ function dedupeList(values: readonly string[]): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(normalized);
-    if (out.length >= MAX_CATEGORY_ITEMS) break;
+    if (maxItems !== null && out.length >= maxItems) break;
   }
   return out;
 }
@@ -448,8 +454,10 @@ function createDiagnostics(params: {
   retired: readonly RetiredTrajectoryRecord[];
   nowIso: string;
 }): TrajectoryReductionDiagnostics {
-  const currentItems = dedupeList(buildSnapshotItems(params.snapshot));
-  const previousItems = params.previous ? dedupeList(buildSnapshotItems(params.previous)) : [];
+  const currentItems = dedupeList(buildSnapshotItems(params.snapshot), { maxItems: null });
+  const previousItems = params.previous
+    ? dedupeList(buildSnapshotItems(params.previous), { maxItems: null })
+    : [];
   const previousSet = new Set(previousItems.map((value) => toComparableKey(value)));
 
   let repeatedItemCount = 0;

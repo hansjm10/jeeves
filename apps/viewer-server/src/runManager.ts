@@ -1217,26 +1217,28 @@ export class RunManager {
         const toolUsageDiagnostics = await this.computeIterationToolUsageDiagnostics({
           viewerLogPath,
         });
-        const trajectoryReductionDiagnostics = await this.computeIterationTrajectoryReduction({
-          viewerLogPath,
-          iteration,
-        });
+        const finalizeIterationArtifacts = async (): Promise<void> => {
+          const trajectoryReductionDiagnostics = await this.computeIterationTrajectoryReduction({
+            viewerLogPath,
+            iteration,
+          });
 
-        await this.archiveIteration({
-          iteration,
-          workflow: workflowName,
-          phase: currentPhase,
-          provider: effectiveProvider,
-          model: effectiveModel ?? null,
-          started_at: iterStartedAt,
-          ended_at: nowIso(),
-          exit_code: exitCode,
-          phase_report_source: phaseCommitResult?.source ?? null,
-          phase_report_committed_fields: Object.keys(phaseCommitResult?.committedStatusUpdates ?? {}).sort(),
-          phase_report_ignored_fields: (phaseCommitResult?.ignoredStatusKeys ?? []).slice(),
-          tool_usage_diagnostics: toolUsageDiagnostics,
-          trajectory_reduction_diagnostics: trajectoryReductionDiagnostics,
-        });
+          await this.archiveIteration({
+            iteration,
+            workflow: workflowName,
+            phase: currentPhase,
+            provider: effectiveProvider,
+            model: effectiveModel ?? null,
+            started_at: iterStartedAt,
+            ended_at: nowIso(),
+            exit_code: exitCode,
+            phase_report_source: phaseCommitResult?.source ?? null,
+            phase_report_committed_fields: Object.keys(phaseCommitResult?.committedStatusUpdates ?? {}).sort(),
+            phase_report_ignored_fields: (phaseCommitResult?.ignoredStatusKeys ?? []).slice(),
+            tool_usage_diagnostics: toolUsageDiagnostics,
+            trajectory_reduction_diagnostics: trajectoryReductionDiagnostics,
+          });
+        };
 
         if (exitCode !== 0) {
           await this.appendViewerLog(viewerLogPath, `[ITERATION] Iteration ${iteration} exited with code ${exitCode}`);
@@ -1244,6 +1246,7 @@ export class RunManager {
             this.status = { ...this.status, last_error: `runner exited with code ${exitCode} (phase=${currentPhase})` };
             this.broadcast('run', { run: this.status });
           }
+          await finalizeIterationArtifacts();
           continue;
         }
 
@@ -1254,6 +1257,7 @@ export class RunManager {
         // next run can re-select tasks rather than entering task_spec_check with no active wave.
         if (this.stopRequested) {
           await this.appendViewerLog(viewerLogPath, `[STOP] Stop requested; skipping phase transition`);
+          await finalizeIterationArtifacts();
           continue;
         }
 
@@ -1278,6 +1282,7 @@ export class RunManager {
                   viewerLogPath,
                   `[WORKFLOW] Handoff complete: ${workflowName} -> ${nextWorkflowName} (phase=${nextPhase})`,
                 );
+                await finalizeIterationArtifacts();
                 continue;
               }
             }
@@ -1293,6 +1298,7 @@ export class RunManager {
               await writeIssueJson(this.stateDir!, updatedIssue);
               this.broadcast('state', await this.getStateSnapshot());
               await this.appendViewerLog(viewerLogPath, `[WORKFLOW] Switched: ${workflowName} -> ${nextWorkflowName} (phase=${nextPhase})`);
+              await finalizeIterationArtifacts();
               continue;
             }
           }
@@ -1323,12 +1329,15 @@ export class RunManager {
                 completion_reason: `reached terminal phase: ${nextPhase}`,
               };
               this.broadcast('run', { run: this.status });
+              await finalizeIterationArtifacts();
               completedNaturally = false;
               break;
             }
             await this.appendViewerLog(viewerLogPath, `[TRANSITION] ${currentPhase} -> ${nextPhase}`);
           }
         }
+
+        await finalizeIterationArtifacts();
 
         if (await this.checkCompletionPromise()) {
           // Promise-based completion is only honored in terminal phase context.

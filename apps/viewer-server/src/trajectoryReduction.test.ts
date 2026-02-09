@@ -170,4 +170,55 @@ describe('trajectoryReduction', () => {
     const retiredOnDisk = await fs.readFile(path.join(stateDir, RETIRED_TRAJECTORY_FILE), 'utf-8');
     expect(retiredOnDisk).toContain('hypothesis:memory-first');
   });
+
+  it('counts repeated items across the full snapshot for diagnostics', async () => {
+    const stateDir = await makeStateDir('jeeves-trajectory-full-count-');
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: 'acme/rocket',
+          issue: { number: 114 },
+          phase: 'implement_task',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const blockedTasks = Array.from({ length: 25 }, (_, index) => ({
+      id: `B-${index + 1}`,
+      title: `Blocked task ${index + 1}`,
+      status: 'blocked',
+    }));
+    const pendingTasks = Array.from({ length: 25 }, (_, index) => ({
+      id: `N-${index + 1}`,
+      title: `Pending task ${index + 1}`,
+      status: 'pending',
+    }));
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify({ tasks: [...blockedTasks, ...pendingTasks] }, null, 2) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'progress.txt'), '', 'utf-8');
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    const first = await computeTrajectoryReduction({
+      stateDir,
+      iteration: 1,
+    });
+    expect(first.diagnostics.active_item_count).toBeGreaterThan(25);
+    expect(first.diagnostics.repeated_item_count).toBe(0);
+
+    const second = await computeTrajectoryReduction({
+      stateDir,
+      iteration: 2,
+    });
+    expect(second.diagnostics.active_item_count).toBe(first.diagnostics.active_item_count);
+    expect(second.diagnostics.repeated_item_count).toBe(second.diagnostics.active_item_count);
+    expect(second.diagnostics.repeated_context_rate).toBe(1);
+  });
 });

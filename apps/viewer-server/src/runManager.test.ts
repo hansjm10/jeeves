@@ -452,6 +452,85 @@ phases:
     expect(runMeta.trajectory_reduction_summary).toBeTruthy();
   });
 
+  it('derives active-context objective from the transitioned phase when issue metadata is sparse', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-trajectory-transition-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-transition-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-transition-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-trajectory-transition-objective',
+      `
+workflow:
+  name: fixture-trajectory-transition-objective
+  version: 1
+  start: phase_one
+phases:
+  phase_one:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: phase_two
+        auto: true
+  phase_two:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 63;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'phase_one',
+          workflow: 'fixture-trajectory-transition-objective',
+          branch: 'issue/63',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(path.join(stateDir, 'sdk-output.json'), JSON.stringify({ tool_calls: [] }, null, 2) + '\n', 'utf-8');
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const issueAfterRun = await readIssueJson(stateDir);
+    expect(issueAfterRun?.phase).toBe('phase_two');
+
+    const activeContext = JSON.parse(
+      await fs.readFile(path.join(stateDir, 'active-context.json'), 'utf-8'),
+    ) as { current_objective?: unknown };
+    expect(activeContext.current_objective).toBe('Complete the current phase: phase_two.');
+  });
+
   it('does not stop via completion promise after advancing to a non-terminal phase', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-');

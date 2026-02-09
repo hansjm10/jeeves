@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -148,5 +149,18 @@ describe('default workflow validation', () => {
     const failTransition = preCheck.transitions.find((t) => t.to === 'design_edit');
     expect(failTransition).toBeDefined();
     expect(failTransition?.when).toBe('status.preCheckFailed == true');
+  });
+
+  it('pre_implementation prompt reads task state via MCP tools', async () => {
+    const promptPath = fileURLToPath(new URL('../../../prompts/verify.pre_implementation.md', import.meta.url));
+    const prompt = await fs.readFile(promptPath, 'utf-8');
+
+    expect(prompt).toContain('Call `state_get_issue` to obtain:');
+    expect(prompt).toContain('Call `state_get_tasks` to load the decomposed task list.');
+    expect(prompt).toContain('Check the `state_get_tasks` response:');
+
+    // Guard against regressions back to file-based canonical task loading.
+    expect(prompt).not.toContain('Load `.jeeves/tasks.json` to get the decomposed task list.');
+    expect(prompt).not.toContain('Check `.jeeves/tasks.json`:');
   });
 });

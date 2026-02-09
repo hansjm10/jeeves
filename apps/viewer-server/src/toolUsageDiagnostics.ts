@@ -142,6 +142,7 @@ export function computeToolUsageDiagnostics(toolCallsRaw: unknown): ToolUsageDia
   const seenGrepQueries = new Map<string, number>();
 
   const generatedHandles = new Map<string, Set<string>>();
+  const handlesRequiringFollowup = new Set<string>();
   const artifactPathToHandle = new Map<string, string>();
 
   for (const call of toolCalls) {
@@ -160,6 +161,9 @@ export function computeToolUsageDiagnostics(toolCallsRaw: unknown): ToolUsageDia
 
     const retrieval = parseRetrievalMeta(call);
     if (retrieval.status !== 'available' || !retrieval.handle) continue;
+    if (call.response_truncated === true) {
+      handlesRequiringFollowup.add(retrieval.handle);
+    }
     const existingPaths = generatedHandles.get(retrieval.handle) ?? new Set<string>();
     for (const artifactPath of retrieval.artifactPaths) {
       existingPaths.add(artifactPath);
@@ -199,7 +203,14 @@ export function computeToolUsageDiagnostics(toolCallsRaw: unknown): ToolUsageDia
   const locatorToReadRatio = readCalls > 0 ? grepCalls / readCalls : null;
   const retrievalHandleGeneratedCount = generatedHandles.size;
   const retrievalHandleResolvedCount = resolvedHandles.size;
-  const unresolvedGeneratedHandles = Math.max(0, retrievalHandleGeneratedCount - retrievalHandleResolvedCount);
+  let resolvedHandlesRequiringFollowupCount = 0;
+  for (const handle of resolvedHandles) {
+    if (handlesRequiringFollowup.has(handle)) resolvedHandlesRequiringFollowupCount += 1;
+  }
+  const unresolvedGeneratedHandles = Math.max(
+    0,
+    handlesRequiringFollowup.size - resolvedHandlesRequiringFollowupCount,
+  );
   const unresolvedHandleCount = unresolvedGeneratedHandles + unresolvedHandleReferences;
   const warnings: string[] = [];
 

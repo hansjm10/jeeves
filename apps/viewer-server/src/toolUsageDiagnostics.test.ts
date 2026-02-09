@@ -95,6 +95,37 @@ describe('tool usage diagnostics', () => {
     expect(diagnostics.warnings.some((warning) => warning.includes('Unresolved retrieval handles'))).toBe(true);
   });
 
+  it('does not flag unresolved handles for untruncated retrieval metadata', () => {
+    const diagnostics = computeToolUsageDiagnostics([
+      {
+        name: 'command_execution',
+        input: { command: 'echo ok' },
+        response_truncated: false,
+        response_retrieval: {
+          status: 'available',
+          handle: 'tool-output://echo',
+          artifact_paths: ['tool-raw/echo.part-001.txt'],
+        },
+      },
+    ]);
+
+    expect(diagnostics.retrieval_handle_generated_count).toBe(1);
+    expect(diagnostics.unresolved_handle_count).toBe(0);
+    expect(diagnostics.warnings.some((warning) => warning.includes('Unresolved retrieval handles'))).toBe(false);
+  });
+
+  it('flags unresolved raw artifact reads without matching handles', () => {
+    const diagnostics = computeToolUsageDiagnostics([
+      {
+        name: 'read',
+        input: { file_path: 'tool-raw/missing.part-001.txt' },
+      },
+    ]);
+
+    expect(diagnostics.unresolved_handle_count).toBe(1);
+    expect(diagnostics.warnings.some((warning) => warning.includes('Unresolved retrieval handles'))).toBe(true);
+  });
+
   it('parses diagnostics from sdk-output JSON payload', () => {
     const raw = JSON.stringify({
       schema: 'jeeves.sdk.v1',

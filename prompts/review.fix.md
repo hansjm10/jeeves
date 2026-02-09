@@ -1,8 +1,8 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 # Code Review - Fix
@@ -20,14 +20,14 @@ You are a senior software engineer addressing code review feedback. You fix issu
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json`
+- Issue config: `state_get_issue` output
 - Progress log: `.jeeves/progress.txt`
 - Code review: `.jeeves/review.md` (contains detailed review with issues)
-- Design document: Read from path in `.jeeves/issue.json.designDocPath`
+- Design document: Read from path in `designDocPath` from `state_get_issue`
 </inputs>
 
 <instructions>
-1. Read `.jeeves/issue.json` and `.jeeves/progress.txt` to understand current state.
+1. Read `state_get_issue` output and `.jeeves/progress.txt` to understand current state.
 
 2. Read the code review at `.jeeves/review.md` to understand what needs to be fixed.
 
@@ -73,7 +73,7 @@ You are a senior software engineer addressing code review feedback. You fix issu
    ---
    ```
 
-9. Update `.jeeves/issue.json` to clear the review flags.
+9. Update `state_get_issue` output to clear the review flags.
 </instructions>
 
 <quality_criteria>

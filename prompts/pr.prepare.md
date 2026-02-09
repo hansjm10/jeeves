@@ -1,8 +1,8 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Use MCP state tools for issue/progress writes (`state_get_issue`, `state_put_issue`, `state_append_progress`) instead of editing `.jeeves/issue.json` or `.jeeves/progress.txt` directly.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Use MCP state tools for issue/progress writes (`state_get_issue`, `state_put_issue`, `state_append_progress`) instead of direct file edits to canonical issue/progress state.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 # PR Preparation Phase
@@ -149,7 +149,7 @@ Before creating the PR:
 <completion>
 The phase is complete when:
 - PR exists (created or already existed)
-- Provider-aware PR info is captured in issue.json
+- Provider-aware PR info is captured in issue state via `state_get_issue`
 - `.jeeves/phase-report.json` sets `prCreated` to `true`
 
 Write `.jeeves/phase-report.json`:

@@ -1,8 +1,8 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of editing `.jeeves/issue.json`, `.jeeves/tasks.json`, or `.jeeves/progress.txt` directly.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Use MCP state tools for issue/task/progress updates (`state_get_issue`, `state_get_tasks`, `state_put_issue`, `state_put_tasks`, `state_update_issue_status`, `state_update_issue_control`, `state_set_task_status`, `state_append_progress`) instead of direct file edits to canonical issue/task/progress state.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 # Quick Fix Phase
@@ -20,7 +20,7 @@ You are a senior engineer making a small, low-risk change without the full desig
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains issue number, repo, optional designDocPath)
+- Issue config: `state_get_issue` output (contains issue number, repo, optional designDocPath)
 - Progress log: `.jeeves/progress.txt`
 - Issue source (provider-aware):
   - GitHub: prefer `gh api /repos/<owner>/<repo>/issues/<number>` (avoid GraphQL)
@@ -34,18 +34,18 @@ You are a senior engineer making a small, low-risk change without the full desig
 
 <instructions>
 1. Gather requirements
-   - Read `.jeeves/issue.json` for `repo`, issue/work-item ID, and provider context.
+   - Read `state_get_issue` output for `repo`, issue/work-item ID, and provider context.
    - Resolve provider (`issue.source.provider` first; else Azure if `status.azureDevops.organization` and `status.azureDevops.project` exist; else GitHub).
    - Fetch requirements with provider-appropriate command (`gh api` for GitHub, `az boards work-item show` for Azure DevOps).
 
 2. Ensure a minimal design doc exists
-   - If `.jeeves/issue.json.designDocPath` is missing or points to a missing file:
+   - If `designDocPath` from `state_get_issue` is missing or points to a missing file:
      - Create `docs/issue-<N>-quickfix.md` with:
        - Problem summary (1-2 sentences)
        - Intended change (bullets)
        - Out-of-scope / non-goals (bullets)
        - Testing plan (bullets)
-     - Update `.jeeves/issue.json.designDocPath` to this path.
+     - Update `designDocPath` from `state_get_issue` to this path.
 
 3. Implement the change
    - Make the minimal code/config/doc change required.

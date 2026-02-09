@@ -12,7 +12,7 @@ phases:
   quick_fix:
     type: execute
     provider: claude
-    mcp_profile: state
+    mcp_profile: state_with_pruner
     prompt: quick.fix.md
     description: Small changes without full design ceremony
     transitions:
@@ -31,7 +31,7 @@ phases:
   design_handoff:
     type: execute
     provider: codex
-    mcp_profile: state
+    mcp_profile: state_with_pruner
     prompt: quick.handoff_to_design.md
     description: Escalate to full design workflow when scope grows
     transitions:
@@ -46,7 +46,7 @@ phases:
   prepare_pr:
     type: execute
     provider: claude
-    mcp_profile: state
+    mcp_profile: state_with_pruner
     prompt: pr.prepare.md
     description: Create pull request after quick fix complete
     transitions:
@@ -58,7 +58,7 @@ phases:
   code_review:
     type: evaluate
     provider: codex
-    mcp_profile: state
+    mcp_profile: state_with_pruner
     prompt: review.evaluate.md
     description: Review code changes (read-only)
     transitions:
@@ -72,7 +72,7 @@ phases:
   code_fix:
     type: execute
     provider: claude
-    mcp_profile: state
+    mcp_profile: state_with_pruner
     prompt: review.fix.md
     description: Apply fixes from code review
     transitions:

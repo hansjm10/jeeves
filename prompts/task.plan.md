@@ -1,7 +1,7 @@
 <tooling_guidance>
-- When searching across file contents to find where something is implemented, prefer MCP pruner search tools first (for example `mcp:pruner/grep` with `context_focus_question`).
-- When you already know the exact file/path to inspect, use the MCP pruner `read` tool.
-- Shell-based file search/read commands are still allowed when needed, but MCP pruner tools are the default for file discovery and file reading.
+- When searching across file contents to find where something is implemented, you MUST use MCP pruner search tools first when pruner is available in the current phase (for example `mcp:pruner/grep` with `context_focus_question`).
+- When you already know the exact file/path to inspect, you MUST use the MCP pruner `read` tool when it is available in the current phase.
+- Shell-based file search/read commands are fallback-only when pruner tools are unavailable or insufficient. If you use shell fallback, note the reason in your response/progress output.
 </tooling_guidance>
 
 <role>
@@ -18,17 +18,17 @@ Your job is to **explore the codebase and produce a detailed implementation plan
 </context>
 
 <inputs>
-- Issue config: `.jeeves/issue.json` (contains `status.currentTaskId`)
+- Issue config: `state_get_issue` output (contains `status.currentTaskId`)
 - Task list: `.jeeves/tasks.json`
 - Progress log: `.jeeves/progress.txt`
-- Design document: Path in `.jeeves/issue.json.designDocPath` (reference only)
+- Design document: Path in `designDocPath` from `state_get_issue` (reference only)
 - Task feedback: `.jeeves/task-feedback.md` (present only on retry — read for context on what went wrong)
 </inputs>
 
 <instructions>
 1. Identify the active task
 
-   Read `.jeeves/issue.json` and extract `status.currentTaskId`.
+   Read `state_get_issue` output and extract `status.currentTaskId`.
 
 2. Load task definition
 
@@ -40,7 +40,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
 
 3. Read the design document
 
-   Read the design document referenced in `.jeeves/issue.json.designDocPath`.
+   Read the design document referenced in `designDocPath` from `state_get_issue`.
    Understand the architectural decisions and how this task fits into the overall design.
 
 4. Read prior progress
@@ -56,7 +56,7 @@ Your job is to **explore the codebase and produce a detailed implementation plan
 
 6. Check for issue hierarchy context
 
-   Read `.jeeves/issue.json` and check if `issue.source.hierarchy` exists.
+   Read `state_get_issue` output and check if `issue.source.hierarchy` exists.
    When hierarchy context is available (e.g., Azure DevOps work items with parent/children):
    - Note the parent work item (title, URL) to understand the broader scope
    - Review child work items if present to understand sibling tasks

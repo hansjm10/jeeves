@@ -145,7 +145,112 @@ The existing skills infrastructure (`/codex/skills/`, `skills/` in-repo, `regist
 ---
 
 ## 2. Workflow
-[To be completed in design_workflow phase]
+
+Scope: task-loop workflow from `implement_task` through `task_spec_check`, including retry/error paths and handoff to completeness verification. Upstream design phases and downstream PR/review phases are unchanged.
+
+### States
+| State | Description | Entry Condition |
+|-------|-------------|-----------------|
+| `implement_task` | Implements the current task (sequential run or parallel implement wave). | Entered from `pre_implementation_check`, `task_spec_check` retry transitions, or `completeness_verification` when missing work is detected. |
+| `spec_check_mode_select` | Resolves which spec-check operating mode to run. | Entered after successful `implement_task` completion (exit code `0`, no stop request). |
+| `spec_check_legacy` | Runs current monolithic `task.spec_check.md` behavior. | Entered when `status.settings.useLayeredSkills != true` (missing/false/invalid) or layered-skill prerequisites are unavailable. |
+| `spec_check_layered` | Runs simplified `task.spec_check` flow plus layered skills (`safe-shell-search` + `jeeves-task-spec-check` + `code-quality`). | Entered when `status.settings.useLayeredSkills == true` and required skills are available. |
+| `spec_check_persist` | Commits/verifies status updates and produces canonical artifacts for transition guards. | Entered after either spec-check mode completes verification. |
+| `parallel_timeout_recovery` | Handles timeout cleanup for active parallel waves so workflow remains resumable. | Entered when implement/spec-check wave exceeds iteration or inactivity timeout. |
+| `merge_conflict_recovery` | Converts merge-conflict outcomes into retryable canonical state. | Entered when spec-check wave merge step reports a conflict. |
+| `fix_ci` | Repairs commit/push failures detected during task loop. | Entered when `status.commitFailed == true` or `status.pushFailed == true` after `spec_check_persist`. |
+| `completeness_verification` | Validates all tasks against the full design before PR preparation. | Entered when `status.allTasksComplete == true` after `spec_check_persist`. |
+| `run_stopped_setup_failure` | **Terminal for current run instance.** Orchestrator stops immediately due to setup/orchestration failure. | Entered from implement/spec-check execution on sandbox/spawn/no-active-wave setup failure. |
+| `task_loop_handoff` | **Terminal for this subsystem.** Task loop exits to PR pipeline (`prepare_pr`). | Entered when `completeness_verification` sets `status.implementationComplete == true`. |
+
+Initial state (for this subsystem): `implement_task` after `pre_implementation_check` passes, or when retry transitions route back from `task_spec_check`/`completeness_verification`.
+
+Terminal states:
+- `run_stopped_setup_failure`: terminal because run manager sets `completion_reason` to setup failure and exits current run loop.
+- `task_loop_handoff`: terminal for task-loop scope because control transitions to `prepare_pr` workflow segment.
+
+### Transitions
+| From | Event/Condition | To | Side Effects |
+|------|-----------------|-----|--------------|
+| `implement_task` | `control.restartPhase == true` | `implement_task` | Keeps phase unchanged; clears `control.restartPhase` after transition commit. |
+| `implement_task` | Phase exits `0` and stop not requested | `spec_check_mode_select` | Writes iteration artifacts; in sequential mode commits orchestrator-owned status updates from `.jeeves/phase-report.json`/inferred diff. |
+| `implement_task` | Parallel wave timeout (`iteration_timeout` or `inactivity_timeout`) | `parallel_timeout_recovery` | Marks wave tasks failed, writes synthetic `task-feedback/<taskId>.md`, clears `status.parallel`, appends timeout progress entry. |
+| `implement_task` | Parallel setup failure (sandbox create/spawn/orchestration error) | `run_stopped_setup_failure` | Rolls back task reservations, clears/avoids stale `status.parallel`, writes wave setup-failure summary, sets run `last_error` and `completion_reason=setup_failure`. |
+| `spec_check_mode_select` | `status.settings.useLayeredSkills == true` and skills resolvable | `spec_check_layered` | Records layered mode choice in iteration diagnostics/progress context. |
+| `spec_check_mode_select` | Flag missing/false/invalid | `spec_check_legacy` | Defaults safely to legacy mode; logs mode-selection rationale. |
+| `spec_check_mode_select` | Flag true but skill resolution fails | `spec_check_legacy` | Logs fallback warning; avoids blocking task loop on provisioning issues. |
+| `spec_check_legacy` | Verification completes | `spec_check_persist` | Produces PASS/FAIL evidence, updates task status via MCP/state writes, writes `.jeeves/phase-report.json` and optional feedback artifact. |
+| `spec_check_layered` | Verification completes | `spec_check_persist` | Same persisted contract as legacy mode; operational guidance comes from layered skills instead of inline prompt blocks. |
+| `spec_check_legacy` | Parallel wave timeout | `parallel_timeout_recovery` | Same timeout cleanup as implement wave, plus spec-check-specific failure feedback. |
+| `spec_check_layered` | Parallel wave timeout | `parallel_timeout_recovery` | Same timeout cleanup as implement wave, plus spec-check-specific failure feedback. |
+| `spec_check_legacy` | Merge conflict while integrating passed worker branches | `merge_conflict_recovery` | Writes synthetic merge-conflict feedback, preserves failure flags for retry, appends combined wave progress summary. |
+| `spec_check_layered` | Merge conflict while integrating passed worker branches | `merge_conflict_recovery` | Same as legacy mode merge-conflict handling. |
+| `spec_check_legacy` | Setup failure (`No active wave state`/spawn/sandbox error in parallel mode) | `run_stopped_setup_failure` | Stops run immediately with setup-failure reason; leaves canonical state resumable (no orphaned in-progress wave). |
+| `spec_check_layered` | Setup failure (`No active wave state`/spawn/sandbox error in parallel mode) | `run_stopped_setup_failure` | Same immediate-stop handling as legacy mode. |
+| `spec_check_persist` | `status.commitFailed == true` | `fix_ci` | Transition by workflow guard priority 1; CI-fix phase becomes responsible for repair then auto-return. |
+| `spec_check_persist` | `status.pushFailed == true` | `fix_ci` | Transition by workflow guard priority 2. |
+| `spec_check_persist` | `status.taskFailed == true` | `implement_task` | Transition by workflow guard priority 3; retry same/current task after feedback. |
+| `spec_check_persist` | `status.taskPassed == true && status.hasMoreTasks == true` | `implement_task` | Transition by workflow guard priority 4; advances to next pending task. |
+| `spec_check_persist` | `status.allTasksComplete == true` | `completeness_verification` | Transition by workflow guard priority 5. |
+| `parallel_timeout_recovery` | Timeout occurred during `implement_task` wave | `implement_task` | Keeps canonical phase retryable at `implement_task`; next run re-schedules ready tasks. |
+| `parallel_timeout_recovery` | Timeout occurred during `task_spec_check` wave | `implement_task` | Sets `taskFailed=true`/`hasMoreTasks=true`; workflow engine transitions `task_spec_check -> implement_task` on resume. |
+| `merge_conflict_recovery` | Conflict flags persisted (`taskFailed=true`, `hasMoreTasks=true`) | `implement_task` | Workflow engine transition back to implementation retry loop. |
+| `fix_ci` | Phase succeeds (auto transition) | `spec_check_mode_select` | Returns to task spec-check path; preserves task-loop status context. |
+| `completeness_verification` | `status.missingWork == true` | `implement_task` | Re-enters implementation loop for uncovered requirements. |
+| `completeness_verification` | `status.implementationComplete == true` | `task_loop_handoff` | Exits subsystem; canonical phase becomes `prepare_pr`. |
+
+Transition evaluation order is deterministic: transitions are sorted by ascending `priority` in workflow loading, then evaluated in-order (`auto` first match, otherwise first true `when` guard).
+
+Transition reversibility:
+- Reversible: `implement_task <-> task_spec_check` retry loop (`taskFailed`, `hasMoreTasks`, merge/timeout recovery), `fix_ci -> spec_check_mode_select`, and `completeness_verification -> implement_task`.
+- Irreversible in-run: transitions to `run_stopped_setup_failure` (requires new run start) and `task_loop_handoff` (leaves task-loop subsystem).
+
+### Error Handling
+| State | Error | Recovery State | Actions |
+|-------|-------|----------------|---------|
+| `implement_task` | Runner exits non-zero (sequential) | `implement_task` | Logs iteration failure; orchestrator ignores transition updates for non-zero exit and retries next iteration in same phase. |
+| `implement_task` | Parallel implement wave timeout | `parallel_timeout_recovery` | Marks all active wave tasks `failed`, writes synthetic feedback per task, clears `status.parallel`, appends timeout progress entry. |
+| `implement_task` | Sandbox creation/worker spawn failure | `run_stopped_setup_failure` | Terminates started workers, rolls back reserved task statuses, writes setup-failure wave summary/progress, stops run immediately. |
+| `spec_check_mode_select` | Invalid `status.settings.useLayeredSkills` type/value | `spec_check_legacy` | Defaults to legacy mode, records warning, proceeds without blocking. |
+| `spec_check_legacy` | Criterion unverifiable / filesAllowed violation | `spec_check_persist` | Sets failure flags (`taskFailed=true`, `hasMoreTasks=true`, `allTasksComplete=false`), writes task feedback artifact, records criterion-level evidence. |
+| `spec_check_layered` | Criterion unverifiable / filesAllowed violation | `spec_check_persist` | Same canonical failure contract as legacy mode; failure remains retryable. |
+| `spec_check_legacy` | Invalid/mismatched `.jeeves/phase-report.json` (schema/phase/object errors) | `spec_check_persist` | Parses with warnings, filters/normalizes allowed keys, emits audit report with `validationErrors`, logs `[PHASE_REPORT] warning`. |
+| `spec_check_layered` | Invalid/mismatched `.jeeves/phase-report.json` (schema/phase/object errors) | `spec_check_persist` | Same parsing/audit behavior as legacy mode. |
+| `spec_check_legacy` | Parallel spec-check wave timeout | `parallel_timeout_recovery` | Marks all wave tasks failed regardless of individual outcomes, writes synthetic timeout feedback, clears `status.parallel`, persists retry flags. |
+| `spec_check_layered` | Parallel spec-check wave timeout | `parallel_timeout_recovery` | Same timeout cleanup as legacy mode. |
+| `spec_check_legacy` | Spec-check merge conflict | `merge_conflict_recovery` | Writes merge-conflict synthetic feedback, keeps retry flags true, appends progress summary including conflict task. |
+| `spec_check_layered` | Spec-check merge conflict | `merge_conflict_recovery` | Same merge-conflict handling as legacy mode. |
+| `spec_check_legacy` | No active parallel wave state for spec check / setup-orchestration error | `run_stopped_setup_failure` | Stops run with setup failure reason; prevents entering stuck `task_spec_check` with missing wave context. |
+| `spec_check_layered` | No active parallel wave state for spec check / setup-orchestration error | `run_stopped_setup_failure` | Same immediate-stop behavior as legacy mode. |
+| `fix_ci` | CI-fix phase exits non-zero | `fix_ci` | Phase remains `fix_ci`; run logs error and retries on next iteration. |
+| `completeness_verification` | Verification exits non-zero | `completeness_verification` | Phase remains unchanged; no transition applied until valid status flags are produced. |
+
+Global vs per-state handling:
+- Per-state: parallel timeout, merge conflict, reservation rollback, and phase mismatch correction are handled in `parallelRunner`.
+- Global: run-level exceptions are caught in `runManager`, which sets `last_error`, `completion_reason`, broadcasts status, and ends the run safely.
+
+### Crash Recovery
+- **Detection**:
+  - At run start, scan for orphaned `tasks.json` entries with `status="in_progress"` that are not in `issue.json.status.parallel.activeWaveTaskIds`.
+  - On entering a parallel phase, detect persisted `status.parallel` to resume an active wave.
+  - Detect corruption when canonical `issue.json.phase` does not match `status.parallel.activeWavePhase`.
+  - Detect invalid parallel state shape/path IDs (`runId`, `activeWaveId`, task IDs) during `readParallelState`.
+- **Recovery state**:
+  - Resume into the canonical phase (`implement_task` or `task_spec_check`) using persisted `status.parallel.runId`.
+  - If phase mismatch exists, correct `activeWavePhase` to canonical phase, append corruption warning, then resume.
+  - If recovery cannot establish valid wave context (setup failure), stop current run (`run_stopped_setup_failure`) and require a new run.
+- **Cleanup**:
+  - Repair orphaned tasks (`in_progress -> failed`) and write canonical recovery feedback files.
+  - Roll back reserved task statuses when setup fails.
+  - Kill active worker processes on timeout/spawn failure.
+  - Clear `issue.json.status.parallel` after timeout/cleanup so workflow remains resumable.
+  - Persist progress entries for recovery actions and timeout/corruption events.
+
+### Subprocesses (if applicable)
+| Subprocess | Receives | Can Write | Failure Handling |
+|------------|----------|-----------|------------------|
+| `sdk_runner` (sequential phase subprocess) | `workflow`, `phase`, `provider`, `--workflows-dir`, `--prompts-dir`, canonical `--state-dir`, canonical `--work-dir`, optional model env. | Canonical issue/task/progress via MCP state tools; `.jeeves/phase-report.json`; `.jeeves/task-feedback.md` (phase-permitted). | Non-zero exit keeps phase for retry; transition status updates are ignored on non-zero exits; iteration/inactivity timeout stops run safely. |
+| `parallel worker runner` (per-task subprocess) | Same runner args but worker sandbox `--state-dir`/`--work-dir`; env includes `JEEVES_DATA_DIR`, `JEEVES_RUN_TASK_ID`, optional `JEEVES_MODEL`. | Worker-local issue/task artifacts under `.runs/<runId>/workers/<taskId>/`; worker `task-feedback.md` copied to canonical `task-feedback/<taskId>.md` when relevant; contributes to canonical wave summaries. | Spawn/sandbox failure: terminate started workers, rollback reservations, setup-failure stop. Timeout: SIGKILL active workers, mark all wave tasks failed, synthesize feedback, clear `status.parallel`. Merge conflict: synthesize conflict feedback and force retry flags. |
 
 ## 3. Interfaces
 [To be completed in design_api phase]

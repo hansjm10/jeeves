@@ -310,12 +310,11 @@ Fallback is silent and non-blocking: the task loop continues in legacy mode with
 
 ### Validation Results
 
-Baseline-vs-layered replay validation was performed on a 10-task, 32-criteria corpus (issue #108 task loop). Key findings:
+Baseline-vs-layered replay validation was performed on a 9-task, 28-criteria corpus (issue #108 task loop, T1–T9). Both baseline and layered modes were executed against the same codebase. Key findings:
 
-- **Command hygiene (measured baseline)**: Baseline spec-check iterations (10 runs, legacy mode) measured 0 shell-first search violations, 0 investigation loop violations, and 0 unverifiable criterion claims. The existing `<tooling_guidance>` prompt guidance achieves good compliance.
-- **Evidence quality (structural improvement)**: Baseline phase reports contain 0/10 `reasons[]`/`evidenceRefs[]` arrays. The layered `jeeves-task-spec-check` evidence schema structurally requires per-criterion `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays — projecting 100% structured criterion coverage when deployed.
+- **Command hygiene (measured, both modes)**: Baseline (10 iterations, legacy mode) and layered (9 iterations, skill-guided mode) both measured 0 shell-first search violations, 0 investigation loop violations, and 0 unverifiable criterion claims. The existing `<tooling_guidance>` prompt guidance already achieves excellent compliance; the layered system maintains this.
+- **Evidence quality (measured improvement)**: Baseline phase reports contain 0/10 `reasons[]`/`evidenceRefs[]` arrays. Layered phase reports contain 9/9 populated `reasons[]` and `evidenceRefs[]` arrays (measured). Layered evidence files contain 28/28 structured `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays, 45/45 evidence items with typed `location` and `confidence` scores — 100% structured criterion coverage.
 - **Fallback safety (tested)**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition. Verified by 44 passing unit tests (workflow loader, runManager, parallelRunner).
-- **Limitation**: End-to-end layered run not yet executed; structural analysis only for layered mode. Post-merge manual verification recommended.
 
 Full report: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 

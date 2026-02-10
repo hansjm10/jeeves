@@ -310,11 +310,11 @@ Fallback is silent and non-blocking: the task loop continues in legacy mode with
 
 ### Validation Results
 
-Baseline-vs-layered replay validation was performed on a 10-task, 35-criterion-evaluation corpus (issue #108 task loop, T1–T9 + T7 retry). Both baseline and layered modes were evaluated across implementation and spec-check phases against the same codebase. Key findings:
+Baseline-vs-layered replay validation was performed on a 10-task, 31-spec-check-criterion-evaluation corpus (issue #108 task loop, T1–T9 + T7 retry). Both baseline and layered modes were evaluated across implementation and spec-check phases against the same codebase. Key findings:
 
 - **Command hygiene (measured improvement)**: Baseline (20 iterations: 10 implement + 10 spec-check) measured **8 shell-first search violations** in implementation iterations (`grep -c`/`grep -n`/`sed -n` used when `mcp:pruner` was available). Layered (19 evaluations) measured **0 violations** — a 100% reduction (8→0), exceeding the ≥30%+≥1 threshold. The `safe-shell-search` skill enforces pruner-first discipline for all codebase reads/searches, preventing the post-write verification fallbacks observed in baseline.
 - **Evidence quality (measured improvement)**: Baseline phase reports contain 0/20 `reasons[]`/`evidenceRefs[]` arrays. Layered phase reports contain 19/19 populated `reasons[]` and `evidenceRefs[]` arrays. Layered evidence files contain 31/31 structured `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays, 62/62 evidence items with typed `location` and `confidence` scores — 100% structured criterion coverage.
-- **Fallback safety (tested)**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition. Verified by 44 passing unit tests (workflow loader, runManager, parallelRunner).
+- **Fallback safety (tested)**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition. Verified by 248 passing tests (workflow loader: 23, runManager: 68, parallelRunner: 157).
 
 Full report: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 

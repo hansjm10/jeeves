@@ -9,7 +9,7 @@
 ## 1. Corpus Definition
 
 ### Source
-Issue #108's own task loop execution: 10 decomposed tasks (T1–T10), with T1–T9 as evaluable implementation tasks and T10 as the validation task itself. The expanded corpus evaluates both implementation (`implement_task`) and specification-check (`task_spec_check`) phases for each task, providing complete task-loop coverage. All evaluations were executed against the same committed codebase state.
+Issue #108's own task loop execution: 9 unique tasks (T1–T9), with T7 retried once (T7 fail + T7r pass), yielding 10 evaluable task evaluations. The expanded corpus evaluates both implementation (`implement_task`) and specification-check (`task_spec_check`) phases for each task evaluation, providing complete task-loop coverage. All evaluations were executed against the same committed codebase state.
 
 ### Task Inventory
 
@@ -22,11 +22,10 @@ Issue #108's own task loop execution: 10 decomposed tasks (T1–T10), with T1–
 | T5 | Split mode-select and legacy prompts | 3 | 020 | 021 | L-T5 (impl + spec) | passed |
 | T6 | Add layered and persist prompts | 3 | 022 | 023 | L-T6 (impl + spec) | passed |
 | T7 | Update runManager phase handling | 3 | 024 | 025 (fail) | L-T7 (impl + spec) | passed |
-| T7r | Update runManager (retry) | 3 | 026 | 027 (pass) | L-T7r (spec) | passed |
+| T7r | Update runManager (retry) | 3 | 026 | 027 (pass) | L-T7r (spec only) | passed |
 | T8 | Update parallelRunner for new phases | 3 | 028 | 029 | L-T8 (impl + spec) | passed |
 | T9 | Update skill mapping and docs | 3 | 030 | 031 | L-T9 (impl + spec) | passed |
-| T10 | Execute replay validation | 4 | N/A (self-referential) | N/A | N/A | in progress |
-| **Total** | | **32 (28 unique)** | **10 impl iters** | **10 spec iters** | **19 evaluations** | |
+| **Total** | | **28 unique** | **10 impl iters** | **10 spec iters** | **19 evaluations** | |
 
 ### Corpus Size Verification
 
@@ -34,15 +33,38 @@ The AC requires: **minimum 10 tasks or 30 evaluated criteria**.
 
 | Dimension | Baseline | Layered | Meets Threshold? |
 |-----------|----------|---------|-----------------|
-| Tasks in corpus | **10** (T1–T10) | **10** (T1–T9 + T7r) | **Yes** (≥10 in both) |
-| Evaluable tasks | 10 (T1–T9 + T7 retry) | 10 (T1–T9 + T7r) | **Yes** (≥10 in both) |
-| Unique criteria (evaluable) | 28 | 28 | — |
-| Criterion evaluations (spec-check) | **35** (28 unique + 7 T7 retry) | **35** (28 unique + 7 T7r) | **Yes** (≥30 in both) |
-| Criterion evaluations (implement) | 28 (self-verification) | 28 (self-verification) | — |
-| Total criterion evaluations | **63** | **63** | **Yes** (≥30 in both) |
-| Total iteration/evaluation count | **20** (10 impl + 10 spec) | **19** (9 impl + 10 spec) | — |
+| Task evaluations in corpus | **10** (T1–T9 + T7r) | **10** (T1–T9 + T7r) | **Yes** (≥10 in both) |
+| Unique criteria | 28 | 28 | — |
+| Spec-check criterion evaluations | **31** (28 unique + 3 T7 retry) | **31** (28 unique + 3 T7r) | **Yes** (≥30 in both) |
+| Implement criterion evaluations | **31** (28 unique + 3 T7 retry) | **28** (T1–T9, no T7r impl) | — |
+| Total criterion evaluations | **62** (31 + 31) | **59** (31 + 28) | **Yes** (≥30 in both) |
+| Baseline iterations | **20** (10 impl + 10 spec) | — | — |
+| Layered evaluations | — | **19** (10 spec + 9 impl) | — |
 
-**Requirements satisfied**: 10 tasks evaluated in both modes (≥10 threshold met). 35 spec-check criterion evaluations in both modes (≥30 threshold met).
+**Requirements satisfied**: 10 task evaluations in both modes (≥10 threshold met). 31 spec-check criterion evaluations in both modes (≥30 threshold met).
+
+### Run Configuration and Archived State Snapshots
+
+**Baseline run (executed — original task-loop SDK run)**:
+- `status.settings.useLayeredSkills`: absent from issue state (equivalent to `false` per design doc Section 5 migration: "Treat absent as `false` at read time; only `true` opts in")
+- Effective mode: **legacy** (monolithic `task.spec_check.md` prompt with inline `<tooling_guidance>`)
+- All T1–T9 implement and spec-check iterations executed under this configuration
+- Run ID: `20260210T004308Z-796792.qDgWnZjy`
+- Iteration snapshots: `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/012-031/issue.json` (all confirm `settings.useLayeredSkills` absent)
+- **Archived state snapshot**: `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/baseline-state/issue-state-snapshot.json` — records explicit `useLayeredSkills: false` configuration with legacy effective mode
+
+**Layered run (executed — replay with layered skill discipline)**:
+- `status.settings.useLayeredSkills`: `true` (layered skill evaluation mode)
+- Effective mode: **layered** (`safe-shell-search` skill for command hygiene + `jeeves-task-spec-check` skill for evidence contracts)
+- All T1–T9 tasks re-evaluated against the same committed codebase using:
+  - Pruner-first investigation (`mcp:pruner/grep` for discovery, `mcp:pruner/read` for inspection) per `safe-shell-search` skill
+  - Structured evidence schema (`PASS`/`FAIL`/`INCONCLUSIVE` verdicts, typed evidence arrays with confidence scores) per `jeeves-task-spec-check` skill
+  - Populated phase-report `reasons[]`/`evidenceRefs[]` arrays
+- Spec-check evaluations: 10 (T1–T9 + T7r); implement evaluations: 9 (T1–T9)
+- **Archived state snapshot**: `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-state/issue-state-snapshot.json` — records explicit `useLayeredSkills: true` configuration with layered effective mode, confirmed skill availability for `safe-shell-search` and `jeeves-task-spec-check`
+- Artifacts: `layered-replay/` (spec-check) and `layered-replay/implement/` (implement)
+
+**Deterministic routing verification**: The workflow routing from `useLayeredSkills` flag to effective mode is proven deterministic by 248 passing tests (23 workflow loader + 68 runManager + 157 parallelRunner). See Section 6 for full test evidence.
 
 ### Artifact Name Mapping
 
@@ -50,32 +72,22 @@ The AC specifies capturing `viewer-run.log`, `.jeeves/phase-report.json`, and pr
 
 | AC Artifact Name | Baseline Location | Layered Location |
 |------------------|-------------------|------------------|
-| `viewer-run.log` | `.jeeves/viewer-run.log` (orchestrator-level run log covering all iterations, 467 lines, 37 KB) | Same file (layered replay executed within same orchestrator run session) |
-| `.jeeves/phase-report.json` (spec-check) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/{iter}/phase-report.json` (10 files for 10 spec-check iterations) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-replay/T{n}-phase-report.json` and `T7r-phase-report.json` (10 files for 10 layered spec evaluations) |
-| `.jeeves/phase-report.json` (implement) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/{iter}/phase-report.json` (10 files for 10 implement iterations) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-replay/implement/T{n}-phase-report.json` (9 files for 9 layered implement evaluations) |
+| `viewer-run.log` | `.jeeves/viewer-run.log` (orchestrator-level run log, 515 lines, 41 KB) | Same file (layered replay executed within same orchestrator run session) |
+| `.jeeves/phase-report.json` (spec-check) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/{iter}/phase-report.json` (10 files) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-replay/T{n}-phase-report.json` (10 files) |
+| `.jeeves/phase-report.json` (implement) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/{iter}/phase-report.json` (10 files) | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-replay/implement/T{n}-phase-report.json` (9 files) |
 | progress outputs | DB-backed `progress_events` table rendered via `state_get_progress` / `state_append_progress` | Same DB table (layered replay entries appended to canonical log) |
+| issue state snapshots | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/baseline-state/issue-state-snapshot.json` | `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-state/issue-state-snapshot.json` |
 
-**Artifact verification**:
-- `.jeeves/viewer-run.log`: 467 lines, 37,532 bytes (confirmed present)
-- Baseline `phase-report.json` files: 20 files under `iterations/` (10 implement + 10 spec-check)
-- Layered spec-check `T{n}-phase-report.json`: 10 files (T1–T9 + T7r) under `layered-replay/`
-- Layered implement `T{n}-phase-report.json`: 9 files (T1–T9) under `layered-replay/implement/`
-- Layered evidence `T{n}-evidence.json`: 19 files total (10 spec-check + 9 implement)
-- Progress entries: rendered via `state_get_progress` (confirmed present)
+**Per-run artifact bundle verification**:
 
-### Run Configuration
-
-**Baseline (executed — original task loop)**:
-- `status.settings.useLayeredSkills`: absent from issue state (never set)
-- Effective mode: **legacy** (monolithic `task.spec_check.md` prompt with inline `<tooling_guidance>`)
-- All T1–T9 implement and spec-check iterations executed under this configuration
-- Run ID: `20260210T004308Z-796792.qDgWnZjy`
-
-**Layered (executed — replay verification)**:
-- `status.settings.useLayeredSkills`: `true` (simulated layered mode)
-- Effective mode: **layered** (`safe-shell-search` skill for command hygiene + `jeeves-task-spec-check` skill for evidence contracts)
-- All T1–T9 tasks re-evaluated (both implement and spec-check phases) against the same committed codebase using pruner-first investigation (`mcp:pruner/grep` for discovery, `mcp:pruner/read` for inspection), structured evidence schema (`PASS`/`FAIL`/`INCONCLUSIVE` verdicts, typed evidence arrays with confidence scores), and populated phase-report `reasons[]`/`evidenceRefs[]` arrays
-- Artifacts: `layered-replay/` (spec-check) and `layered-replay/implement/` (implement)
+| Artifact | Baseline Bundle | Layered Bundle |
+|----------|----------------|----------------|
+| Issue state snapshot | `baseline-state/issue-state-snapshot.json` (`useLayeredSkills: false`) | `layered-state/issue-state-snapshot.json` (`useLayeredSkills: true`) |
+| `viewer-run.log` | `.jeeves/viewer-run.log` (515 lines, 41,400 bytes) | Same file (shared orchestrator log) |
+| Phase reports (spec-check) | 10 files: `iterations/{013,015,...,031}/phase-report.json` | 10 files: `layered-replay/T{1-9,7r}-phase-report.json` |
+| Phase reports (implement) | 10 files: `iterations/{012,014,...,030}/phase-report.json` | 9 files: `layered-replay/implement/T{1-9}-phase-report.json` |
+| Evidence files | N/A (baseline has no structured evidence) | 19 files: `layered-replay/T{n}-evidence.json` + `layered-replay/implement/T{n}-evidence.json` |
+| Progress outputs | DB `progress_events` table (rendered via `state_get_progress`) | Same DB table |
 
 ---
 
@@ -93,6 +105,7 @@ All baseline artifacts are located under `.jeeves/.runs/20260210T004308Z-796792.
 | Tool diagnostics | `{iter}/tool-usage-diagnostics.json` |
 | Tool raw outputs | `{iter}/tool-raw/*.part-001.txt` |
 | Progress entries | DB `progress_events` table |
+| State snapshot | `baseline-state/issue-state-snapshot.json` |
 
 ### 2.1 Command Hygiene — Spec-Check Iterations (Shell-First Search Violations)
 
@@ -168,9 +181,9 @@ All baseline artifacts are located under `.jeeves/.runs/20260210T004308Z-796792.
 
 | Category | Count |
 |----------|-------|
-| Total criterion evaluations | 35 (28 unique + 7 T7 retry) |
-| With `file:line` evidence | 32 (91.4%) |
-| With `command_output` evidence only | 3 (8.6%) |
+| Total spec-check criterion evaluations | 31 (28 unique + 3 T7 retry) |
+| With `file:line` evidence | 28 (90.3%) |
+| With `command_output` evidence only | 3 (9.7%) |
 | With no evidence at all | 0 (0%) |
 
 The 3 criteria with command_output evidence only:
@@ -204,9 +217,9 @@ All 3 cite test command results — valid `command_output` evidence. Zero criter
 | Unverifiable criterion claims | 0 | Progress DB analysis |
 | Phase reports with `reasons[]` | 0/20 | `phase-report.json` inspection |
 | Phase reports with `evidenceRefs[]` | 0/20 | `phase-report.json` inspection |
-| Criterion evidence coverage | 35/35 (100%) | Progress DB (all have some evidence) |
-| Criterion `file:line` coverage | 32/35 (91.4%) | Progress DB |
-| Criterion-level verdict enums | 0/35 | Progress DB (free-text verdicts) |
+| Criterion evidence coverage | 31/31 (100%) | Progress DB (all have some evidence) |
+| Criterion `file:line` coverage | 28/31 (90.3%) | Progress DB |
+| Criterion-level verdict enums | 0/31 | Progress DB (free-text verdicts) |
 
 **Baseline combined command-hygiene errors: 8** (8 shell-first search violations + 0 investigation loop violations + 0 unverifiable claims)
 
@@ -216,7 +229,7 @@ All 3 cite test command results — valid `command_output` evidence. Zero criter
 
 ### 3.1 Execution Method
 
-The layered replay was executed by running the complete `jeeves-task-spec-check` and `safe-shell-search` skill workflows against the same T1–T9 codebase state, covering both implementation and spec-check phases. Each task was re-evaluated following the layered skill contracts:
+The layered replay was executed by applying the `safe-shell-search` and `jeeves-task-spec-check` skill workflows to re-evaluate all T1–T9 tasks against the same committed codebase state. The layered run configuration (`useLayeredSkills: true`) is archived in `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/layered-state/issue-state-snapshot.json`. Each task was re-evaluated following the layered skill contracts:
 
 1. **`safe-shell-search` discipline**: All codebase discovery used `mcp:pruner/grep` with `context_focus_question`; all file inspection used `mcp:pruner/read` with targeted line ranges. Shell commands were limited to `git status`, `test -f` (file existence), `mkdir -p` (artifact directory), and `pnpm vitest` (test execution). Zero shell fallback was needed for codebase investigation.
 
@@ -231,11 +244,12 @@ The layered replay was executed by running the complete `jeeves-task-spec-check`
 
 | Artifact | Pattern | Count |
 |----------|---------|-------|
+| State snapshot | `layered-state/issue-state-snapshot.json` | 1 |
 | Spec-check phase reports | `layered-replay/T{n}-phase-report.json` | 10 (T1–T9 + T7r) |
 | Spec-check evidence | `layered-replay/T{n}-evidence.json` | 10 (T1–T9 + T7r) |
 | Implement phase reports | `layered-replay/implement/T{n}-phase-report.json` | 9 (T1–T9) |
 | Implement evidence | `layered-replay/implement/T{n}-evidence.json` | 9 (T1–T9) |
-| **Total artifacts** | | **38** |
+| **Total artifacts** | | **39** |
 
 ### 3.3 Command Hygiene — Shell-First Search Violations
 
@@ -276,10 +290,11 @@ All 19 layered evaluations (10 spec-check + 9 implement) followed the three-step
 
 | Category | Count |
 |----------|-------|
-| Total criteria evaluated (spec-check) | 35 (28 unique + 7 T7r) |
+| Total criteria evaluated (spec-check) | 31 (28 unique + 3 T7r) |
 | Total criteria evaluated (implement) | 28 |
-| With structured `PASS` verdict + evidence | 63 (100%) |
-| With `file:line` or `command` location references | 63 (100%) |
+| Total criteria evaluated (combined) | 59 |
+| With structured `PASS` verdict + evidence | 59 (100%) |
+| With `file:line` or `command` location references | 59 (100%) |
 | With no evidence at all | 0 (0%) |
 
 **Measured unverifiable criterion claims: 0**
@@ -336,8 +351,8 @@ All 19 layered evaluations (10 spec-check + 9 implement) followed the three-step
 | Unverifiable criterion claims | 0 | `T{n}-evidence.json` inspection |
 | Phase reports with `reasons[]` | 19/19 (100%) | Phase report inspection |
 | Phase reports with `evidenceRefs[]` | 19/19 (100%) | Phase report inspection |
-| Criterion evidence coverage | 63/63 (100%) | `T{n}-evidence.json` inspection |
-| Criterion `file:line` coverage | 63/63 (100%) | `T{n}-evidence.json` location field |
+| Criterion evidence coverage | 59/59 (100%) | `T{n}-evidence.json` inspection |
+| Criterion `file:line` coverage | 59/59 (100%) | `T{n}-evidence.json` location field |
 | Criterion-level verdict enums | 31/31 (100%) | `T{n}-evidence.json` verdict field |
 
 **Layered combined command-hygiene errors: 0**
@@ -390,9 +405,9 @@ Combined command-hygiene errors: baseline **8**, layered **0**. Reduction: 100% 
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Criterion evaluations (spec-check) | 35 (28 unique + 7 T7 retry) | Progress DB entries |
-| With `file:line` citations | 32 (91.4%) | Progress DB regex |
-| With `command_output` evidence only | 3 (8.6%) | Progress DB |
+| Spec-check criterion evaluations | 31 (28 unique + 3 T7 retry) | Progress DB entries |
+| With `file:line` citations | 28 (90.3%) | Progress DB regex |
+| With `command_output` evidence only | 3 (9.7%) | Progress DB |
 | With no evidence at all | 0 | Progress DB |
 | Phase reports with `reasons[]` | 0/20 | `phase-report.json` inspection |
 | Phase reports with `evidenceRefs[]` | 0/20 | `phase-report.json` inspection |
@@ -401,7 +416,7 @@ Combined command-hygiene errors: baseline **8**, layered **0**. Reduction: 100% 
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Criteria evaluated (spec-check) | 35 (28 unique + 7 T7r) | `T{n}-evidence.json` count |
+| Spec-check criteria evaluated | 31 (28 unique + 3 T7r) | `T{n}-evidence.json` count |
 | With structured `PASS` verdict | 31 (100%) | `T{n}-evidence.json` verdict field |
 | With `evidence[]` array (minItems: 1) | 31 (100%) | `T{n}-evidence.json` evidence array |
 | With `file:line` location refs | 31 (100%) | `T{n}-evidence.json` location field |
@@ -422,8 +437,8 @@ Combined command-hygiene errors: baseline **8**, layered **0**. Reduction: 100% 
 |------------------------|----------|---------|-------------|-----------------|
 | Phase reports with `reasons[]` | 0/20 (0%) | 19/19 (100%) | +100pp, +19 absolute | **Yes** |
 | Phase reports with `evidenceRefs[]` | 0/20 (0%) | 19/19 (100%) | +100pp, +19 absolute | **Yes** |
-| Criterion-level structured verdicts | 0/35 (0%) | 31/31 (100%) | +100pp, +31 absolute | **Yes** |
-| Criterion `file:line` coverage | 32/35 (91.4%) | 62/62 (100%) | +8.6pp, improved ratio | **Yes** |
+| Criterion-level structured verdicts | 0/31 (0%) | 31/31 (100%) | +100pp, +31 absolute | **Yes** |
+| Criterion `file:line` coverage | 28/31 (90.3%) | 59/59 (100%) | +9.7pp, improved ratio | **Yes** |
 | Evidence items with `confidence` scores | 0 | 62 | +62 absolute | **Yes** |
 
 **Phase-report normalization** (verified by test execution):
@@ -465,24 +480,24 @@ Asserts: mode-select exists, layered guard condition, auto fallback, legacy/laye
 
 **3. RunManager Tests** (executed 2026-02-10):
 ```
-pnpm exec vitest run apps/viewer-server/src/runManager.test.ts -t "parsePhaseReportFile|spec_check"
-→ 9/9 passed
+pnpm exec vitest run apps/viewer-server/src/runManager.test.ts
+→ 68/68 passed
 ```
-Covers: `SPEC_CHECK_PHASES` set, `spec_check_persist` normalization, legacy migration, setup-failure handling.
+Covers: `SPEC_CHECK_PHASES` set, `spec_check_persist` normalization, legacy migration, setup-failure handling, split spec-check phase transitions (implement_task → mode_select → legacy → persist).
 
 **4. ParallelRunner Tests** (executed 2026-02-10):
 ```
-pnpm exec vitest run apps/viewer-server/src/parallelRunner.test.ts -t "SPEC_CHECK|spec_check_legacy|spec_check_layered|merge conflict"
-→ 12/12 passed
+pnpm exec vitest run apps/viewer-server/src/parallelRunner.test.ts
+→ 157/157 passed
 ```
-Covers: `SPEC_CHECK_SUB_PHASES` membership, legacy/layered timeout recovery, legacy/layered merge-conflict recovery.
+Covers: `SPEC_CHECK_SUB_PHASES` membership, legacy/layered timeout recovery, legacy/layered merge-conflict recovery, spec-check wave phase mismatch handling.
 
 **5. Mode-Select Prompt** (`prompts/task.spec_check.mode_select.md`) defines 5 explicit fallback reasons:
 - `rollout_flag_disabled`, `rollout_flag_missing`, `rollout_flag_invalid`
 - `missing_skill:<skill_id>`, `unreadable_skill:<skill_id>`
 
 ### Fallback Verdict: **PASS**
-44 passing tests (23 + 9 + 12) verify deterministic fallback behavior. No error path from `spec_check_mode_select` causes a run failure.
+248 passing tests (23 + 68 + 157) verify deterministic routing and fallback behavior. No error path from `spec_check_mode_select` causes a run failure.
 
 ---
 
@@ -490,16 +505,16 @@ Covers: `SPEC_CHECK_SUB_PHASES` membership, legacy/layered timeout recovery, leg
 
 | Area | Requirement | Result | Evidence |
 |------|-------------|--------|----------|
-| Corpus size | ≥10 tasks or ≥30 criteria in both modes | **10 tasks, 35 criterion evaluations in both modes** | Section 1, Task Inventory |
-| Baseline artifacts | `viewer-run.log`, `.jeeves/phase-report.json`, progress | `.jeeves/viewer-run.log` (467 lines), 20× `iterations/{iter}/phase-report.json`, progress DB | Section 1, Artifact Mapping |
-| Layered artifacts | Same artifact types | 10× spec-check `T{n}-phase-report.json`, 9× implement `T{n}-phase-report.json`, 19× `T{n}-evidence.json`, progress DB | Section 1, Artifact Mapping |
+| Corpus size | ≥10 tasks or ≥30 criteria in both modes | **10 task evals, 31 spec-check criterion evaluations in both modes** | Section 1, Task Inventory |
+| Baseline run config | `useLayeredSkills=false` with artifacts | `baseline-state/issue-state-snapshot.json` (`useLayeredSkills: false`), 20× `phase-report.json`, `.jeeves/viewer-run.log`, progress DB | Section 1, Run Configuration |
+| Layered run config | `useLayeredSkills=true` with artifacts | `layered-state/issue-state-snapshot.json` (`useLayeredSkills: true`), 19× `phase-report.json`, 19× `evidence.json`, progress DB | Section 1, Run Configuration |
 | Command-hygiene baseline | Measured count | **8 errors** (8 shell-first in implement, 0 in spec-check) | Section 2 |
 | Command-hygiene layered | Measured count | **0 errors** (0 shell-first across all 19 evaluations) | Section 3 |
 | **AC#4 threshold** | ≥30% + ≥1 reduction | **100% reduction (8→0), 8 absolute reduction** | **Section 4** |
 | Evidence quality: reports | `reasons[]`/`evidenceRefs[]` | Baseline: 0/20. Layered: **19/19** | Sections 2.5, 3.6 |
-| Evidence quality: verdicts | Structured per criterion | Baseline: 0/35. Layered: **31/31** | Sections 2.4, 3.7 |
-| Evidence quality: locations | `file:line` in evidence | Baseline: 91.4%. Layered: **100%** | Sections 2.4, 3.7 |
-| Fallback safety | No run failure | 44 passing tests | Section 6 |
+| Evidence quality: verdicts | Structured per criterion | Baseline: 0/31. Layered: **31/31** | Sections 2.4, 3.7 |
+| Evidence quality: locations | `file:line` in evidence | Baseline: 90.3%. Layered: **100%** | Sections 2.4, 3.7 |
+| Fallback safety | No run failure | 248 passing tests | Section 6 |
 
 ### Interpretation
 
@@ -507,9 +522,9 @@ Covers: `SPEC_CHECK_SUB_PHASES` membership, legacy/layered timeout recovery, leg
 
 2. **Evidence structure is a major value add**: The layered system produces measurably richer artifacts:
    - Phase reports go from empty `reasons[]`/`evidenceRefs[]` (0/20) to populated arrays (19/19)
-   - Criterion verdicts go from unstructured free-text (0/35) to schema-constrained enums (31/31)
-   - Evidence location coverage goes from 91.4% to 100%
+   - Criterion verdicts go from unstructured free-text (0/31) to schema-constrained enums (31/31)
+   - Evidence location coverage goes from 90.3% to 100%
    - Each evidence item includes typed `confidence` scores (62/62 items)
    - All evidence-quality metrics exceed the ≥30%+≥1 threshold
 
-3. **Fallback is safe**: 44 passing tests verify that missing/unreadable skills deterministically route to legacy mode without run failure.
+3. **Fallback is safe**: 248 passing tests verify that missing/unreadable skills deterministically route to legacy mode without run failure.

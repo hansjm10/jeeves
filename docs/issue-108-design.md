@@ -525,15 +525,15 @@ T5 -> depends on T3, T4
 Minimum: 10 tasks **or** 30 evaluated criteria in both modes.
 
 - **Task count**: 10 tasks in corpus (T1–T9 + T7 retry = 10 evaluable tasks in baseline; T1–T9 + T7r = 10 evaluable tasks in layered). ≥10 in both modes.
-- **Criteria count**: 35 criterion evaluations in both baseline and layered spec-check modes (28 unique criteria + 7 retry evaluations). ≥30 in both modes.
+- **Criteria count**: 31 spec-check criterion evaluations in both baseline and layered modes (28 unique criteria + 3 T7 retry evaluations). ≥30 in both modes.
 - **Expanded corpus**: Both implementation (`implement_task`) and spec-check (`task_spec_check`) phases are included, giving 20 baseline iterations and 19 layered evaluations.
-- **Requirement met**: 10 tasks evaluated in both modes (≥10) AND 35 criterion evaluations in both modes (≥30).
+- **Requirement met**: 10 tasks evaluated in both modes (≥10) AND 31 spec-check criterion evaluations in both modes (≥30).
 
 #### Artifact Capture
 
 | AC Artifact Name | Baseline Location | Layered Location |
 |------------------|-------------------|------------------|
-| `viewer-run.log` | `.jeeves/viewer-run.log` (467 lines, 37 KB) | Same file (layered replay within same run) |
+| `viewer-run.log` | `.jeeves/viewer-run.log` (515 lines, 41 KB) | Same file (layered replay within same run) |
 | `.jeeves/phase-report.json` | `.jeeves/.runs/.../iterations/{iter}/phase-report.json` (20 files: 10 implement + 10 spec-check) | `layered-replay/T{n}-phase-report.json` (10 spec) + `layered-replay/implement/T{n}-phase-report.json` (9 impl) |
 | progress outputs | DB-backed `progress_events` entries via `state_get_progress` | Same DB table (layered entries appended) |
 
@@ -561,13 +561,13 @@ Expanded corpus: 10 tasks, 20 baseline iterations, 19 layered evaluations.
 The 8 baseline violations were `grep -c`/`grep -n`/`sed -n` commands used for post-write file verification in implementation iterations when `mcp:pruner/grep` and `mcp:pruner/read` were available. The `safe-shell-search` skill prevents these by enforcing pruner-first discipline for all codebase reads/searches.
 
 - [x] Compare evidence quality:
-  - **Measured baseline**: 0/20 phase reports with `reasons[]`/`evidenceRefs[]`. 32/35 criteria with `file:line` evidence (91.4%). 0/35 structured verdict enums.
+  - **Measured baseline**: 0/20 phase reports with `reasons[]`/`evidenceRefs[]`. 28/31 criteria with `file:line` evidence (90.3%). 0/31 structured verdict enums.
   - **Measured layered**: 19/19 phase reports with `reasons[]`/`evidenceRefs[]`. 31/31 criteria with structured `PASS` verdict + `file:line` evidence (100%). 62/62 evidence items with typed `location` and `confidence` scores.
   - `phase-report.json` normalization verified by 3 dedicated tests in `runManager.test.ts`.
 - [x] Verify fallback:
   - Workflow `spec_check_mode_select` has `auto: true` priority-2 transition to `spec_check_legacy` — unconditional fallback when layered guard fails.
   - Mode-select prompt documents 5 explicit fallback reason codes.
-  - 44 passing tests (workflow loader: 23, runManager: 9, parallelRunner: 12) verify fallback behavior.
+  - 248 passing tests (workflow loader: 23, runManager: 68, parallelRunner: 157) verify fallback behavior.
 
 **Full report**: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 

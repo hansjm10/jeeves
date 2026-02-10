@@ -143,7 +143,7 @@ phases:
     prompt: ci.fix.md
     description: Fix commit/push failures (lint, pre-push hooks, etc)
     transitions:
-      - to: task_spec_check
+      - to: spec_check_mode_select
         auto: true
     model: opus
   implement_task:
@@ -155,7 +155,7 @@ phases:
     transitions:
       - to: implement_task
         when: control.restartPhase == true
-      - to: task_spec_check
+      - to: spec_check_mode_select
         auto: true
         priority: 1
     model: opus
@@ -195,12 +195,49 @@ phases:
         auto: true
     model: gpt-5.3-codex
     reasoning_effort: xhigh
-  task_spec_check:
+  spec_check_mode_select:
+    type: evaluate
+    provider: codex
+    mcp_profile: state_with_pruner
+    prompt: task.spec_check.mode_select.md
+    description: Resolve which spec-check operating mode to run
+    transitions:
+      - to: spec_check_layered
+        when: status.settings.useLayeredSkills == true and status.layeredSkillAvailability.safeShellSearch == true and status.layeredSkillAvailability.jeevesTaskSpecCheck == true
+        priority: 1
+      - to: spec_check_legacy
+        auto: true
+        priority: 2
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  spec_check_legacy:
     type: evaluate
     provider: codex
     mcp_profile: state_with_pruner
     prompt: task.spec_check.md
-    description: Verify task meets acceptance criteria
+    description: Verify task meets acceptance criteria (legacy mode)
+    transitions:
+      - to: spec_check_persist
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  spec_check_layered:
+    type: evaluate
+    provider: codex
+    mcp_profile: state_with_pruner
+    prompt: task.spec_check.layered.md
+    description: Verify task meets acceptance criteria (layered skills mode)
+    transitions:
+      - to: spec_check_persist
+        auto: true
+    model: gpt-5.3-codex
+    reasoning_effort: xhigh
+  spec_check_persist:
+    type: evaluate
+    provider: codex
+    mcp_profile: state_with_pruner
+    prompt: task.spec_check.persist.md
+    description: Persist spec-check results and route task loop
     transitions:
       - to: fix_ci
         when: status.commitFailed == true

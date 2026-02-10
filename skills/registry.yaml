@@ -40,6 +40,8 @@ phases:
     - test-driven-dev
     - frontend-design
   task_spec_check:
+    - safe-shell-search
+    - jeeves-task-spec-check
     - code-quality
   code_review:
     - code-quality

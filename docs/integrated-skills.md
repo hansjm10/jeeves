@@ -260,12 +260,63 @@ Skills are automatically provisioned based on workflow phase:
 |-------|--------|
 | All phases | jeeves, progress-tracker, sonarqube |
 | design_draft | architecture-patterns |
+| design_classify | architecture-patterns |
+| design_workflow | architecture-patterns |
+| design_api | architecture-patterns |
+| design_data | architecture-patterns |
+| design_plan | architecture-patterns |
 | design_review | architecture-patterns |
 | design_edit | architecture-patterns |
 | implement_task | test-driven-dev, frontend-design |
-| task_spec_check | code-quality |
+| task_spec_check | safe-shell-search, jeeves-task-spec-check, code-quality |
 | code_review | code-quality, pr-review, pr-evidence, pr-requirements, pr-audit, differential-review |
 | code_fix | code-quality |
+
+### Layered Spec-Check Skills
+
+The `task_spec_check` phase uses a layered skill architecture that separates reusable core guardrails from Jeeves-specific adapter logic:
+
+| Order | Skill | Type | Purpose |
+|-------|-------|------|---------|
+| 1 | `safe-shell-search` | Core (common) | Enforces pruner-first codebase discovery/read and evidence-grounded claims. Replaces duplicated `<tooling_guidance>` blocks across prompts. |
+| 2 | `jeeves-task-spec-check` | Adapter (implement) | Encodes Jeeves-specific MCP state contracts, `.jeeves/phase-report.json` and `task-feedback.md` artifact schemas, `filesAllowed` enforcement, and PASS/FAIL handling with structured criterion evidence. |
+| 3 | `code-quality` | Review (common) | Generic code quality checklist (correctness, readability, maintainability, security). |
+
+Skills are resolved in the order listed above. The core skill establishes search/evidence discipline, the adapter skill provides Jeeves-specific verification contracts, and the quality skill adds general review checks.
+
+### Opt-In Rollout
+
+Layered skill usage in `task_spec_check` is controlled by an opt-in feature flag:
+
+- **Flag**: `issue.status.settings.useLayeredSkills` (boolean)
+- **Default**: `false` (legacy mode)
+- **Opt-in**: Set to `true` to enable layered mode
+
+When layered mode is enabled, the workflow follows a four-phase spec-check flow:
+
+1. **`spec_check_mode_select`** — Evaluates the rollout flag and verifies that both required layered skills (`safe-shell-search` and `jeeves-task-spec-check`) are discoverable and readable via root `AGENTS.md` metadata.
+2. **`spec_check_layered`** — Runs the simplified spec-check prompt with layered skills providing operational guidance.
+3. **`spec_check_persist`** — Commits status updates and produces canonical artifacts for workflow transition guards.
+
+### Fallback Behavior
+
+The system deterministically falls back to legacy mode (`spec_check_legacy`) when any of the following conditions hold:
+
+- `status.settings.useLayeredSkills` is missing, `false`, or not a boolean.
+- `status.settings.useLayeredSkills` is `true` but `status.layeredSkillAvailability.safeShellSearch` is not `true` (skill not found or `SKILL.md` unreadable).
+- `status.settings.useLayeredSkills` is `true` but `status.layeredSkillAvailability.jeevesTaskSpecCheck` is not `true` (skill not found or `SKILL.md` unreadable).
+
+Fallback is silent and non-blocking: the task loop continues in legacy mode with a warning logged to the progress event log. No run failure occurs due to missing or unreadable layered skills.
+
+### Validation Results
+
+Baseline-vs-layered replay validation was performed on a 10-task, 31-spec-check-criterion-evaluation corpus (issue #108 task loop, T1–T9 + T7 retry). Both baseline and layered modes were evaluated across implementation and spec-check phases against the same codebase. Key findings:
+
+- **Command hygiene (measured improvement)**: Baseline (20 iterations: 10 implement + 10 spec-check) measured **8 shell-first search violations** in implementation iterations (`grep -c`/`grep -n`/`sed -n` used when `mcp:pruner` was available). Layered (19 evaluations) measured **0 violations** — a 100% reduction (8→0), exceeding the ≥30%+≥1 threshold. The `safe-shell-search` skill enforces pruner-first discipline for all codebase reads/searches, preventing the post-write verification fallbacks observed in baseline.
+- **Evidence quality (measured improvement)**: Baseline phase reports contain 0/20 `reasons[]`/`evidenceRefs[]` arrays. Layered phase reports contain 19/19 populated `reasons[]` and `evidenceRefs[]` arrays. Layered evidence files contain 31/31 structured `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays, 62/62 evidence items with typed `location` and `confidence` scores — 100% structured criterion coverage.
+- **Fallback safety (tested)**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition. Verified by 248 passing tests (workflow loader: 23, runManager: 68, parallelRunner: 157).
+
+Full report: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 
 ## Attribution
 

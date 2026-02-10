@@ -257,7 +257,95 @@ Global vs per-state handling:
 N/A - This feature does not add or modify external interfaces.
 
 ## 4. Data
-[To be completed in design_data phase]
+
+### Schema Changes
+| Location | Field | Type | Required | Default | Constraints |
+|----------|-------|------|----------|---------|-------------|
+| `issue.json` | `status.settings.useLayeredSkills` | boolean | no | `false` | Only literal `true` enables layered mode. `false`, missing, or invalid types must route to `spec_check_legacy` and emit a warning. |
+| `skills/registry.yaml` | `phases.task_spec_check` | string[] | yes | `["code-quality"]` | Ordered skill IDs. Target mapping for this feature: `["safe-shell-search", "jeeves-task-spec-check", "code-quality"]`. IDs must match concrete skill directory names. |
+| `.jeeves/phase-report.json` | `reasons` | string[] | no | `[]` | Keep only non-empty strings; non-array values are ignored. |
+| `.jeeves/phase-report.json` | `evidenceRefs` | string[] | no | `[]` | Keep only non-empty strings; each entry must point to evidence (`<path>:<line>`, command, or artifact ref). Non-array values are ignored. |
+| `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` | `criteria[].verdict` | string | yes | none | Enum: `PASS`, `FAIL`, `INCONCLUSIVE`. |
+| `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` | `criteria[].evidence[].confidence` | number | yes | none | Closed interval `[0, 1]`. |
+
+### Field Definitions
+**`status.settings.useLayeredSkills`**
+- Purpose: Per-issue rollout flag for layered `task_spec_check` skills.
+- Set by: Issue configuration (manual or viewer-side settings write).
+- Read by: `spec_check_mode_select` transition guard before entering `spec_check_layered`.
+- Derived: No.
+
+**`phases.task_spec_check`**
+- Purpose: Declarative skill ordering for `task_spec_check`.
+- Set by: Repository configuration updates in `skills/registry.yaml`.
+- Read by: Skill provisioning/deployment logic (current runtime does not consume `registry.yaml` directly).
+- Derived: No.
+
+**`.jeeves/phase-report.json.reasons` and `.jeeves/phase-report.json.evidenceRefs`**
+- Purpose: Persist structured rationale/evidence references from spec-check output into orchestrator audit output.
+- Set by: `task_spec_check` phase output.
+- Read by: `RunManager.parsePhaseReportFile()` / `RunManager.commitOrchestratorOwnedPhaseState()`.
+- Derived: No (agent-provided; normalized on parse).
+
+**`criteria[].verdict` and `criteria[].evidence[].confidence`**
+- Purpose: Normalize criterion-level evidence shape for `jeeves-task-spec-check` skill references.
+- Set by: Spec-check evaluation logic when building criterion evidence records.
+- Read by: Human reviewers and future automated validators/replay tooling.
+- Derived: Yes (computed from acceptance criteria + observed evidence for the current run).
+
+### Relationship & Ordering
+- `status.settings.useLayeredSkills` references skill availability (`safe-shell-search`, `jeeves-task-spec-check`, `code-quality`) in the active skill set.
+- If referenced skills are unavailable, mode selection must fall back to `spec_check_legacy`; no hard failure.
+- `criteria[]` evidence records reference task acceptance criteria (`tasks.json.tasks[].acceptanceCriteria`).
+- If task definitions are deleted or changed, historical evidence remains in archived run artifacts and is treated as historical-only.
+- Ordering dependency: `useLayeredSkills` is read in `spec_check_mode_select` after `implement_task` exits `0` and before either spec-check mode executes. Mid-iteration flag changes apply on the next iteration.
+
+### Migrations
+| Change | Existing Data | Migration | Rollback |
+|--------|---------------|-----------|----------|
+| Add `status.settings.useLayeredSkills` | Field absent in existing `issue.json` records | No script. Treat absent as `false` at read time; only `true` opts in. | Remove field; behavior returns to legacy mode by default. |
+| Update `skills/registry.yaml` mapping for `task_spec_check` | Existing mapping is `["code-quality"]` | Update ordered list to `["safe-shell-search", "jeeves-task-spec-check", "code-quality"]`. | Revert list to previous value. |
+| Standardize optional `.jeeves/phase-report.json` arrays (`reasons`, `evidenceRefs`) | Reports may omit arrays | No script. On read, default missing/invalid arrays to `[]`. | Stop emitting fields; parser behavior remains backward-compatible. |
+| Add `evidence-schema.json` reference contract | No prior structured criterion evidence schema file | Add new reference file under `skills/implement/jeeves-task-spec-check/references/`. | Delete reference file and revert consumers to legacy prose-only guidance. |
+
+### Artifacts
+| Artifact | Location | Created | Updated | Deleted |
+|----------|----------|---------|---------|---------|
+| Spec-check phase report | `.jeeves/phase-report.json` | Each iteration after phase execution (agent-file or inferred) | Overwritten each iteration with audit-normalized report | Cleared at iteration start before phase run |
+| Sequential retry feedback | `.jeeves/task-feedback.md` | On spec-check FAIL in sequential mode | Overwritten on subsequent FAILs | Cleared by retry implementation flow after consumption |
+| Canonical per-task feedback (parallel) | `.jeeves/task-feedback/<taskId>.md` | When copying worker feedback or synthesizing timeout/merge-conflict feedback | Overwritten on later failures for same task | Not auto-deleted; replaced or manually cleaned |
+| Layered shell-search skill | `skills/common/safe-shell-search/SKILL.md` | Once when feature is implemented | Versioned by repository edits | Deleted only on feature rollback/removal |
+| Jeeves spec-check adapter skill | `skills/implement/jeeves-task-spec-check/SKILL.md` | Once when feature is implemented | Versioned by repository edits | Deleted only on feature rollback/removal |
+| Criterion evidence reference schema | `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` | Once when feature is implemented | Updated when evidence contract evolves | Deleted only on feature rollback/removal |
+| Skill phase mapping | `skills/registry.yaml` | Already exists | Updated to include layered task-spec-check mapping | Never auto-deleted (manual rollback only) |
+
+### Artifact Lifecycle
+| Scenario | Artifact Behavior |
+|----------|-------------------|
+| Success | `.jeeves/phase-report.json` is written with committed status updates and archived under `.runs/<runId>/iterations/<n>/phase-report.json`; failure feedback artifacts are not required. |
+| Failure | `.jeeves/phase-report.json` is still written with normalized failure updates; sequential flow writes `.jeeves/task-feedback.md`; parallel flow writes `.jeeves/task-feedback/<taskId>.md` (copied or synthetic). |
+| Crash recovery | If no valid phase-report exists, status updates are inferred from issue-state diff and a normalized phase report is written on next run; timeout/merge cleanup marks affected tasks failed, writes synthetic canonical feedback, and clears `status.parallel`. Static skill/registry files are unchanged by run crashes. |
+
+### Data Gate Answers
+1. Field paths are explicitly listed in the Schema Changes table.
+2. Field types are explicitly listed (`boolean`, `string[]`, `string`, `number`).
+3. Required vs optional is explicitly listed per field.
+4. Default behavior for absent values is explicitly listed per field.
+5. Constraints are explicit (enums, ordering, non-empty strings, `[0,1]` range).
+6. References: rollout flag references skill availability; evidence records reference task acceptance criteria.
+7. On referenced-data deletion: mode falls back to legacy for missing skills; historical evidence remains archived and is not backfilled.
+8. Ordering dependency: flag is read in `spec_check_mode_select` before mode entry; criterion evidence is computed during spec-check after task load.
+9. Breaking change: No; all additions are backward-compatible and additive.
+10. Existing records without new fields: handled via defaults (`false` or `[]`).
+11. Migration script: Not required.
+12. Rollback: remove new flag/reference file and revert registry mapping; runtime remains compatible.
+13. Derived fields: criterion verdict/evidence confidence are derived from observed validation evidence.
+14. Derived computation timing: on write during spec-check execution.
+15. Source-data change handling: rerun spec-check to regenerate evidence; previous run artifacts remain immutable history.
+16. Artifacts created are explicitly listed in the Artifacts table.
+17. Artifact storage locations are explicitly listed in the Artifacts table.
+18. Artifact create/update/delete timing is explicitly listed in the Artifacts table.
+19. Success/failure/crash behavior is explicitly listed in the Artifact Lifecycle table.
 
 ## 5. Tasks
 [To be completed in design_plan phase]

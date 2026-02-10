@@ -447,10 +447,18 @@ phases:
     expect(iterOneActiveExists).toBe(true);
     expect(iterTwoDiagnosticsExists).toBe(true);
 
-    const runMeta = JSON.parse(
-      await fs.readFile(path.join(runsDir, runId, 'run.json'), 'utf-8'),
-    ) as Record<string, unknown>;
-    expect(runMeta.trajectory_reduction_summary).toBeTruthy();
+    const runMetaPath = path.join(runsDir, runId, 'run.json');
+    let runMeta: Record<string, unknown> | null = null;
+    const runMetaDeadline = Date.now() + 5000;
+    while (Date.now() < runMetaDeadline) {
+      const runMetaRaw = await fs.readFile(runMetaPath, 'utf-8').catch(() => null);
+      if (runMetaRaw) {
+        runMeta = JSON.parse(runMetaRaw) as Record<string, unknown>;
+        if (runMeta.trajectory_reduction_summary) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(runMeta?.trajectory_reduction_summary).toBeTruthy();
   });
 
   it('writes reflection diagnostics and viewer log entries when reflection is disabled', async () => {
@@ -3579,8 +3587,34 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
     await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
 
-    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const workflowsDir = await makeTempDir('jeeves-speccheck-timeout-workflows-');
     const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-speccheck-timeout-legacy',
+      `
+workflow:
+  name: fixture-speccheck-timeout-legacy
+  version: 1
+  start: task_spec_check
+phases:
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
 
     const owner = 'speccheck-timeout-owner';
     const repo = 'speccheck-timeout-repo';
@@ -3614,7 +3648,7 @@ describe('T13: Real RunManager parallel timeout integration', () => {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
           phase: 'task_spec_check',
-          workflow: 'default',
+          workflow: 'fixture-speccheck-timeout-legacy',
           branch: `issue/${issueNumber}`,
           notes: '',
           settings: {
@@ -4091,8 +4125,36 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
     await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
 
-    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const workflowsDir = await makeTempDir('jeeves-mc-workflows-');
     const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-merge-conflict-legacy',
+      `
+workflow:
+  name: fixture-merge-conflict-legacy
+  version: 1
+  start: task_spec_check
+phases:
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: implement_task
+        when: status.taskPassed == true and status.hasMoreTasks == true
+      - to: complete
+        when: status.allTasksComplete == true
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
 
     const owner = 'merge-conflict-owner';
     const repo = 'merge-conflict-repo';
@@ -4148,7 +4210,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
           phase: 'task_spec_check',
-          workflow: 'default',
+          workflow: 'fixture-merge-conflict-legacy',
           branch: branchName,
           notes: '',
           settings: {

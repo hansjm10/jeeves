@@ -186,8 +186,20 @@ const PHASE_ALLOWED_STATUS_UPDATES: Record<string, readonly TransitionStatusFiel
   fix_ci: ['commitFailed', 'pushFailed'],
 };
 
+// Stop runs that get stuck in no-op implement/spec-check retries for the same task.
+const NO_CHANGE_TASK_RETRY_LOOP_THRESHOLD = 3;
+
 function hasOwn(obj: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function getCurrentTaskIdFromIssue(issueJson: Record<string, unknown> | null): string | null {
+  if (!issueJson) return null;
+  const status = issueJson.status;
+  if (!isPlainRecord(status)) return null;
+  const currentTaskId = status.currentTaskId;
+  if (!isNonEmptyString(currentTaskId)) return null;
+  return currentTaskId.trim();
 }
 
 function getStatusRecord(issueJson: Record<string, unknown>): Record<string, unknown> {
@@ -908,6 +920,9 @@ export class RunManager {
       }
 
       let completedNaturally = true;
+      let consecutiveNoChangeTaskFailures = 0;
+      let consecutiveNoChangeTaskId: string | null = null;
+      const lastImplementAttemptByTask = new Map<string, { iteration: number; hadChanges: boolean }>();
       for (let iteration = 1; iteration <= params.maxIterations; iteration += 1) {
         if (this.stopRequested) {
           await this.appendViewerLog(viewerLogPath, `[ITERATION] Stop requested, ending at iteration ${iteration}`);
@@ -1342,6 +1357,77 @@ export class RunManager {
         }
 
         await finalizeIterationArtifacts();
+
+        const issueAfterIteration = this.stateDir ? await readIssueJson(this.stateDir) : null;
+        const currentTaskId = getCurrentTaskIdFromIssue(issueAfterIteration);
+
+        // Loop guard: stop when the same task repeatedly fails spec-check after no-op implement attempts.
+        // This prevents burning iterations on implement_task <-> task_spec_check oscillation with no code changes.
+        if (currentPhase === 'implement_task' && transitionedToPhase === 'task_spec_check' && currentTaskId) {
+          const hasChanges = await this.hasWorktreeChangesForLoopGuard();
+          if (hasChanges !== null) {
+            lastImplementAttemptByTask.set(currentTaskId, {
+              iteration,
+              hadChanges: hasChanges,
+            });
+          }
+        }
+
+        if (
+          currentPhase === 'task_spec_check' &&
+          transitionedToPhase === 'implement_task' &&
+          currentTaskId &&
+          phaseCommitResult?.committedStatusUpdates.taskFailed === true &&
+          phaseCommitResult?.committedStatusUpdates.hasMoreTasks === true &&
+          phaseCommitResult?.committedStatusUpdates.allTasksComplete === false
+        ) {
+          const previousImplementAttempt = lastImplementAttemptByTask.get(currentTaskId);
+          const isNoChangeRetry = Boolean(
+            previousImplementAttempt &&
+            previousImplementAttempt.iteration === iteration - 1 &&
+            previousImplementAttempt.hadChanges === false,
+          );
+
+          if (isNoChangeRetry) {
+            if (consecutiveNoChangeTaskId === currentTaskId) {
+              consecutiveNoChangeTaskFailures += 1;
+            } else {
+              consecutiveNoChangeTaskId = currentTaskId;
+              consecutiveNoChangeTaskFailures = 1;
+            }
+          } else {
+            consecutiveNoChangeTaskId = null;
+            consecutiveNoChangeTaskFailures = 0;
+          }
+
+          if (isNoChangeRetry && consecutiveNoChangeTaskFailures >= NO_CHANGE_TASK_RETRY_LOOP_THRESHOLD) {
+            this.stopReason = `stuck_retry_loop (task=${currentTaskId}, consecutive_no_change_failures=${consecutiveNoChangeTaskFailures})`;
+            this.status = {
+              ...this.status,
+              last_error: `loop guard stopped run after ${consecutiveNoChangeTaskFailures} no-change task_spec_check failures for task ${currentTaskId}`,
+            };
+            this.broadcast('run', { run: this.status });
+            await this.appendViewerLog(
+              viewerLogPath,
+              `[LOOP_GUARD] Stopping run: task ${currentTaskId} failed spec-check ${consecutiveNoChangeTaskFailures} consecutive times after no-change implement attempts`,
+            );
+            this.appendProgressEntry(
+              `Loop guard stop: task ${currentTaskId} failed spec-check ${consecutiveNoChangeTaskFailures} times after no-change implement attempts.`,
+              'warn',
+            );
+            completedNaturally = false;
+            break;
+          }
+        } else if (
+          currentPhase === 'task_spec_check' &&
+          (
+            phaseCommitResult?.committedStatusUpdates.taskPassed === true ||
+            phaseCommitResult?.committedStatusUpdates.allTasksComplete === true
+          )
+        ) {
+          consecutiveNoChangeTaskId = null;
+          consecutiveNoChangeTaskFailures = 0;
+        }
 
         if (await this.checkCompletionPromise()) {
           // Promise-based completion is only honored in terminal phase context.
@@ -2020,6 +2106,16 @@ export class RunManager {
         resolve(out);
       });
     });
+  }
+
+  private async hasWorktreeChangesForLoopGuard(): Promise<boolean | null> {
+    if (!this.workDir) return null;
+    try {
+      const status = await this.execCapture('git', ['status', '--porcelain=v1'], this.workDir);
+      return status.trim().length > 0;
+    } catch {
+      return null;
+    }
   }
 
   private async commitDesignDocCheckpoint(params: { phase: string; issueJson: Record<string, unknown> }): Promise<void> {

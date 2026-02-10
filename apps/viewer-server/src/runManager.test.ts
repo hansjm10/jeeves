@@ -4905,3 +4905,313 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     expect(viewerLog).not.toContain('[PREVIOUS-RUN-LINE]');
   }, 10000);
 });
+
+describe('RunManager loop guard for no-change task retries', () => {
+  it('stops early when the same task repeatedly fails after no-change implement attempts', async () => {
+    const dataDir = await makeTempDir('jeeves-loop-guard-data-');
+    const repoRoot = await makeTempDir('jeeves-loop-guard-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-loop-guard-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-loop-guard-retry',
+      `
+workflow:
+  name: fixture-loop-guard-retry
+  version: 1
+  start: implement_task
+phases:
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: task_spec_check
+        auto: true
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'loop';
+    const repo = 'guard';
+    const issueNumber = 1081;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'fixture-loop-guard-retry',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {
+            currentTaskId: 'T1',
+            taskPassed: false,
+            taskFailed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          tasks: [
+            {
+              id: 'T1',
+              title: 'Task 1',
+              summary: 'retry test',
+              acceptanceCriteria: ['must pass'],
+              filesAllowed: ['src/**/*.ts'],
+              dependsOn: [],
+              status: 'in_progress',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    let spawnCalls = 0;
+    const spawn = (() => {
+      spawnCalls += 1;
+      void (async () => {
+        const issue = await readIssueJson(stateDir);
+        const phase = typeof issue?.phase === 'string' ? issue.phase : null;
+        if (phase === 'task_spec_check') {
+          await fs.writeFile(
+            path.join(stateDir, 'phase-report.json'),
+            JSON.stringify(
+              {
+                schemaVersion: 1,
+                phase: 'task_spec_check',
+                outcome: 'failed',
+                statusUpdates: {
+                  taskPassed: false,
+                  taskFailed: true,
+                  hasMoreTasks: true,
+                  allTasksComplete: false,
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+            'utf-8',
+          );
+        }
+      })();
+      return makeFakeChild(0, 60);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 20, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    const status = rm.getStatus();
+    expect(status.completion_reason).toContain('stuck_retry_loop');
+    expect(status.current_iteration).toBeGreaterThanOrEqual(6);
+    expect(status.current_iteration).toBeLessThan(20);
+    expect(spawnCalls).toBe(status.current_iteration);
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[LOOP_GUARD]');
+  }, 30000);
+
+  it('does not trigger loop guard when implement attempts modify the worktree', async () => {
+    const dataDir = await makeTempDir('jeeves-loop-guard-data-changes-');
+    const repoRoot = await makeTempDir('jeeves-loop-guard-repo-changes-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-loop-guard-workflows-changes-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-loop-guard-retry-with-changes',
+      `
+workflow:
+  name: fixture-loop-guard-retry-with-changes
+  version: 1
+  start: implement_task
+phases:
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: task_spec_check
+        auto: true
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'loop';
+    const repo = 'guardchanges';
+    const issueNumber = 1082;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+    await fs.mkdir(path.join(workDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(workDir, 'src', 'retry.ts'), 'export const retry = 0;\n', 'utf-8');
+    await runGit(workDir, ['add', 'src/retry.ts']);
+    await runGit(
+      workDir,
+      ['-c', 'user.name=Test User', '-c', 'user.email=test@example.com', 'commit', '-m', 'add retry file'],
+    );
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'fixture-loop-guard-retry-with-changes',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {
+            currentTaskId: 'T1',
+            taskPassed: false,
+            taskFailed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          tasks: [
+            {
+              id: 'T1',
+              title: 'Task 1',
+              summary: 'retry test with changes',
+              acceptanceCriteria: ['must pass'],
+              filesAllowed: ['src/**/*.ts'],
+              dependsOn: [],
+              status: 'in_progress',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    let spawnCalls = 0;
+    let implementWrites = 0;
+    const trackedFile = path.join(workDir, 'src', 'retry.ts');
+    const spawn = (() => {
+      spawnCalls += 1;
+      void (async () => {
+        const issue = await readIssueJson(stateDir);
+        const phase = typeof issue?.phase === 'string' ? issue.phase : null;
+        if (phase === 'implement_task') {
+          implementWrites += 1;
+          await fs.appendFile(trackedFile, `// implement attempt ${implementWrites}\n`, 'utf-8');
+        } else if (phase === 'task_spec_check') {
+          await fs.writeFile(
+            path.join(stateDir, 'phase-report.json'),
+            JSON.stringify(
+              {
+                schemaVersion: 1,
+                phase: 'task_spec_check',
+                outcome: 'failed',
+                statusUpdates: {
+                  taskPassed: false,
+                  taskFailed: true,
+                  hasMoreTasks: true,
+                  allTasksComplete: false,
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+            'utf-8',
+          );
+        }
+      })();
+      return makeFakeChild(0, 60);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 6, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    const status = rm.getStatus();
+    expect(status.completion_reason).toBe('max_iterations');
+    expect(status.current_iteration).toBe(6);
+    expect(spawnCalls).toBe(6);
+    expect(implementWrites).toBeGreaterThan(0);
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).not.toContain('[LOOP_GUARD]');
+  }, 30000);
+});

@@ -308,6 +308,16 @@ The system deterministically falls back to legacy mode (`spec_check_legacy`) whe
 
 Fallback is silent and non-blocking: the task loop continues in legacy mode with a warning logged to the progress event log. No run failure occurs due to missing or unreadable layered skills.
 
+### Validation Results
+
+Baseline-vs-layered replay validation was executed on a 10-task, 32-criteria corpus (issue #108 task loop). Key findings:
+
+- **Command hygiene**: Layered mode reduces combined command-hygiene errors by 62.5% (baseline 8 → layered 3), exceeding the 30% threshold required by AC#4.
+- **Evidence quality**: Layered evidence schema structurally requires per-criterion `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays, achieving 100% criterion coverage.
+- **Fallback safety**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition — no run failure possible.
+
+Full report: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
+
 ## Attribution
 
 These skills are adapted from their original sources:

@@ -24,6 +24,9 @@ import {
   writeCanonicalFeedback,
   copyWorkerFeedbackToCanonical,
   appendWaveProgressEntry,
+  SPEC_CHECK_SUB_PHASES,
+  isSpecCheckWorkerPhase,
+  toWorkerPhase,
   type ParallelState,
   type ParallelWaveStepResult,
   type WaveResult,
@@ -4008,15 +4011,16 @@ The task is eligible for retry in the next wave.`,
       await fs.mkdir(stateDir, { recursive: true });
     });
 
-    it('WorkflowEngine transitions task_spec_check -> implement_task when taskFailed=true after timeout', async () => {
+    it('WorkflowEngine transitions spec_check_persist -> implement_task when taskFailed=true after timeout', async () => {
       // Load the default workflow
       const workflowsDir = path.join(process.cwd(), 'workflows');
       const workflow = await loadWorkflowByName('default', { workflowsDir });
       const engine = new WorkflowEngine(workflow);
 
       // Setup: Post-timeout state with taskFailed=true (as set by handleSpecCheckWaveTimeout)
+      // Note: task_spec_check was split into sub-phases in T4; spec_check_persist owns terminal transitions
       const issueJson = {
-        phase: 'task_spec_check',
+        phase: 'spec_check_persist',
         status: {
           taskFailed: true,
           taskPassed: false,
@@ -4027,21 +4031,22 @@ The task is eligible for retry in the next wave.`,
       };
 
       // Verify: WorkflowEngine transitions to implement_task for retry
-      const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
+      const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
 
-      // Per workflows/default.yaml, task_spec_check with taskFailed should go to implement_task
+      // Per workflows/default.yaml, spec_check_persist with taskFailed should go to implement_task
       expect(nextPhase).toBe('implement_task');
     });
 
-    it('WorkflowEngine transitions task_spec_check -> implement_task when hasMoreTasks=true after timeout', async () => {
+    it('WorkflowEngine transitions spec_check_persist -> implement_task when hasMoreTasks=true after timeout', async () => {
       // Load the default workflow
       const workflowsDir = path.join(process.cwd(), 'workflows');
       const workflow = await loadWorkflowByName('default', { workflowsDir });
       const engine = new WorkflowEngine(workflow);
 
       // Setup: Post-timeout state where some tasks passed before timeout
+      // Note: task_spec_check was split into sub-phases in T4; spec_check_persist owns terminal transitions
       const issueJson = {
-        phase: 'task_spec_check',
+        phase: 'spec_check_persist',
         status: {
           taskFailed: true,  // Wave had failures
           taskPassed: false,
@@ -4050,7 +4055,7 @@ The task is eligible for retry in the next wave.`,
         },
       };
 
-      const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
+      const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
       expect(nextPhase).toBe('implement_task');
     });
 
@@ -4216,10 +4221,11 @@ The task is eligible for retry in the next wave.`,
       expect(readyTasks.length).toBe(2);
 
       // Verify AC2.5: WorkflowEngine can transition back to implement_task
+      // Note: task_spec_check was split into sub-phases in T4; spec_check_persist owns terminal transitions
       const workflowsDir = path.join(process.cwd(), 'workflows');
       const workflow = await loadWorkflowByName('default', { workflowsDir });
       const engine = new WorkflowEngine(workflow);
-      const nextPhase = engine.evaluateTransitions('task_spec_check', issueJson);
+      const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
       expect(nextPhase).toBe('implement_task');
     });
 
@@ -5013,6 +5019,317 @@ The task is eligible for retry in the next wave.`,
       if (issueJson.status?.parallel) {
         expect(issueJson.status.parallel.activeWavePhase).toBe('task_spec_check');
       }
+    });
+  });
+
+  describe('T8: layered/legacy spec-check phase recognition and recovery', () => {
+    let stateDir: string;
+
+    beforeEach(async () => {
+      stateDir = path.join(tmpDir, 't8-state');
+      await fs.mkdir(stateDir, { recursive: true });
+    });
+
+    describe('SPEC_CHECK_SUB_PHASES and isSpecCheckWorkerPhase', () => {
+      it('recognizes all layered/legacy spec-check phases', () => {
+        expect(isSpecCheckWorkerPhase('task_spec_check')).toBe(true);
+        expect(isSpecCheckWorkerPhase('spec_check_mode_select')).toBe(true);
+        expect(isSpecCheckWorkerPhase('spec_check_legacy')).toBe(true);
+        expect(isSpecCheckWorkerPhase('spec_check_layered')).toBe(true);
+        expect(isSpecCheckWorkerPhase('spec_check_persist')).toBe(true);
+      });
+
+      it('rejects non-spec-check phases', () => {
+        expect(isSpecCheckWorkerPhase('implement_task')).toBe(false);
+        expect(isSpecCheckWorkerPhase('design_classify')).toBe(false);
+        expect(isSpecCheckWorkerPhase('completeness_verification')).toBe(false);
+        expect(isSpecCheckWorkerPhase('')).toBe(false);
+      });
+
+      it('SPEC_CHECK_SUB_PHASES contains exactly the expected phases', () => {
+        expect(SPEC_CHECK_SUB_PHASES.size).toBe(5);
+        expect(SPEC_CHECK_SUB_PHASES.has('task_spec_check')).toBe(true);
+        expect(SPEC_CHECK_SUB_PHASES.has('spec_check_mode_select')).toBe(true);
+        expect(SPEC_CHECK_SUB_PHASES.has('spec_check_legacy')).toBe(true);
+        expect(SPEC_CHECK_SUB_PHASES.has('spec_check_layered')).toBe(true);
+        expect(SPEC_CHECK_SUB_PHASES.has('spec_check_persist')).toBe(true);
+      });
+    });
+
+    describe('toWorkerPhase mapping', () => {
+      it('maps implement_task to itself', () => {
+        expect(toWorkerPhase('implement_task')).toBe('implement_task');
+      });
+
+      it('maps legacy task_spec_check to task_spec_check', () => {
+        expect(toWorkerPhase('task_spec_check')).toBe('task_spec_check');
+      });
+
+      it('maps all layered sub-phases to task_spec_check', () => {
+        expect(toWorkerPhase('spec_check_mode_select')).toBe('task_spec_check');
+        expect(toWorkerPhase('spec_check_legacy')).toBe('task_spec_check');
+        expect(toWorkerPhase('spec_check_layered')).toBe('task_spec_check');
+        expect(toWorkerPhase('spec_check_persist')).toBe('task_spec_check');
+      });
+
+      it('throws for unknown phases', () => {
+        expect(() => toWorkerPhase('design_classify')).toThrow('Unknown phase for parallel runner');
+        expect(() => toWorkerPhase('')).toThrow('Unknown phase for parallel runner');
+      });
+    });
+
+    describe('handleWaveTimeoutCleanup with layered sub-phases', () => {
+      it('spec_check_legacy timeout clears parallel state and marks tasks failed', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-layered-1',
+          activeWaveId: 'wave-layered-1',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1', 'T2'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'spec_check_legacy',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress', dependsOn: [] },
+            { id: 'T2', status: 'in_progress', dependsOn: [] },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'spec_check_legacy',
+          'run-layered-1',
+        );
+
+        // Verify tasks are marked failed
+        expect(result.tasksMarkedFailed).toContain('T1');
+        expect(result.tasksMarkedFailed).toContain('T2');
+
+        // Verify parallel state is cleared
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.taskPassed).toBe(false);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+
+        // Verify no in_progress tasks remain (no orphaned state)
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify feedback normalizes to task_spec_check in message text
+        expect(result.feedbackFilesWritten).toHaveLength(2);
+        const t1Feedback = await fs.readFile(path.join(stateDir, 'task-feedback', 'T1.md'), 'utf-8');
+        expect(t1Feedback).toContain('task_spec_check');
+        expect(t1Feedback).toContain('iteration_timeout');
+        expect(t1Feedback).toContain('eligible for retry');
+      });
+
+      it('spec_check_layered timeout clears parallel state and marks tasks failed', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-layered-2',
+          activeWaveId: 'wave-layered-2',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1'],
+          reservedStatusByTaskId: { T1: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'spec_check_layered',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [{ id: 'T1', status: 'in_progress', dependsOn: [] }],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'inactivity',
+          'spec_check_layered',
+          'run-layered-2',
+        );
+
+        // Verify task marked failed
+        expect(result.tasksMarkedFailed).toContain('T1');
+
+        // Verify parallel state cleared and status flags set for retry
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+        expect(issueJson.status.taskFailed).toBe(true);
+        expect(issueJson.status.hasMoreTasks).toBe(true);
+
+        // Verify progress entry normalizes phase
+        const progressContent = renderProgressText({ stateDir });
+        expect(progressContent).toContain('Parallel Wave Timeout');
+        expect(progressContent).toContain('task_spec_check');
+      });
+
+      it('spec_check_persist timeout clears parallel state with no orphaned tasks', async () => {
+        const parallelState: ParallelState = {
+          runId: 'run-layered-3',
+          activeWaveId: 'wave-layered-3',
+          activeWavePhase: 'task_spec_check',
+          activeWaveTaskIds: ['T1', 'T2', 'T3'],
+          reservedStatusByTaskId: { T1: 'pending', T2: 'failed', T3: 'pending' },
+          reservedAt: '2026-01-01T00:00:00Z',
+        };
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'spec_check_persist',
+          status: { parallel: parallelState },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'in_progress', dependsOn: [] },
+            { id: 'T2', status: 'in_progress', dependsOn: [] },
+            { id: 'T3', status: 'in_progress', dependsOn: [] },
+          ],
+        });
+
+        const { handleWaveTimeoutCleanup } = await import('./parallelRunner.js');
+
+        const result = await handleWaveTimeoutCleanup(
+          stateDir,
+          'iteration',
+          'spec_check_persist',
+          'run-layered-3',
+        );
+
+        // All 3 tasks marked failed
+        expect(result.tasksMarkedFailed).toHaveLength(3);
+        expect(result.tasksMarkedFailed).toContain('T1');
+        expect(result.tasksMarkedFailed).toContain('T2');
+        expect(result.tasksMarkedFailed).toContain('T3');
+
+        // Verify no orphaned parallel state
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+
+        // Verify no in_progress tasks
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify feedback files written for all tasks
+        expect(result.feedbackFilesWritten).toHaveLength(3);
+      });
+    });
+
+    describe('layered phase merge-conflict recovery', () => {
+      it('merge conflict during spec_check_legacy leaves no orphaned parallel state', async () => {
+        // Simulate post-merge-conflict state: parallel state cleared, task marked failed
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'spec_check_legacy',
+          status: {
+            taskFailed: true,
+            taskPassed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+            // parallel state should already be cleared by merge-conflict handler
+          },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'failed', dependsOn: [] },
+            { id: 'T2', status: 'pending', dependsOn: [] },
+          ],
+        });
+
+        // Verify no orphaned parallel state
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+
+        // Verify no in_progress tasks
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify workflow can transition back to implement_task (taskFailed=true guard)
+        const engine = new WorkflowEngine(await loadWorkflowByName('default'));
+        const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
+        expect(nextPhase).toBe('implement_task');
+      });
+
+      it('merge conflict during spec_check_layered leaves no orphaned parallel state', async () => {
+        await writeJsonAtomic(path.join(stateDir, 'issue.json'), {
+          phase: 'spec_check_layered',
+          status: {
+            taskFailed: true,
+            taskPassed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        });
+        await writeJsonAtomic(path.join(stateDir, 'tasks.json'), {
+          tasks: [
+            { id: 'T1', status: 'failed', dependsOn: [] },
+          ],
+        });
+
+        // Verify clean state
+        const issueRaw = await fs.readFile(path.join(stateDir, 'issue.json'), 'utf-8');
+        const issueJson = JSON.parse(issueRaw);
+        expect(issueJson.status.parallel).toBeUndefined();
+
+        const tasksRaw = await fs.readFile(path.join(stateDir, 'tasks.json'), 'utf-8');
+        const tasksJson = JSON.parse(tasksRaw);
+        const inProgress = tasksJson.tasks.filter((t: { status: string }) => t.status === 'in_progress');
+        expect(inProgress).toHaveLength(0);
+
+        // Verify workflow routes through spec_check_persist back to implement_task
+        const engine = new WorkflowEngine(await loadWorkflowByName('default'));
+        const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
+        expect(nextPhase).toBe('implement_task');
+      });
+    });
+
+    describe('workflow transition integration for layered timeout recovery', () => {
+      it('spec_check_persist with taskFailed transitions to implement_task', async () => {
+        const issueJson = {
+          phase: 'spec_check_persist',
+          status: {
+            taskFailed: true,
+            taskPassed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        };
+
+        const engine = new WorkflowEngine(await loadWorkflowByName('default'));
+        const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
+        expect(nextPhase).toBe('implement_task');
+      });
+
+      it('spec_check_persist with allTasksComplete transitions to completeness_verification', async () => {
+        const issueJson = {
+          phase: 'spec_check_persist',
+          status: {
+            taskPassed: true,
+            taskFailed: false,
+            hasMoreTasks: false,
+            allTasksComplete: true,
+          },
+        };
+
+        const engine = new WorkflowEngine(await loadWorkflowByName('default'));
+        const nextPhase = engine.evaluateTransitions('spec_check_persist', issueJson);
+        expect(nextPhase).toBe('completeness_verification');
+      });
     });
   });
 });

@@ -184,6 +184,20 @@ function isSpecCheckPhase(phase: string): boolean {
   return SPEC_CHECK_PHASES.has(phase);
 }
 
+/**
+ * Spec-check phases that execute parallel worker waves.
+ * Mode-select and persist are orchestration phases and must run sequentially.
+ */
+const PARALLEL_SPEC_CHECK_WAVE_PHASES = new Set([
+  'task_spec_check', // legacy single-phase (backward compat)
+  'spec_check_legacy',
+  'spec_check_layered',
+]);
+
+function isParallelSpecCheckWavePhase(phase: string): boolean {
+  return PARALLEL_SPEC_CHECK_WAVE_PHASES.has(phase);
+}
+
 const PHASE_ALLOWED_STATUS_UPDATES: Record<string, readonly TransitionStatusField[]> = {
   design_review: ['designApproved', 'designNeedsChanges'],
   design_edit: ['designNeedsChanges'],
@@ -1045,9 +1059,9 @@ export class RunManager {
         const iterStartedAt = nowIso();
 
         // Check if parallel mode is enabled and applicable for this phase.
-        // Spec-check sub-phases (mode-select, legacy, layered, persist) map to the
-        // parallel runner's 'task_spec_check' worker phase so existing wave logic applies.
-        const isParallelPhase = currentPhase === 'implement_task' || currentPhase === 'task_spec_check' || isSpecCheckPhase(currentPhase);
+        // Only implement_task and spec-check execution phases run worker waves.
+        // spec_check_mode_select/spec_check_persist are orchestration phases and stay sequential.
+        const isParallelPhase = currentPhase === 'implement_task' || isParallelSpecCheckWavePhase(currentPhase);
         const parallelEnabled = isParallelPhase && await isParallelModeEnabled(this.stateDir!);
 
         let exitCode: number;
@@ -1055,11 +1069,13 @@ export class RunManager {
 
         if (parallelEnabled) {
           // Run parallel wave for task execution phases.
-          // Map split spec-check phases to the parallel runner's 'task_spec_check' worker phase.
+          // Keep internal wave phase coarse ('task_spec_check') but pass the concrete workflow
+          // phase to workers so run-phase validates against the active workflow.
           const parallelPhase: 'implement_task' | 'task_spec_check' =
             currentPhase === 'implement_task' ? 'implement_task' : 'task_spec_check';
           const parallelResult = await this.runParallelWave({
             currentPhase: parallelPhase,
+            workerWorkflowPhase: currentPhase,
             workflowName,
             effectiveProvider,
             effectiveModel,
@@ -1422,12 +1438,13 @@ export class RunManager {
 
   /**
    * Executes a parallel wave for implement_task or spec-check phases.
-   * Spec-check sub-phases (mode-select, legacy, layered, persist) are
-   * mapped to the parallel runner's 'task_spec_check' worker phase.
+   * The internal wave state uses coarse phases (implement_task/task_spec_check),
+   * while workers receive the concrete workflow phase for run-phase execution.
    * Returns the effective exit code and whether a wave was actually executed.
    */
   private async runParallelWave(params: {
     currentPhase: 'implement_task' | 'task_spec_check';
+    workerWorkflowPhase: string;
     workflowName: string;
     effectiveProvider: string;
     effectiveModel?: string;
@@ -1531,7 +1548,9 @@ export class RunManager {
         return { exitCode: 0, waveExecuted: true };
       } else {
         // Run spec check wave
-        const result = await parallelRunner.runSpecCheckWave();
+        const result = await parallelRunner.runSpecCheckWave({
+          workflowPhase: params.workerWorkflowPhase,
+        });
         if (!result) {
           // No active wave to run spec check
           await this.appendViewerLog(params.viewerLogPath, '[PARALLEL] No active wave state for spec check');

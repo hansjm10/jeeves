@@ -1092,8 +1092,17 @@ export class ParallelRunner {
   /**
    * Runs a task_spec_check wave for the tasks from the preceding implement wave.
    */
-  async runSpecCheckWave(): Promise<ParallelWaveStepResult | null> {
+  async runSpecCheckWave(options: { workflowPhase?: string } = {}): Promise<ParallelWaveStepResult | null> {
     if (this.stopRequested) return null;
+
+    const workflowPhase = options.workflowPhase ?? 'task_spec_check';
+    if (!isSpecCheckWorkerPhase(workflowPhase)) {
+      return {
+        waveResult: this.emptyWaveResult('task_spec_check'),
+        continueExecution: false,
+        error: `Invalid spec-check workflow phase: ${workflowPhase}`,
+      };
+    }
 
     // Read the parallel state to get tasks from implement wave
     const state = await this.checkForActiveWave();
@@ -1165,6 +1174,7 @@ export class ParallelRunner {
       'task_spec_check',
       tasksToRun,
       state.reservedStatusByTaskId,
+      workflowPhase,
     );
   }
 
@@ -1344,6 +1354,7 @@ export class ParallelRunner {
     phase: WorkerPhase,
     taskIds: string[],
     reservedStatusByTaskId: Record<string, 'pending' | 'failed'>,
+    workflowPhase: string = phase,
   ): Promise<ParallelWaveStepResult> {
     const startedAt = nowIso();
     const sandboxes: WorkerSandbox[] = [];
@@ -1484,7 +1495,7 @@ export class ParallelRunner {
     try {
       for (const sandbox of sandboxes) {
         if (this.stopRequested) break;
-        const worker = this.startWorkerProcess(sandbox, phase);
+        const worker = this.startWorkerProcess(sandbox, phase, workflowPhase);
         startedWorkers.push({ sandbox, worker });
       }
     } catch (err) {
@@ -2100,7 +2111,11 @@ export class ParallelRunner {
    *
    * @throws {Error} if spawn fails
    */
-  private startWorkerProcess(sandbox: WorkerSandbox, phase: WorkerPhase): WorkerProcess {
+  private startWorkerProcess(
+    sandbox: WorkerSandbox,
+    phase: WorkerPhase,
+    workflowPhase: string = phase,
+  ): WorkerProcess {
     const startedAt = nowIso();
     const taskId = sandbox.taskId;
 
@@ -2111,7 +2126,7 @@ export class ParallelRunner {
       '--workflow',
       this.options.workflowName,
       '--phase',
-      phase,
+      workflowPhase,
       '--provider',
       this.options.provider,
       '--workflows-dir',
@@ -2136,7 +2151,7 @@ export class ParallelRunner {
     }
 
     // Log synchronously (fire-and-forget) to avoid making this method async
-    void this.options.appendLog(`[WORKER ${taskId}][${phase}] Starting...`);
+    void this.options.appendLog(`[WORKER ${taskId}][${phase}] Starting (${workflowPhase})...`);
 
     // This spawn call can throw synchronously - that's the key behavior we need
     const proc = this.spawn(process.execPath, args, {

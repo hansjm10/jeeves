@@ -592,6 +592,44 @@ describe('parallelRunner', () => {
       });
     });
 
+    it('uses the provided workflow phase when spawning task_spec_check workers', () => {
+      const spawnCalls: string[][] = [];
+      const mockSpawn = vi.fn((_cmd: unknown, args: unknown) => {
+        const a = Array.isArray(args) ? (args as string[]) : [];
+        spawnCalls.push(a);
+        return createMockProc(0);
+      });
+
+      const runner = createRunner({
+        spawn: mockSpawn as unknown as typeof import('node:child_process').spawn,
+      });
+
+      const sandbox = {
+        taskId: 'T1',
+        runId: 'run-123',
+        issueNumber: 78,
+        owner: 'o',
+        repo: 'r',
+        stateDir: '/tmp/state/T1',
+        worktreeDir: '/tmp/work/T1',
+        branch: 'issue/78-T1-run-123',
+        repoDir: '/tmp/repo',
+        canonicalBranch: 'issue/78',
+      };
+
+      (
+        runner as unknown as {
+          startWorkerProcess: (...args: unknown[]) => unknown;
+        }
+      ).startWorkerProcess(sandbox, 'task_spec_check', 'spec_check_layered');
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const args = spawnCalls[0] ?? [];
+      const phaseFlag = args.indexOf('--phase');
+      expect(phaseFlag).toBeGreaterThan(-1);
+      expect(args[phaseFlag + 1]).toBe('spec_check_layered');
+    });
+
     describe('checkForActiveWave', () => {
       it('returns null when no parallel state', async () => {
         await writeJsonAtomic(path.join(stateDir, 'issue.json'), { status: {} });

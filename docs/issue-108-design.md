@@ -348,7 +348,157 @@ N/A - This feature does not add or modify external interfaces.
 19. Success/failure/crash behavior is explicitly listed in the Artifact Lifecycle table.
 
 ## 5. Tasks
-[To be completed in design_plan phase]
+
+### Planning Gates
+
+#### Decomposition Gates
+1. **Smallest independently testable unit**: One scoped artifact change with its own verification command (for example, adding one skill with trigger metadata and instruction contract, or adding one workflow-state transition and asserting it in a workflow test).
+2. **Dependencies between tasks**: Yes. Workflow/prompt wiring depends on skill artifacts existing; runner parallel-phase updates depend on workflow phase names being finalized; replay validation depends on all prior implementation work.
+3. **Parallelizable work**: Yes. Skill authoring and docs/registry updates can run in parallel after shared naming is agreed; runner changes and test authoring can run in parallel after workflow YAML shape is committed.
+
+#### Task Completeness Gates
+4. **Specific files**: Listed explicitly per task below (no wildcard-only tasks).
+5. **Acceptance criteria**: Listed per task as concrete, observable outcomes.
+6. **Verification command**: Listed per task (targeted `vitest`, `rg`, or JSON parse command).
+
+#### Ordering Gates
+7. **Must be done first**: Define/commit canonical skill IDs and workflow phase names (`safe-shell-search`, `jeeves-task-spec-check`, `spec_check_*`) so downstream wiring/tests target stable names.
+8. **Can only be done last**: Baseline-vs-layered replay validation and final regression pass, because it depends on completed skills + workflow + runner wiring.
+9. **Circular dependencies**: None. DAG is strictly acyclic (see graph below).
+
+#### Infrastructure Gates
+10. **Build/config changes needed**: Yes. `workflows/default.yaml` phase graph changes and `skills/registry.yaml` mapping updates.
+11. **New dependencies required**: None.
+12. **New environment variables/secrets required**: None.
+
+### Goal Coverage
+- Goal 1 (two-layer architecture): `T1`, `T2`, `T4`
+- Goal 2 (`safe-shell-search` available to checker workflows): `T1`, `T4`
+- Goal 3 (`jeeves-task-spec-check` adapter): `T2`
+- Goal 4 (opt-in layered integration + fallback): `T3`, `T4`
+- Goal 5 (validation/replay criteria): `T5` + Section 6 replay checks
+
+### Task Dependency Graph
+```
+T1 (no deps)
+T2 (no deps)
+T3 -> depends on T1, T2
+T4 -> depends on T3
+T5 -> depends on T3, T4
+```
+
+### Task Breakdown
+| ID | Title | Summary | Files | Acceptance Criteria |
+|----|-------|---------|-------|---------------------|
+| T1 | Add `safe-shell-search` Core Skill | Create reusable guardrail skill that replaces duplicated tooling-guidance behavior for search/read evidence hygiene. | `skills/common/safe-shell-search/SKILL.md` (new), `AGENTS.md` | Skill exists with explicit trigger/usage metadata; instructions require pruner-first discovery/read loop, evidence-grounded claims, and shell-fallback justification; skill is discoverable in workspace instructions. |
+| T2 | Add `jeeves-task-spec-check` Adapter Skill + Evidence Schema | Create Jeeves-specific checker skill and structured criterion evidence schema. | `skills/implement/jeeves-task-spec-check/SKILL.md` (new), `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` (new) | Adapter skill encodes state/artifact contracts (`state_*`, `.jeeves/phase-report.json`, `.jeeves/task-feedback.md`, `filesAllowed`); evidence schema enforces `PASS|FAIL|INCONCLUSIVE` verdicts and confidence range `[0,1]`; schema is valid JSON and referenced by skill. |
+| T3 | Implement Layered Spec-Check Workflow and Prompt Split | Introduce mode-select + legacy/layered/persist states and wire transitions/guards for opt-in rollout and fallback behavior. | `workflows/default.yaml`, `prompts/task.spec_check.md`, `prompts/task.spec_check.layered.md` (new), `prompts/task.spec_check.mode_select.md` (new), `prompts/task.spec_check.persist.md` (new), `packages/core/src/workflowLoader.test.ts` | Workflow contains `spec_check_mode_select`, `spec_check_legacy`, `spec_check_layered`, and `spec_check_persist` with priority-ordered transitions matching Section 2; `status.settings.useLayeredSkills == true` routes to layered mode, otherwise legacy; fallback path to legacy is explicit when layered prerequisites are not met; workflow loader tests cover new phase presence/transition expectations. |
+| T4 | Update Runner/Parallel Handling for New Spec-Check Phases | Extend runtime parallel/task-loop handling, timeout/merge/setup recovery, and phase-report status filtering for new state names. | `apps/viewer-server/src/runManager.ts`, `apps/viewer-server/src/parallelRunner.ts`, `apps/viewer-server/src/runManager.test.ts`, `apps/viewer-server/src/parallelRunner.test.ts` | Parallel execution recognizes layered/legacy spec-check phases without regressions to implement-wave behavior; timeout/merge-conflict recovery remains resumable and routes back to `implement_task` as designed; setup failures still stop run with setup-failure completion reason; tests cover phase transitions and recovery paths for new states. |
+| T5 | Register, Document, and Replay-Validate Layered Mode | Publish phase-skill mapping/docs and codify baseline-vs-layered validation procedure. | `skills/registry.yaml`, `docs/integrated-skills.md`, `docs/issue-108-design.md` (Section 6 replay criteria), `apps/viewer-server/src/runManager.test.ts` | `task_spec_check` registry mapping is ordered as `safe-shell-search`, `jeeves-task-spec-check`, `code-quality`; integrated-skills docs reflect new mapping; replay criteria define measurable comparisons for command hygiene errors and evidence quality; tests assert phase-report `reasons`/`evidenceRefs` normalization and persistence behavior used by replay analysis. |
+
+### Task Details
+
+**T1: Add `safe-shell-search` Core Skill**
+- Summary: Introduce a reusable core skill that standardizes safe codebase discovery/read behavior and evidence discipline.
+- Files:
+  - `skills/common/safe-shell-search/SKILL.md` - New skill instructions (pruner-first search/read loop, evidence constraints, fallback policy).
+  - `AGENTS.md` - Add discoverable skill entry so task-spec-check workflows can trigger it.
+- Acceptance Criteria:
+  1. `safe-shell-search` skill metadata and trigger wording are present and unambiguous.
+  2. Skill includes the required investigation loop and shell fallback justification requirements.
+  3. Skill is listed in available skills metadata used by runner-prepended instructions.
+- Dependencies: None
+- Verification: `rg -n "safe-shell-search|pruner|fallback|investigation" skills/common/safe-shell-search/SKILL.md AGENTS.md`
+
+**T2: Add `jeeves-task-spec-check` Adapter Skill + Evidence Schema**
+- Summary: Move Jeeves-specific spec-check contracts into an adapter skill with a structured evidence reference schema.
+- Files:
+  - `skills/implement/jeeves-task-spec-check/SKILL.md` - New adapter skill with explicit task-state and artifact write contract.
+  - `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` - New schema for criterion verdict/evidence records.
+- Acceptance Criteria:
+  1. Adapter skill prescribes PASS/FAIL handling using MCP state tools and canonical `.jeeves` artifacts.
+  2. Evidence schema defines `criteria[].verdict` enum `PASS|FAIL|INCONCLUSIVE`.
+  3. Evidence schema defines `criteria[].evidence[].confidence` numeric range `[0,1]`.
+- Dependencies: None
+- Verification: `pnpm exec node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('skills/implement/jeeves-task-spec-check/references/evidence-schema.json','utf8')); console.log('ok')"`
+
+**T3: Implement Layered Spec-Check Workflow and Prompt Split**
+- Summary: Replace the single `task_spec_check` step with explicit mode-selection and layered/legacy flow phases.
+- Files:
+  - `workflows/default.yaml` - Add new spec-check states/transitions and ordered guards per Section 2.
+  - `prompts/task.spec_check.md` - Keep legacy behavior (or repoint as legacy wrapper) to preserve fallback.
+  - `prompts/task.spec_check.layered.md` - New layered prompt delegating guardrails/contracts to skills.
+  - `prompts/task.spec_check.mode_select.md` - New mode-selection prompt outputting deterministic mode choice context.
+  - `prompts/task.spec_check.persist.md` - New persist phase prompt that finalizes artifact/transition handoff.
+  - `packages/core/src/workflowLoader.test.ts` - Update default-workflow assertions for new phase graph.
+- Acceptance Criteria:
+  1. Workflow transitions from `implement_task` to `spec_check_mode_select`, then deterministically to layered or legacy path.
+  2. `status.settings.useLayeredSkills == true` is the only flag value that opts into layered mode.
+  3. Legacy fallback remains default for missing/false/invalid flag values or unresolved layered prerequisites.
+  4. Workflow YAML parses/loads successfully in automated tests.
+- Dependencies: `T1`, `T2`
+- Verification: `pnpm exec vitest run packages/core/src/workflowLoader.test.ts`
+
+**T4: Update Runner/Parallel Handling for New Spec-Check Phases**
+- Summary: Make runtime orchestration resilient to the new spec-check phase names and preserve timeout/merge/setup recovery guarantees.
+- Files:
+  - `apps/viewer-server/src/runManager.ts` - Expand parallel-phase routing and transition/status commit behavior for new phases.
+  - `apps/viewer-server/src/parallelRunner.ts` - Generalize worker phase handling from `task_spec_check` to layered/legacy spec-check phases.
+  - `apps/viewer-server/src/runManager.test.ts` - Add/adjust tests for transition and phase-report behavior under new states.
+  - `apps/viewer-server/src/parallelRunner.test.ts` - Add/adjust tests for timeout/merge/setup recovery with new phase names.
+- Acceptance Criteria:
+  1. Parallel mode runs spec-check waves correctly for layered and legacy spec-check phases.
+  2. Timeout/merge-conflict recovery still yields a resumable canonical phase (`implement_task`) with no orphaned parallel state.
+  3. Setup/orchestration failures still terminate run with setup-failure completion reason and rollback semantics.
+  4. Transition status filtering/commit remains valid for new phase names.
+- Dependencies: `T3`
+- Verification: `pnpm exec vitest run apps/viewer-server/src/runManager.test.ts apps/viewer-server/src/parallelRunner.test.ts`
+
+**T5: Register, Document, and Replay-Validate Layered Mode**
+- Summary: Finalize phase-skill mapping/docs and add explicit baseline-vs-layered validation coverage.
+- Files:
+  - `skills/registry.yaml` - Update `phases.task_spec_check` ordered mapping.
+  - `docs/integrated-skills.md` - Update phase mapping documentation.
+  - `docs/issue-108-design.md` - Add replay validation criteria/checklist in Section 6.
+  - `apps/viewer-server/src/runManager.test.ts` - Add assertions for `reasons`/`evidenceRefs` handling used by replay analysis.
+- Acceptance Criteria:
+  1. Registry mapping for `task_spec_check` is exactly `[safe-shell-search, jeeves-task-spec-check, code-quality]`.
+  2. Docs reflect layered mapping and rollout expectations.
+  3. Replay criteria specify how to compare baseline vs layered runs for command-hygiene errors and criterion evidence quality.
+  4. Tests verify normalized `reasons`/`evidenceRefs` persistence in phase-report output.
+- Dependencies: `T3`, `T4`
+- Verification: `pnpm exec vitest run apps/viewer-server/src/runManager.test.ts -t "phase-report"`
 
 ## 6. Validation
-[To be completed in design_plan phase]
+
+### Pre-Implementation Checks
+- [ ] All dependencies installed: `pnpm install`
+- [ ] Workflow parses with no schema errors: `pnpm exec vitest run packages/core/src/workflowLoader.test.ts`
+- [ ] Existing runner regressions baseline captured: `pnpm exec vitest run apps/viewer-server/src/runManager.test.ts apps/viewer-server/src/parallelRunner.test.ts`
+
+### Post-Implementation Checks
+- [ ] Types check: `pnpm typecheck`
+- [ ] Lint passes: `pnpm lint`
+- [ ] All tests pass: `pnpm test`
+- [ ] Targeted workflow tests pass: `pnpm exec vitest run packages/core/src/workflowLoader.test.ts`
+- [ ] Targeted runner tests pass: `pnpm exec vitest run apps/viewer-server/src/runManager.test.ts apps/viewer-server/src/parallelRunner.test.ts`
+- [ ] New tests added for:
+  - `packages/core/src/workflowLoader.test.ts` (new phase graph assertions)
+  - `apps/viewer-server/src/runManager.test.ts` (mode/persist + phase-report reasons/evidenceRefs)
+  - `apps/viewer-server/src/parallelRunner.test.ts` (layered/legacy phase recovery)
+
+### Replay Validation (Baseline vs Layered)
+- [ ] Run baseline with `status.settings.useLayeredSkills=false` and capture `viewer-run.log`, `.jeeves/phase-report.json`, and progress entries.
+- [ ] Run layered mode with `status.settings.useLayeredSkills=true` on the same task set and capture the same artifacts.
+- [ ] Compare command hygiene failures:
+  - Baseline vs layered count of shell-first search violations.
+  - Baseline vs layered count of unverifiable criterion claims.
+- [ ] Compare evidence quality:
+  - Layered runs include criterion-level verdict entries and non-empty evidence references for each evaluated criterion.
+  - `phase-report.json` includes normalized `reasons[]`/`evidenceRefs[]` arrays when provided.
+- [ ] Verify fallback:
+  - With layered flag true and layered prerequisites unavailable, mode-select routes to legacy without run failure.
+
+### Manual Verification
+- [ ] Trigger one `task_spec_check` run in legacy mode and one in layered mode for the same task; confirm both complete the loop and land in the expected next phase.
+- [ ] Validate timeout and merge-conflict recovery still return task loop to `implement_task` with retryable status flags.

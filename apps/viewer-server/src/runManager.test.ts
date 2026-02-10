@@ -453,6 +453,211 @@ phases:
     expect(runMeta.trajectory_reduction_summary).toBeTruthy();
   });
 
+  it('writes reflection diagnostics and viewer log entries when reflection is disabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-trajectory-reflection-disabled-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-reflection-disabled-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-reflection-disabled-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-trajectory-reflection-disabled',
+      `
+workflow:
+  name: fixture-trajectory-reflection-disabled
+  version: 1
+  start: hello
+phases:
+  hello:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 64;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber, title: 'Reflection diagnostics disabled path' },
+          phase: 'hello',
+          workflow: 'fixture-trajectory-reflection-disabled',
+          branch: 'issue/64',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'hypothesis:reflection-path',
+      value: { hypothesis: 'Reflection diagnostics should be present even when disabled.' },
+      sourceIteration: 1,
+    });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0, 120)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const diagnostics = JSON.parse(
+      await fs.readFile(path.join(stateDir, 'trajectory-reduction.json'), 'utf-8'),
+    ) as {
+      reflection_used?: unknown;
+      reflection_skipped_reason?: unknown;
+      reflection_input_tokens?: unknown;
+      reflection_output_tokens?: unknown;
+      reflection_latency_ms?: unknown;
+    };
+    expect(diagnostics.reflection_used).toBe(false);
+    expect(diagnostics.reflection_skipped_reason).toBe('disabled');
+    expect(diagnostics.reflection_input_tokens).toBeNull();
+    expect(diagnostics.reflection_output_tokens).toBeNull();
+    expect(diagnostics.reflection_latency_ms).toBeNull();
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[TRAJECTORY] reflection=skipped reason=disabled');
+
+    const runsDir = path.join(stateDir, '.runs');
+    const runEntries = await fs.readdir(runsDir, { withFileTypes: true });
+    const runId = runEntries.find((entry) => entry.isDirectory())?.name;
+    expect(runId).toBeTruthy();
+
+    const archivedDiagnostics = JSON.parse(
+      await fs.readFile(
+        path.join(runsDir, runId!, 'iterations', '001', 'trajectory-reduction-diagnostics.json'),
+        'utf-8',
+      ),
+    ) as { reflection_skipped_reason?: unknown };
+    expect(archivedDiagnostics.reflection_skipped_reason).toBe('disabled');
+  });
+
+  it('uses below-threshold reflection skip reason when reflection flag is enabled', async () => {
+    const savedReflectionFlag = process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION;
+    process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION = 'true';
+    try {
+      const dataDir = await makeTempDir('jeeves-vs-data-trajectory-reflection-threshold-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-reflection-threshold-');
+      await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+      await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+      const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-reflection-threshold-');
+      const promptsDir = path.join(process.cwd(), 'prompts');
+      await writeWorkflowYaml(
+        workflowsDir,
+        'fixture-trajectory-reflection-threshold',
+        `
+workflow:
+  name: fixture-trajectory-reflection-threshold
+  version: 1
+  start: hello
+phases:
+  hello:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+      );
+
+      const owner = 'o';
+      const repo = 'r';
+      const issueNumber = 65;
+      const issueRef = `${owner}/${repo}#${issueNumber}`;
+      const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify(
+          {
+            repo: `${owner}/${repo}`,
+            issue: { number: issueNumber, title: 'Reflection threshold gating' },
+            phase: 'hello',
+            workflow: 'fixture-trajectory-reflection-threshold',
+            branch: 'issue/65',
+            notes: '',
+          },
+          null,
+          2,
+        ) + '\n',
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(stateDir, 'sdk-output.json'),
+        JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+        'utf-8',
+      );
+
+      // Keep snapshot tiny so reflection is skipped before any model call.
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'working_set',
+        key: 'note:small',
+        value: { note: 'small snapshot' },
+        sourceIteration: 1,
+      });
+
+      const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(workDir, { recursive: true });
+
+      const rm = new RunManager({
+        promptsDir,
+        workflowsDir,
+        repoRoot,
+        dataDir,
+        spawn: (() => makeFakeChild(0, 120)) as unknown as typeof import('node:child_process').spawn,
+        broadcast: () => void 0,
+      });
+
+      await rm.setIssue(issueRef);
+      await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+      await waitFor(() => rm.getStatus().running === false, 10000);
+
+      const diagnostics = JSON.parse(
+        await fs.readFile(path.join(stateDir, 'trajectory-reduction.json'), 'utf-8'),
+      ) as { reflection_used?: unknown; reflection_skipped_reason?: unknown };
+      expect(diagnostics.reflection_used).toBe(false);
+      expect(diagnostics.reflection_skipped_reason).toBe('below_threshold');
+
+      const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+      expect(viewerLog).toContain('[TRAJECTORY] reflection=skipped reason=below_threshold');
+    } finally {
+      if (savedReflectionFlag === undefined) {
+        delete process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION;
+      } else {
+        process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION = savedReflectionFlag;
+      }
+    }
+  });
+
   it('derives active-context objective from the transitioned phase when issue metadata is sparse', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-trajectory-transition-');
     const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-transition-');

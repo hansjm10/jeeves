@@ -253,7 +253,8 @@ Global vs per-state handling:
 | `parallel worker runner` (per-task subprocess) | Same runner args but worker sandbox `--state-dir`/`--work-dir`; env includes `JEEVES_DATA_DIR`, `JEEVES_RUN_TASK_ID`, optional `JEEVES_MODEL`. | Worker-local issue/task artifacts under `.runs/<runId>/workers/<taskId>/`; worker `task-feedback.md` copied to canonical `task-feedback/<taskId>.md` when relevant; contributes to canonical wave summaries. | Spawn/sandbox failure: terminate started workers, rollback reservations, setup-failure stop. Timeout: SIGKILL active workers, mark all wave tasks failed, synthesize feedback, clear `status.parallel`. Merge conflict: synthesize conflict feedback and force retry flags. |
 
 ## 3. Interfaces
-[To be completed in design_api phase]
+
+N/A - This feature does not add or modify external interfaces.
 
 ## 4. Data
 [To be completed in design_data phase]

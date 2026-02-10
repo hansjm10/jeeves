@@ -3151,6 +3151,283 @@ describe('RunManager parallel mode integration', () => {
     const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
     expect(viewerLog).not.toContain('[PARALLEL]');
   });
+
+  it('keeps spec_check_mode_select sequential when parallel mode is enabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-spec-check-mode-select-parallel',
+      `
+workflow:
+  name: fixture-spec-check-mode-select-parallel
+  version: 1
+  start: spec_check_mode_select
+phases:
+  spec_check_mode_select:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2003;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'spec_check_mode_select',
+          workflow: 'fixture-spec-check-mode-select-parallel',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawnCalls: string[][] = [];
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push(a);
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    const runParallelWaveSpy = vi.spyOn(
+      rm as unknown as { runParallelWave: (...args: unknown[]) => Promise<unknown> },
+      'runParallelWave',
+    );
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(runParallelWaveSpy).not.toHaveBeenCalled();
+    expect(spawnCalls.length).toBeGreaterThan(0);
+    expect(spawnCalls[0]).toContain('--issue');
+    expect(spawnCalls[0]).toContain(issueRef);
+  });
+
+  it('keeps spec_check_persist sequential when parallel mode is enabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-spec-check-persist-parallel',
+      `
+workflow:
+  name: fixture-spec-check-persist-parallel
+  version: 1
+  start: spec_check_persist
+phases:
+  spec_check_persist:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2004;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'spec_check_persist',
+          workflow: 'fixture-spec-check-persist-parallel',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawnCalls: string[][] = [];
+    const spawn = ((cmd: unknown, args: unknown) => {
+      void cmd;
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push(a);
+      return makeFakeChild(0);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    const runParallelWaveSpy = vi.spyOn(
+      rm as unknown as { runParallelWave: (...args: unknown[]) => Promise<unknown> },
+      'runParallelWave',
+    );
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(runParallelWaveSpy).not.toHaveBeenCalled();
+    expect(spawnCalls.length).toBeGreaterThan(0);
+    expect(spawnCalls[0]).toContain('--issue');
+    expect(spawnCalls[0]).toContain(issueRef);
+  });
+
+  it('passes spec_check_layered as the worker workflow phase for parallel spec-check waves', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-spec-check-layered-parallel',
+      `
+workflow:
+  name: fixture-spec-check-layered-parallel
+  version: 1
+  start: spec_check_layered
+phases:
+  spec_check_layered:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2005;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'spec_check_layered',
+          workflow: 'fixture-spec-check-layered-parallel',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          settings: {
+            taskExecution: {
+              mode: 'parallel',
+              maxParallelTasks: 2,
+            },
+          },
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    const runParallelWaveSpy = vi.spyOn(
+      rm as unknown as {
+        runParallelWave: (params: Record<string, unknown>) => Promise<{ exitCode: number; waveExecuted: boolean }>;
+      },
+      'runParallelWave',
+    ).mockResolvedValue({ exitCode: 0, waveExecuted: false });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false);
+
+    expect(runParallelWaveSpy).toHaveBeenCalledTimes(1);
+    const callParams = runParallelWaveSpy.mock.calls[0]?.[0] as {
+      currentPhase: string;
+      workerWorkflowPhase: string;
+    };
+    expect(callParams.currentPhase).toBe('task_spec_check');
+    expect(callParams.workerWorkflowPhase).toBe('spec_check_layered');
+  });
 });
 
 /**
@@ -3368,7 +3645,7 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     }
   }, 15000); // Extended timeout for this test
 
-  it('task_spec_check wave timeout via rm.start() leaves workflow resumable', async () => {
+  it('spec_check_layered wave timeout via rm.start() leaves workflow resumable', async () => {
     const dataDir = await makeTempDir('jeeves-speccheck-timeout-');
     const repoRoot = await makeTempDir('jeeves-reporoot-');
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
@@ -3401,14 +3678,14 @@ describe('T13: Real RunManager parallel timeout integration', () => {
       reservedAt: new Date().toISOString(),
     };
 
-    // Set up issue.json in task_spec_check phase with parallel state
+    // Set up issue.json in spec_check_layered phase with parallel state
     await fs.writeFile(
       path.join(stateDir, 'issue.json'),
       JSON.stringify(
         {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
-          phase: 'task_spec_check',
+          phase: 'spec_check_layered',
           workflow: 'default',
           branch: `issue/${issueNumber}`,
           notes: '',
@@ -3470,12 +3747,12 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     // Write worker issue.json files (needed for spec_check to read results)
     await fs.writeFile(
       path.join(workerStateT1, 'issue.json'),
-      JSON.stringify({ phase: 'task_spec_check', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
+      JSON.stringify({ phase: 'spec_check_layered', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
       'utf-8',
     );
     await fs.writeFile(
       path.join(workerStateT2, 'issue.json'),
-      JSON.stringify({ phase: 'task_spec_check', status: { currentTaskId: 'T2' } }, null, 2) + '\n',
+      JSON.stringify({ phase: 'spec_check_layered', status: { currentTaskId: 'T2' } }, null, 2) + '\n',
       'utf-8',
     );
 
@@ -3872,13 +4149,13 @@ describe('T13: Real RunManager parallel timeout integration', () => {
 /**
  * T15: Merge conflict stop leaves workflow resumable.
  *
- * This test validates that after a merge conflict during task_spec_check wave:
- * 1. issue.json.phase is NOT left at task_spec_check when status.parallel is cleared
+ * This test validates that after a merge conflict during layered spec-check wave:
+ * 1. issue.json.phase transitions out of spec_check_layered when status.parallel is cleared
  * 2. The conflicted task is marked failed and canonical feedback points to artifacts
- * 3. Subsequent runs can proceed from implement_task without getting stuck in "No active wave" loops
+ * 3. Subsequent runs can continue through spec_check_persist and back to implement_task
  */
 describe('T15: Merge conflict stop leaves workflow resumable', () => {
-  it('after merge conflict in spec-check wave, issue.json.phase transitions to implement_task', async () => {
+  it('after merge conflict in spec-check wave, issue.json.phase transitions to spec_check_persist', async () => {
     // This test simulates a merge conflict scenario by directly testing the RunManager's
     // merge-conflict handling path. We'll mock the ParallelRunner to return mergeConflict: true.
     const dataDir = await makeTempDir('jeeves-merge-conflict-');
@@ -3925,7 +4202,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await fs.mkdir(path.dirname(workDir), { recursive: true });
     await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
 
-    // Set up issue.json in task_spec_check phase with parallel state (simulating mid-wave)
+    // Set up issue.json in spec_check_layered phase with parallel state (simulating mid-wave)
     const runId = 'run-merge-conflict-test';
     const parallelState = {
       runId,
@@ -3942,7 +4219,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
         {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
-          phase: 'task_spec_check',
+          phase: 'spec_check_layered',
           workflow: 'default',
           branch: branchName,
           notes: '',
@@ -3996,7 +4273,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
       path.join(workerStateT1, 'issue.json'),
       JSON.stringify(
         {
-          phase: 'task_spec_check',
+          phase: 'spec_check_layered',
           status: { currentTaskId: 'T1', taskPassed: true },
         },
         null,
@@ -4083,7 +4360,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     // Start the run - it should:
     // 1. Resume the spec-check wave (already has parallel state)
     // 2. Try to merge the worker branch (which will conflict)
-    // 3. Handle the merge conflict by transitioning phase to implement_task
+    // 3. Handle the merge conflict by transitioning phase to spec_check_persist
     await rm.start({
       provider: 'fake',
       max_iterations: 1,
@@ -4093,12 +4370,12 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
 
     await waitFor(() => rm.getStatus().running === false, 15000);
 
-    // Verify: After merge conflict, phase should NOT be task_spec_check
-    // (it should have transitioned to implement_task to allow retry)
+    // Verify: After merge conflict, phase should transition away from spec_check_layered
+    // and let spec_check_persist handle task-loop routing on the next iteration/run.
     const issueAfter = await readIssueJson(stateDir);
 
-    // The critical assertion: phase should be implement_task, not task_spec_check
-    expect(issueAfter?.phase).toBe('implement_task');
+    // The critical assertion: layered spec-check transitions to persist, not an invalid legacy phase.
+    expect(issueAfter?.phase).toBe('spec_check_persist');
 
     // Verify: status.parallel should be cleared
     expect((issueAfter?.status as Record<string, unknown>)?.parallel).toBeUndefined();
@@ -4699,4 +4976,589 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
     const viewerLog = await fs.readFile(viewerLogPath, 'utf-8');
     expect(viewerLog).not.toContain('[PREVIOUS-RUN-LINE]');
   }, 10000);
+});
+
+describe('T7: spec-check split-phase support in runManager', () => {
+  it('parsePhaseReportFile normalizes reasons and evidenceRefs arrays', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2000;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: 'fixture-trivial', branch: 'issue/2000', notes: '' }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    const parse = (rm as unknown as {
+      parsePhaseReportFile(raw: string, expectedPhase: string): {
+        statusUpdates: Record<string, boolean>;
+        outcome: string | null;
+        reasons: string[];
+        evidenceRefs: string[];
+        errors: string[];
+      };
+    }).parsePhaseReportFile.bind(rm);
+
+    // Test with valid reasons and evidenceRefs
+    const report = JSON.stringify({
+      schemaVersion: 1,
+      phase: 'spec_check_persist',
+      outcome: 'task_passed',
+      statusUpdates: { taskPassed: true, hasMoreTasks: true },
+      reasons: ['Criterion 1 passed', '', 'Criterion 2 passed', '  '],
+      evidenceRefs: ['file:src/foo.ts:10', '', 'file:src/bar.ts:20'],
+    });
+    const result = parse(report, 'spec_check_persist');
+    expect(result.errors).toEqual([]);
+    expect(result.outcome).toBe('task_passed');
+    // Empty/whitespace-only strings should be filtered out
+    expect(result.reasons).toEqual(['Criterion 1 passed', 'Criterion 2 passed']);
+    expect(result.evidenceRefs).toEqual(['file:src/foo.ts:10', 'file:src/bar.ts:20']);
+    expect(result.statusUpdates).toEqual({ taskPassed: true, hasMoreTasks: true });
+  });
+
+  it('parsePhaseReportFile handles missing reasons/evidenceRefs gracefully', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2001;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: 'fixture-trivial', branch: 'issue/2001', notes: '' }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    const parse = (rm as unknown as {
+      parsePhaseReportFile(raw: string, expectedPhase: string): {
+        statusUpdates: Record<string, boolean>;
+        outcome: string | null;
+        reasons: string[];
+        evidenceRefs: string[];
+        errors: string[];
+      };
+    }).parsePhaseReportFile.bind(rm);
+
+    // Report without reasons/evidenceRefs
+    const report = JSON.stringify({
+      schemaVersion: 1,
+      phase: 'spec_check_persist',
+      statusUpdates: { taskFailed: true },
+    });
+    const result = parse(report, 'spec_check_persist');
+    expect(result.errors).toEqual([]);
+    expect(result.reasons).toEqual([]);
+    expect(result.evidenceRefs).toEqual([]);
+    expect(result.statusUpdates).toEqual({ taskFailed: true });
+    expect(result.outcome).toBeNull();
+  });
+
+  it('parsePhaseReportFile rejects non-string items in reasons/evidenceRefs', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2002;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify({ repo: `${owner}/${repo}`, issue: { number: issueNumber }, phase: 'hello', workflow: 'fixture-trivial', branch: 'issue/2002', notes: '' }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+
+    const parse = (rm as unknown as {
+      parsePhaseReportFile(raw: string, expectedPhase: string): {
+        statusUpdates: Record<string, boolean>;
+        outcome: string | null;
+        reasons: string[];
+        evidenceRefs: string[];
+        errors: string[];
+      };
+    }).parsePhaseReportFile.bind(rm);
+
+    const report = JSON.stringify({
+      schemaVersion: 1,
+      phase: 'spec_check_layered',
+      reasons: ['valid reason', 42, null, 'another reason'],
+      evidenceRefs: ['file:x.ts:1', { bad: true }, 'file:y.ts:2'],
+    });
+    const result = parse(report, 'spec_check_layered');
+    expect(result.reasons).toEqual(['valid reason', 'another reason']);
+    expect(result.evidenceRefs).toEqual(['file:x.ts:1', 'file:y.ts:2']);
+  });
+
+  it('spec_check_persist normalizes status updates same as task_spec_check', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-spec-check-persist',
+      `
+workflow:
+  name: fixture-spec-check-persist
+  version: 1
+  start: spec_check_persist
+phases:
+  spec_check_persist:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2003;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    // Write phase-report that sets taskFailed=true
+    // The normalizePhaseStatusUpdates for spec_check_persist should enforce hasMoreTasks=true, taskPassed=false, allTasksComplete=false
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'spec_check_persist',
+          workflow: 'fixture-spec-check-persist',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      // Write a phase-report with taskFailed=true on every spawn
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            phase: 'spec_check_persist',
+            statusUpdates: { taskFailed: true },
+            reasons: ['Criterion X not met'],
+            evidenceRefs: ['file:src/x.ts:42'],
+          }, null, 2) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 50);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const updated = await readIssueJson(stateDir);
+    const status = updated?.status as Record<string, unknown> | undefined;
+
+    // Key assertion: normalizePhaseStatusUpdates for spec_check_persist should enforce:
+    // taskFailed=true → taskPassed=false, hasMoreTasks=true, allTasksComplete=false
+    expect(status?.taskFailed).toBe(true);
+    expect(status?.taskPassed).toBe(false);
+    expect(status?.hasMoreTasks).toBe(true);
+    expect(status?.allTasksComplete).toBe(false);
+
+    // Phase should transition to implement_task via workflow guard
+    expect(updated?.phase).toBe('implement_task');
+
+    // Verify the phase-report audit was written with reasons/evidenceRefs
+    const reportRaw = await fs.readFile(path.join(stateDir, 'phase-report.json'), 'utf-8');
+    const report = JSON.parse(reportRaw) as Record<string, unknown>;
+    expect(report.source).toBe('agent_file');
+    expect(report.reasons).toEqual(['Criterion X not met']);
+    expect(report.evidenceRefs).toEqual(['file:src/x.ts:42']);
+  }, 15000);
+
+  it('spec_check_mode_select disallows task status updates (empty allowed list)', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-spec-check-mode-select',
+      `
+workflow:
+  name: fixture-spec-check-mode-select
+  version: 1
+  start: spec_check_mode_select
+phases:
+  spec_check_mode_select:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: complete
+        auto: true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2004;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    // Write phase-report that tries to set taskPassed (should be ignored for mode_select)
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'spec_check_mode_select',
+          workflow: 'fixture-spec-check-mode-select',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const spawn = (() => {
+      // Write a phase-report that attempts to set status flags
+      void (async () => {
+        await fs.writeFile(
+          path.join(stateDir, 'phase-report.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            phase: 'spec_check_mode_select',
+            statusUpdates: { taskPassed: true, taskFailed: false },
+          }, null, 2) + '\n',
+          'utf-8',
+        );
+      })();
+      return makeFakeChild(0, 50);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    // Phase should reach terminal (complete)
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('complete');
+
+    // Status flags should NOT have been set — mode_select has empty allowed list
+    const status = updated?.status as Record<string, unknown> | undefined;
+    expect(status?.taskPassed).toBeUndefined();
+    expect(status?.taskFailed).toBeUndefined();
+
+    // Verify audit report shows the fields were ignored
+    const reportRaw = await fs.readFile(path.join(stateDir, 'phase-report.json'), 'utf-8');
+    const report = JSON.parse(reportRaw) as Record<string, unknown>;
+    const ignored = report.ignoredStatusKeys as string[];
+    expect(ignored).toContain('taskPassed');
+    expect(ignored).toContain('taskFailed');
+  }, 15000);
+
+  it('transitions through split spec-check phases: implement_task -> mode_select -> legacy -> persist', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-split-spec-check',
+      `
+workflow:
+  name: fixture-split-spec-check
+  version: 1
+  start: implement_task
+phases:
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: spec_check_mode_select
+        auto: true
+  spec_check_mode_select:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: spec_check_legacy
+        auto: true
+  spec_check_legacy:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: spec_check_persist
+        auto: true
+  spec_check_persist:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: complete
+        when: status.allTasksComplete == true
+      - to: implement_task
+        when: status.taskPassed == true and status.hasMoreTasks == true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2005;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'fixture-split-spec-check',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {},
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    let iteration = 0;
+    const spawn = (() => {
+      iteration += 1;
+      // On 4th spawn (spec_check_persist), write allTasksComplete=true
+      void (async () => {
+        if (iteration === 4) {
+          await fs.writeFile(
+            path.join(stateDir, 'phase-report.json'),
+            JSON.stringify({
+              schemaVersion: 1,
+              phase: 'spec_check_persist',
+              statusUpdates: { allTasksComplete: true },
+              reasons: ['All criteria verified'],
+              evidenceRefs: ['file:src/main.ts:1'],
+            }, null, 2) + '\n',
+            'utf-8',
+          );
+        }
+      })();
+      return makeFakeChild(0, 50);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 10, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    const updated = await readIssueJson(stateDir);
+    expect(updated?.phase).toBe('complete');
+
+    // The run should have completed via state (terminal phase reached)
+    expect(rm.getStatus().completed_via_state).toBe(true);
+    expect(rm.getStatus().completion_reason).toContain('terminal phase');
+
+    // allTasksComplete normalization should have set taskPassed=true, hasMoreTasks=false
+    const status = updated?.status as Record<string, unknown> | undefined;
+    expect(status?.allTasksComplete).toBe(true);
+    expect(status?.taskPassed).toBe(true);
+    expect(status?.hasMoreTasks).toBe(false);
+  }, 20000);
+
+  it('setup failure during spec-check phase resolves to setup_failure completion', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 2006;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    // Start at spec_check_mode_select in a non-parallel workflow to test sequential behavior
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'hello',
+          workflow: 'fixture-trivial',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    // Spawn that emits an error (simulate spawn failure)
+    const spawn = (() => makeFakeChild(-1, 25, 'SIGKILL')) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 2, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    // The process exited non-zero so there should be an error recorded
+    const status = rm.getStatus();
+    expect(status.last_error).toBeTruthy();
+    expect(status.returncode).not.toBe(0);
+  }, 15000);
 });

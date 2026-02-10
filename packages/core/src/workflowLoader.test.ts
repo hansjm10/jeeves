@@ -16,7 +16,42 @@ describe('workflowLoader', () => {
     expect(workflow.phases.design_review.type).toBe('evaluate');
     expect(workflow.phases.complete.type).toBe('terminal');
     expect(workflow.phases.design_classify.transitions.find((t) => t.to === 'design_research')).toBeDefined();
-    expect(workflow.phases.task_spec_check.transitions.length).toBeGreaterThan(1);
+
+    // Verify layered spec-check phase graph
+    expect(workflow.phases.spec_check_mode_select).toBeDefined();
+    expect(workflow.phases.spec_check_mode_select.type).toBe('evaluate');
+    expect(workflow.phases.spec_check_legacy).toBeDefined();
+    expect(workflow.phases.spec_check_legacy.type).toBe('evaluate');
+    expect(workflow.phases.spec_check_layered).toBeDefined();
+    expect(workflow.phases.spec_check_layered.type).toBe('evaluate');
+    expect(workflow.phases.spec_check_persist).toBeDefined();
+    expect(workflow.phases.spec_check_persist.type).toBe('evaluate');
+
+    // Mode select routes to layered (priority 1 with guard) or legacy (priority 2 auto fallback)
+    const modeSelectTransitions = workflow.phases.spec_check_mode_select.transitions;
+    expect(modeSelectTransitions.length).toBe(2);
+    const layeredTransition = modeSelectTransitions.find((t) => t.to === 'spec_check_layered');
+    expect(layeredTransition).toBeDefined();
+    expect(layeredTransition!.when).toContain('status.settings.useLayeredSkills == true');
+    expect(layeredTransition!.when).toContain('status.layeredSkillAvailability.safeShellSearch == true');
+    expect(layeredTransition!.when).toContain('status.layeredSkillAvailability.jeevesTaskSpecCheck == true');
+    const legacyFallback = modeSelectTransitions.find((t) => t.to === 'spec_check_legacy');
+    expect(legacyFallback).toBeDefined();
+    expect(legacyFallback!.auto).toBe(true);
+
+    // Both legacy and layered auto-transition to persist
+    expect(workflow.phases.spec_check_legacy.transitions.find((t) => t.to === 'spec_check_persist')).toBeDefined();
+    expect(workflow.phases.spec_check_layered.transitions.find((t) => t.to === 'spec_check_persist')).toBeDefined();
+
+    // Persist has the same routing transitions as the old task_spec_check
+    expect(workflow.phases.spec_check_persist.transitions.length).toBeGreaterThan(1);
+    expect(workflow.phases.spec_check_persist.transitions.find((t) => t.to === 'fix_ci')).toBeDefined();
+    expect(workflow.phases.spec_check_persist.transitions.find((t) => t.to === 'implement_task')).toBeDefined();
+    expect(workflow.phases.spec_check_persist.transitions.find((t) => t.to === 'completeness_verification')).toBeDefined();
+
+    // implement_task and fix_ci route to mode_select (not the old task_spec_check)
+    expect(workflow.phases.implement_task.transitions.find((t) => t.to === 'spec_check_mode_select')).toBeDefined();
+    expect(workflow.phases.fix_ci.transitions.find((t) => t.to === 'spec_check_mode_select')).toBeDefined();
   });
 
   it('parses provider fields from a raw workflow object', () => {

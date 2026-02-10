@@ -171,10 +171,30 @@ const TRANSITION_STATUS_FIELDS = [
 type TransitionStatusField = (typeof TRANSITION_STATUS_FIELDS)[number];
 type TransitionStatusUpdates = Partial<Record<TransitionStatusField, boolean>>;
 
+/** Set of all spec-check phase names (mode-select, legacy, layered, persist). */
+const SPEC_CHECK_PHASES = new Set([
+  'task_spec_check',           // legacy single-phase (backward compat)
+  'spec_check_mode_select',
+  'spec_check_legacy',
+  'spec_check_layered',
+  'spec_check_persist',
+]);
+
+function isSpecCheckPhase(phase: string): boolean {
+  return SPEC_CHECK_PHASES.has(phase);
+}
+
 const PHASE_ALLOWED_STATUS_UPDATES: Record<string, readonly TransitionStatusField[]> = {
   design_review: ['designApproved', 'designNeedsChanges'],
   design_edit: ['designNeedsChanges'],
+  // Legacy single-phase spec check (backward compat)
   task_spec_check: ['taskPassed', 'taskFailed', 'hasMoreTasks', 'allTasksComplete'],
+  // Split spec-check phases: mode-select and check phases don't set status flags;
+  // persist phase owns the canonical task-loop and CI routing flags.
+  spec_check_mode_select: [],
+  spec_check_legacy: [],
+  spec_check_layered: [],
+  spec_check_persist: ['taskPassed', 'taskFailed', 'hasMoreTasks', 'allTasksComplete', 'commitFailed', 'pushFailed'],
   implement_task: ['commitFailed', 'pushFailed'],
   code_review: ['reviewClean', 'reviewNeedsChanges'],
   code_fix: ['reviewNeedsChanges'],
@@ -258,7 +278,7 @@ function normalizePhaseStatusUpdates(
     if (next.preCheckFailed === true) next.preCheckPassed = false;
   }
 
-  if (phase === 'task_spec_check') {
+  if (phase === 'task_spec_check' || phase === 'spec_check_persist') {
     if (next.taskFailed === true) {
       next.taskPassed = false;
       next.hasMoreTasks = true;
@@ -1011,17 +1031,22 @@ export class RunManager {
         const startAtMs = Date.now();
         const iterStartedAt = nowIso();
 
-        // Check if parallel mode is enabled and applicable for this phase
-        const isParallelPhase = currentPhase === 'implement_task' || currentPhase === 'task_spec_check';
+        // Check if parallel mode is enabled and applicable for this phase.
+        // Spec-check sub-phases (mode-select, legacy, layered, persist) map to the
+        // parallel runner's 'task_spec_check' worker phase so existing wave logic applies.
+        const isParallelPhase = currentPhase === 'implement_task' || currentPhase === 'task_spec_check' || isSpecCheckPhase(currentPhase);
         const parallelEnabled = isParallelPhase && await isParallelModeEnabled(this.stateDir!);
 
         let exitCode: number;
         let parallelWaveExecuted = false;
 
         if (parallelEnabled) {
-          // Run parallel wave for task execution phases
+          // Run parallel wave for task execution phases.
+          // Map split spec-check phases to the parallel runner's 'task_spec_check' worker phase.
+          const parallelPhase: 'implement_task' | 'task_spec_check' =
+            currentPhase === 'implement_task' ? 'implement_task' : 'task_spec_check';
           const parallelResult = await this.runParallelWave({
-            currentPhase: currentPhase as 'implement_task' | 'task_spec_check',
+            currentPhase: parallelPhase,
             workflowName,
             effectiveProvider,
             effectiveModel,
@@ -1039,10 +1064,10 @@ export class RunManager {
 
             // Per §6.2.8 "Timeout stop":
             // - implement_task timeout: Keep phase at implement_task so next run can retry
-            //   (transitioning to task_spec_check would create stuck state with no active wave)
-            // - task_spec_check timeout: Evaluate transitions to go back to implement_task
+            //   (transitioning to spec_check_* would create stuck state with no active wave)
+            // - spec-check timeout: Evaluate transitions to go back to implement_task
             //   (taskFailed=true triggers the transition per workflows/default.yaml)
-            if (currentPhase === 'task_spec_check') {
+            if (isSpecCheckPhase(currentPhase)) {
               const timeoutIssue = await readIssueJson(this.stateDir!);
               if (timeoutIssue) {
                 const nextPhase = engine.evaluateTransitions(currentPhase, timeoutIssue);
@@ -1070,7 +1095,7 @@ export class RunManager {
             this.broadcast('run', { run: this.status });
             await this.appendViewerLog(viewerLogPath, `[ERROR] Run stopped due to merge conflict during ${currentPhase}`);
 
-            // T15: Ensure issue.json is left in a resumable state (phase != task_spec_check when
+            // T15: Ensure issue.json is left in a resumable state (phase != spec-check when
             // status.parallel is cleared). The merge conflict handler in ParallelRunner already:
             // - Marks the conflicted task as 'failed' in tasks.json
             // - Writes canonical feedback pointing to retained artifacts
@@ -1079,11 +1104,11 @@ export class RunManager {
             // However, it does NOT set status.taskFailed=true (which updateCanonicalStatusFlags
             // only sets based on spec-check outcomes, not merge outcomes). We need to:
             // 1. Ensure status.taskFailed=true so the workflow transition guard is satisfied
-            // 2. Evaluate workflow transitions to move phase from task_spec_check to implement_task
+            // 2. Evaluate workflow transitions to move phase from spec-check to implement_task
             const conflictIssue = await readIssueJson(this.stateDir!);
             if (conflictIssue) {
               const conflictStatus = (conflictIssue.status as Record<string, unknown>) ?? {};
-              // Set taskFailed=true to satisfy the workflow transition guard (task_spec_check -> implement_task)
+              // Set taskFailed=true to satisfy the workflow transition guard (spec_check_persist -> implement_task)
               conflictStatus.taskFailed = true;
               conflictStatus.taskPassed = false;
               conflictStatus.hasMoreTasks = true;
@@ -1244,10 +1269,10 @@ export class RunManager {
         }
 
         // Advance phase via workflow transitions (viewer-server owns orchestration)
-        // Skip transitions if stopRequested is set, to avoid advancing to task_spec_check
+        // Skip transitions if stopRequested is set, to avoid advancing to spec_check_mode_select
         // after a mid-implement manual stop (which clears status.parallel via rollbackActiveWaveOnStop).
         // Per §6.2.8: On manual stop mid-wave, the phase should remain at implement_task so the
-        // next run can re-select tasks rather than entering task_spec_check with no active wave.
+        // next run can re-select tasks rather than entering spec-check with no active wave.
         if (this.stopRequested) {
           await this.appendViewerLog(viewerLogPath, `[STOP] Stop requested; skipping phase transition`);
           await finalizeIterationArtifacts();
@@ -1383,7 +1408,9 @@ export class RunManager {
   }
 
   /**
-   * Executes a parallel wave for implement_task or task_spec_check phases.
+   * Executes a parallel wave for implement_task or spec-check phases.
+   * Spec-check sub-phases (mode-select, legacy, layered, persist) are
+   * mapped to the parallel runner's 'task_spec_check' worker phase.
    * Returns the effective exit code and whether a wave was actually executed.
    */
   private async runParallelWave(params: {

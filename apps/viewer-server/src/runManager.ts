@@ -992,6 +992,19 @@ export class RunManager {
 	            issueJson.phase = currentPhase;
 	            await writeIssueJson(this.stateDir!, issueJson);
 	            this.broadcast('state', await this.getStateSnapshot());
+	          } else if (currentPhaseRaw === 'task_spec_check' && workflow.phases['spec_check_persist']) {
+	            // Legacy task_spec_check was split into spec_check_{mode_select,legacy,layered,persist}.
+	            // Map to spec_check_persist which owns the terminal transition guards
+	            // (taskFailed -> implement_task, allTasksComplete -> completeness_verification, etc.).
+	            // This ensures parallel wave timeout/merge-conflict recovery can evaluate transitions.
+	            await this.appendViewerLog(
+	              viewerLogPath,
+	              `[MIGRATE] issue.json.phase=task_spec_check is not present in workflow '${workflowName}'. Migrating to spec_check_persist.`,
+	            );
+	            currentPhase = 'spec_check_persist';
+	            issueJson.phase = currentPhase;
+	            await writeIssueJson(this.stateDir!, issueJson);
+	            this.broadcast('state', await this.getStateSnapshot());
 	          } else {
 	            throw new Error(
 	              `Unknown phase '${currentPhase}' for workflow '${workflowName}'. Valid phases: ${Object.keys(workflow.phases).sort().join(', ')}`,

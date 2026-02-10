@@ -521,25 +521,26 @@ T5 -> depends on T3, T4
 
 ### Replay Validation (Baseline vs Layered)
 - [x] Run baseline with `status.settings.useLayeredSkills=false` and capture `viewer-run.log`, `.jeeves/phase-report.json`, and progress entries.
-  - **Result**: T1–T9 spec-check runs executed under legacy mode (flag absent from issue state). Structural analysis of progress outputs and phase-report handling captured as baseline corpus.
-- [x] Run layered mode with `status.settings.useLayeredSkills=true` on the same task set and capture the same artifacts.
-  - **Result**: Structural projection from implemented skills (`safe-shell-search`, `jeeves-task-spec-check`) and layered prompt (`task.spec_check.layered.md`) on the same 10-task, 32-criteria corpus.
+  - **Result**: T1–T9 spec-check runs (10 iterations) executed under legacy mode (flag absent from issue state). Artifacts captured: `last-run.log`, `phase-report.json`, `tool-usage-diagnostics.json`, `tool-raw/` per iteration under `.jeeves/.runs/20260210T004308Z-796792.qDgWnZjy/iterations/`. Progress entries in DB (IDs 361–451).
+- [ ] Run layered mode with `status.settings.useLayeredSkills=true` on the same task set and capture the same artifacts.
+  - **Result**: Not executed. Layered workflow was built by this issue but orchestrator was not available for end-to-end execution. Structural analysis provided. See limitations in full report.
 - [x] Compare command hygiene failures on the same corpus (minimum 10 tasks or 30 evaluated criteria, whichever is larger):
   - Corpus: 10 tasks, 32 criteria (meets both thresholds).
-  - Shell-first search violations: baseline 4, layered 1 (−75%).
-  - Unverifiable criterion claims: baseline 3, layered 1 (−67%).
-- [x] Apply AC#4 success threshold (all required):
-  - Baseline combined = 8 (≥ 2 threshold met).
-  - Layered shell-first (1) ≤ baseline shell-first (4) — met.
-  - Layered unverifiable (1) ≤ baseline unverifiable (3) — met.
-  - Layered combined (3) is 62.5% lower than baseline (8) and 5 absolute lower — exceeds both 30% and 1-absolute thresholds.
+  - **Measured baseline**: Shell-first search violations: 0. Investigation loop violations: 0. Unverifiable criterion claims: 0.
+  - **Projected layered**: Shell-first: 0. Loop violations: 0. Unverifiable claims: 0.
+  - Note: Baseline command hygiene was better than originally estimated (0 vs estimated 6–12).
+- [ ] Apply AC#4 success threshold (all required):
+  - Baseline combined = 0 (measured from actual runs).
+  - **NOT DEMONSTRABLE**: When baseline = 0, the "≥30% + ≥1 absolute lower" threshold is mathematically unsatisfiable. This is a positive finding — baseline command hygiene is already clean.
 - [x] Compare evidence quality:
-  - Layered evidence schema requires `criteria[].verdict` enum and `criteria[].evidence[]` with `minItems: 1` — 100% criterion-level verdict and evidence coverage.
-  - `phase-report.json` `reasons[]`/`evidenceRefs[]` normalization verified by 3 dedicated tests in `runManager.test.ts`.
+  - **Measured baseline**: 0/10 phase reports with `reasons[]`/`evidenceRefs[]`. 32/35 criteria with `file:line` evidence (91.4%).
+  - **Projected layered**: 10/10 phase reports with evidence arrays (schema requires `evidence[]` with `minItems: 1`). 100% criterion `file:line` coverage.
+  - Layered system's primary value is in evidence structure, not command-hygiene reduction.
+  - `phase-report.json` normalization verified by 3 dedicated tests in `runManager.test.ts`.
 - [x] Verify fallback:
   - Workflow `spec_check_mode_select` has `auto: true` priority-2 transition to `spec_check_legacy` — unconditional fallback when layered guard fails.
   - Mode-select prompt documents 5 explicit fallback reason codes.
-  - Workflow loader, runManager, and parallelRunner tests all verify fallback behavior.
+  - 44 passing tests (workflow loader: 23, runManager: 9, parallelRunner: 12) verify fallback behavior.
 
 **Full report**: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 

@@ -310,11 +310,12 @@ Fallback is silent and non-blocking: the task loop continues in legacy mode with
 
 ### Validation Results
 
-Baseline-vs-layered replay validation was executed on a 10-task, 32-criteria corpus (issue #108 task loop). Key findings:
+Baseline-vs-layered replay validation was performed on a 10-task, 32-criteria corpus (issue #108 task loop). Key findings:
 
-- **Command hygiene**: Layered mode reduces combined command-hygiene errors by 62.5% (baseline 8 → layered 3), exceeding the 30% threshold required by AC#4.
-- **Evidence quality**: Layered evidence schema structurally requires per-criterion `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays, achieving 100% criterion coverage.
-- **Fallback safety**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition — no run failure possible.
+- **Command hygiene (measured baseline)**: Baseline spec-check iterations (10 runs, legacy mode) measured 0 shell-first search violations, 0 investigation loop violations, and 0 unverifiable criterion claims. The existing `<tooling_guidance>` prompt guidance achieves good compliance.
+- **Evidence quality (structural improvement)**: Baseline phase reports contain 0/10 `reasons[]`/`evidenceRefs[]` arrays. The layered `jeeves-task-spec-check` evidence schema structurally requires per-criterion `PASS`/`FAIL`/`INCONCLUSIVE` verdicts with non-empty evidence arrays — projecting 100% structured criterion coverage when deployed.
+- **Fallback safety (tested)**: Missing or unreadable skills deterministically route to legacy mode via unconditional `auto: true` workflow transition. Verified by 44 passing unit tests (workflow loader, runManager, parallelRunner).
+- **Limitation**: End-to-end layered run not yet executed; structural analysis only for layered mode. Post-merge manual verification recommended.
 
 Full report: [`docs/issue-108-replay-validation.md`](issue-108-replay-validation.md)
 

@@ -74,13 +74,15 @@ The existing skills infrastructure (`/codex/skills/`, `skills/` in-repo, `regist
 
 2. **`jeeves-task-spec-check` (adapter skill)**: Create at `skills/implement/jeeves-task-spec-check/SKILL.md`. Encodes the Jeeves-specific artifact contracts (`phase-report.json` schema, `task-feedback.md` format, `filesAllowed` enforcement rules, MCP state tool usage for status updates). This extracts the Jeeves-specific operational logic from the monolithic `task.spec_check.md` prompt into a composable skill.
 
-3. **Registry integration**: Update `skills/registry.yaml` to map `task_spec_check → [safe-shell-search, jeeves-task-spec-check, code-quality]`. While registry.yaml isn't consumed by code yet, this establishes the intended phase-skill binding.
+3. **Runtime discoverability contract**: Add explicit `safe-shell-search` and `jeeves-task-spec-check` entries to root `AGENTS.md` (`Available skills`) pointing to `skills/common/safe-shell-search/SKILL.md` and `skills/implement/jeeves-task-spec-check/SKILL.md`. `spec_check_mode_select` resolves layered availability from these exact skill IDs in prepended workspace instructions and verifies each listed `SKILL.md` path is readable.
 
-4. **Prompt simplification**: Slim down `prompts/task.spec_check.md` to focus on the core verification workflow (load task → verify criteria → produce verdict) while delegating tooling guidance and artifact contracts to the skills. Remove duplicated `<tooling_guidance>` blocks from all prompts.
+4. **Registry integration**: Update `skills/registry.yaml` to map `task_spec_check → [safe-shell-search, jeeves-task-spec-check, code-quality]`. While registry.yaml isn't consumed by code yet, this establishes the intended phase-skill binding.
 
-5. **Opt-in rollout**: Use `issue.json.status.settings.useLayeredSkills: true|false` as the feature flag. When false, existing prompts work unchanged. When true, the simplified prompt + skills are used. This follows the established settings pattern.
+5. **Prompt simplification**: Slim down `prompts/task.spec_check.md` to focus on the core verification workflow (load task → verify criteria → produce verdict) while delegating tooling guidance and artifact contracts to the skills. Remove duplicated `<tooling_guidance>` blocks from all prompts.
 
-6. **Data model**: Add task spec-check evidence schema to skill references (structured PASS/FAIL/INCONCLUSIVE per criterion with evidence type, location, and confidence).
+6. **Opt-in rollout**: Use `issue.json.status.settings.useLayeredSkills: true|false` as the feature flag. When false, existing prompts work unchanged. When true, the simplified prompt + skills are used. This follows the established settings pattern.
+
+7. **Data model**: Add task spec-check evidence schema to skill references (structured PASS/FAIL/INCONCLUSIVE per criterion with evidence type, location, and confidence).
 
 ### Alternatives Considered
 
@@ -94,7 +96,7 @@ The existing skills infrastructure (`/codex/skills/`, `skills/` in-repo, `regist
 
 ### Risks and Unknowns
 
-- **Skill discovery gap**: The in-repo `skills/` directory is not currently surfaced to agents via AGENTS.md. The AGENTS.md listing comes from `/codex/skills/` (external). **Mitigation**: Either (a) copy new skills to `/codex/skills/` during deployment, or (b) add a build step that generates AGENTS.md skill listings from `skills/registry.yaml`. Need to determine which path during workflow design.
+- **Skill discovery gap**: The in-repo `skills/` directory is not currently surfaced to agents unless explicitly listed in root `AGENTS.md`. **Mitigation**: Treat root `AGENTS.md` as runtime source-of-truth and add both new skill entries there with repo-local `SKILL.md` paths; if an environment requires `/codex/skills`, add a sync step that preserves the same skill IDs.
 - **Context window cost**: Adding two new skills increases metadata overhead in every context window by ~200 words (2 × ~100-word descriptions). Full SKILL.md bodies add more when triggered. **Mitigation**: Keep skill bodies concise (<200 lines each); use progressive disclosure for reference materials.
 - **Regression risk**: Simplifying `task.spec_check.md` could lose nuanced guidance that skills don't capture. **Mitigation**: The opt-in flag allows A/B comparison. Keep original prompt as fallback. Validate with replay/simulation before defaulting.
 - **Registry consumption**: `skills/registry.yaml` is currently an unused design artifact. Implementation of phase-skill provisioning code is needed but is out of scope for the core skill creation. **Mitigation**: Accept that registry is declarative documentation for now; actual provisioning can follow in a separate issue.
@@ -142,6 +144,16 @@ The existing skills infrastructure (`/codex/skills/`, `skills/` in-repo, `regist
 - **In scope**: Skill-layer architecture and ownership, new core + adapter skills for MVP, task-spec-check integration path, opt-in rollout control, and validation/replay expectations.
 - **Out of scope**: Full-surface skill migration, unrelated viewer UX changes, and non-skill workflow refactors.
 
+### Issue AC#3 Artifact Contract Mapping
+| Issue AC#3 Contract Term | Canonical Artifact/Path Contract | Deterministic Mapping Rule |
+|--------------------------|----------------------------------|----------------------------|
+| `issue.json` | Canonical issue state document addressed by `state_get_issue` / `state_put_issue` for the current `state_dir` (normalized storage keyed by state directory). | Any legacy reference to `issue.json` maps to the MCP state issue document for the active `state_dir`. |
+| `tasks.json` | Canonical task document addressed by `state_get_tasks` / `state_put_tasks` for the current `state_dir` (normalized storage keyed by state directory). | Any legacy reference to `tasks.json` maps to the MCP state task document for the active `state_dir`. |
+| `progress.txt` | Canonical progress event log addressed by `state_append_progress` / `state_get_progress` and rendered from DB-backed `progress_events` entries for the current `state_dir`. | `progress.txt` is a legacy label; replay comparisons use the canonical rendered progress log text from state tools. |
+| Task feedback files | `.jeeves/task-feedback.md` (sequential) and `.jeeves/task-feedback/<taskId>.md` (parallel). | Sequential FAIL writes the single canonical feedback file; parallel FAIL writes canonical per-task feedback files. |
+
+Canonical state path resolution: `.jeeves/` in the worktree points to the active issue state directory under `${JEEVES_DATA_DIR}/issues/<owner>/<repo>/<issue>/`.
+
 ---
 
 ## 2. Workflow
@@ -154,7 +166,7 @@ Scope: task-loop workflow from `implement_task` through `task_spec_check`, inclu
 | `implement_task` | Implements the current task (sequential run or parallel implement wave). | Entered from `pre_implementation_check`, `task_spec_check` retry transitions, or `completeness_verification` when missing work is detected. |
 | `spec_check_mode_select` | Resolves which spec-check operating mode to run. | Entered after successful `implement_task` completion (exit code `0`, no stop request). |
 | `spec_check_legacy` | Runs current monolithic `task.spec_check.md` behavior. | Entered when `status.settings.useLayeredSkills != true` (missing/false/invalid) or layered-skill prerequisites are unavailable. |
-| `spec_check_layered` | Runs simplified `task.spec_check` flow plus layered skills (`safe-shell-search` + `jeeves-task-spec-check` + `code-quality`). | Entered when `status.settings.useLayeredSkills == true` and required skills are available. |
+| `spec_check_layered` | Runs simplified `task.spec_check` flow plus layered skills (`safe-shell-search` + `jeeves-task-spec-check` + `code-quality`). | Entered only when `status.settings.useLayeredSkills == true` and `status.layeredSkillAvailability.safeShellSearch == true` and `status.layeredSkillAvailability.jeevesTaskSpecCheck == true`. |
 | `spec_check_persist` | Commits/verifies status updates and produces canonical artifacts for transition guards. | Entered after either spec-check mode completes verification. |
 | `parallel_timeout_recovery` | Handles timeout cleanup for active parallel waves so workflow remains resumable. | Entered when implement/spec-check wave exceeds iteration or inactivity timeout. |
 | `merge_conflict_recovery` | Converts merge-conflict outcomes into retryable canonical state. | Entered when spec-check wave merge step reports a conflict. |
@@ -169,6 +181,13 @@ Terminal states:
 - `run_stopped_setup_failure`: terminal because run manager sets `completion_reason` to setup failure and exits current run loop.
 - `task_loop_handoff`: terminal for task-loop scope because control transitions to `prepare_pr` workflow segment.
 
+### Layered Skill Availability Resolution (Deterministic)
+1. `spec_check_mode_select` first evaluates rollout flag semantics: only literal `status.settings.useLayeredSkills == true` is eligible for layered mode.
+2. If eligible, mode-select resolves required skills from prepended root `AGENTS.md` `Available skills` metadata using exact IDs: `safe-shell-search`, `jeeves-task-spec-check`.
+3. For each required skill, mode-select verifies the declared `file:` path exists and is readable (`SKILL.md` parse/read succeeds).
+4. Mode-select writes `issue.status.layeredSkillAvailability.safeShellSearch` and `issue.status.layeredSkillAvailability.jeevesTaskSpecCheck` via MCP state tools.
+5. Transition to `spec_check_layered` is allowed only when both booleans are `true`; any missing/false check deterministically routes to `spec_check_legacy` with a fallback warning in progress.
+
 ### Transitions
 | From | Event/Condition | To | Side Effects |
 |------|-----------------|-----|--------------|
@@ -176,9 +195,9 @@ Terminal states:
 | `implement_task` | Phase exits `0` and stop not requested | `spec_check_mode_select` | Writes iteration artifacts; in sequential mode commits orchestrator-owned status updates from `.jeeves/phase-report.json`/inferred diff. |
 | `implement_task` | Parallel wave timeout (`iteration_timeout` or `inactivity_timeout`) | `parallel_timeout_recovery` | Marks wave tasks failed, writes synthetic `task-feedback/<taskId>.md`, clears `status.parallel`, appends timeout progress entry. |
 | `implement_task` | Parallel setup failure (sandbox create/spawn/orchestration error) | `run_stopped_setup_failure` | Rolls back task reservations, clears/avoids stale `status.parallel`, writes wave setup-failure summary, sets run `last_error` and `completion_reason=setup_failure`. |
-| `spec_check_mode_select` | `status.settings.useLayeredSkills == true` and skills resolvable | `spec_check_layered` | Records layered mode choice in iteration diagnostics/progress context. |
+| `spec_check_mode_select` | `status.settings.useLayeredSkills == true && status.layeredSkillAvailability.safeShellSearch == true && status.layeredSkillAvailability.jeevesTaskSpecCheck == true` | `spec_check_layered` | Records layered mode choice in iteration diagnostics/progress context. |
 | `spec_check_mode_select` | Flag missing/false/invalid | `spec_check_legacy` | Defaults safely to legacy mode; logs mode-selection rationale. |
-| `spec_check_mode_select` | Flag true but skill resolution fails | `spec_check_legacy` | Logs fallback warning; avoids blocking task loop on provisioning issues. |
+| `spec_check_mode_select` | `status.settings.useLayeredSkills == true` and either required skill availability flag is not `true` | `spec_check_legacy` | Logs fallback warning including which required skill check failed; avoids blocking task loop on provisioning issues. |
 | `spec_check_legacy` | Verification completes | `spec_check_persist` | Produces PASS/FAIL evidence, updates task status via MCP/state writes, writes `.jeeves/phase-report.json` and optional feedback artifact. |
 | `spec_check_layered` | Verification completes | `spec_check_persist` | Same persisted contract as legacy mode; operational guidance comes from layered skills instead of inline prompt blocks. |
 | `spec_check_legacy` | Parallel wave timeout | `parallel_timeout_recovery` | Same timeout cleanup as implement wave, plus spec-check-specific failure feedback. |
@@ -212,6 +231,7 @@ Transition reversibility:
 | `implement_task` | Parallel implement wave timeout | `parallel_timeout_recovery` | Marks all active wave tasks `failed`, writes synthetic feedback per task, clears `status.parallel`, appends timeout progress entry. |
 | `implement_task` | Sandbox creation/worker spawn failure | `run_stopped_setup_failure` | Terminates started workers, rolls back reserved task statuses, writes setup-failure wave summary/progress, stops run immediately. |
 | `spec_check_mode_select` | Invalid `status.settings.useLayeredSkills` type/value | `spec_check_legacy` | Defaults to legacy mode, records warning, proceeds without blocking. |
+| `spec_check_mode_select` | Required layered skill missing/unreadable in AGENTS-derived skill set | `spec_check_legacy` | Sets `status.layeredSkillAvailability.*` booleans and records deterministic fallback reason (`missing_skill` or `unreadable_skill`). |
 | `spec_check_legacy` | Criterion unverifiable / filesAllowed violation | `spec_check_persist` | Sets failure flags (`taskFailed=true`, `hasMoreTasks=true`, `allTasksComplete=false`), writes task feedback artifact, records criterion-level evidence. |
 | `spec_check_layered` | Criterion unverifiable / filesAllowed violation | `spec_check_persist` | Same canonical failure contract as legacy mode; failure remains retryable. |
 | `spec_check_legacy` | Invalid/mismatched `.jeeves/phase-report.json` (schema/phase/object errors) | `spec_check_persist` | Parses with warnings, filters/normalizes allowed keys, emits audit report with `validationErrors`, logs `[PHASE_REPORT] warning`. |
@@ -262,6 +282,8 @@ N/A - This feature does not add or modify external interfaces.
 | Location | Field | Type | Required | Default | Constraints |
 |----------|-------|------|----------|---------|-------------|
 | `issue.json` | `status.settings.useLayeredSkills` | boolean | no | `false` | Only literal `true` enables layered mode. `false`, missing, or invalid types must route to `spec_check_legacy` and emit a warning. |
+| `issue.json` | `status.layeredSkillAvailability.safeShellSearch` | boolean | no | `false` | Set by `spec_check_mode_select` deterministic skill-resolution check against AGENTS-listed skills. |
+| `issue.json` | `status.layeredSkillAvailability.jeevesTaskSpecCheck` | boolean | no | `false` | Set by `spec_check_mode_select` deterministic skill-resolution check against AGENTS-listed skills. |
 | `skills/registry.yaml` | `phases.task_spec_check` | string[] | yes | `["code-quality"]` | Ordered skill IDs. Target mapping for this feature: `["safe-shell-search", "jeeves-task-spec-check", "code-quality"]`. IDs must match concrete skill directory names. |
 | `.jeeves/phase-report.json` | `reasons` | string[] | no | `[]` | Keep only non-empty strings; non-array values are ignored. |
 | `.jeeves/phase-report.json` | `evidenceRefs` | string[] | no | `[]` | Keep only non-empty strings; each entry must point to evidence (`<path>:<line>`, command, or artifact ref). Non-array values are ignored. |
@@ -274,6 +296,12 @@ N/A - This feature does not add or modify external interfaces.
 - Set by: Issue configuration (manual or viewer-side settings write).
 - Read by: `spec_check_mode_select` transition guard before entering `spec_check_layered`.
 - Derived: No.
+
+**`status.layeredSkillAvailability.safeShellSearch` and `status.layeredSkillAvailability.jeevesTaskSpecCheck`**
+- Purpose: Persist deterministic runtime skill-availability checks used by `spec_check_mode_select`.
+- Set by: `spec_check_mode_select` phase logic after resolving AGENTS-listed skills and verifying `SKILL.md` readability.
+- Read by: `spec_check_mode_select` transitions that choose layered vs legacy path.
+- Derived: Yes (computed from current AGENTS skill metadata + file readability checks).
 
 **`phases.task_spec_check`**
 - Purpose: Declarative skill ordering for `task_spec_check`.
@@ -294,16 +322,18 @@ N/A - This feature does not add or modify external interfaces.
 - Derived: Yes (computed from acceptance criteria + observed evidence for the current run).
 
 ### Relationship & Ordering
-- `status.settings.useLayeredSkills` references skill availability (`safe-shell-search`, `jeeves-task-spec-check`, `code-quality`) in the active skill set.
-- If referenced skills are unavailable, mode selection must fall back to `spec_check_legacy`; no hard failure.
+- `status.settings.useLayeredSkills` gates whether layered resolution is attempted at all.
+- `status.layeredSkillAvailability.safeShellSearch` and `status.layeredSkillAvailability.jeevesTaskSpecCheck` are derived from AGENTS-listed skill metadata/path readability and are the explicit transition guard inputs for layered mode.
+- If either required skill availability field is not `true`, mode selection must fall back to `spec_check_legacy`; no hard failure.
 - `criteria[]` evidence records reference task acceptance criteria (`tasks.json.tasks[].acceptanceCriteria`).
 - If task definitions are deleted or changed, historical evidence remains in archived run artifacts and is treated as historical-only.
-- Ordering dependency: `useLayeredSkills` is read in `spec_check_mode_select` after `implement_task` exits `0` and before either spec-check mode executes. Mid-iteration flag changes apply on the next iteration.
+- Ordering dependency: `useLayeredSkills` is read first in `spec_check_mode_select`, then layered skill availability fields are computed, then mode transition executes. Mid-iteration flag changes apply on the next iteration.
 
 ### Migrations
 | Change | Existing Data | Migration | Rollback |
 |--------|---------------|-----------|----------|
 | Add `status.settings.useLayeredSkills` | Field absent in existing `issue.json` records | No script. Treat absent as `false` at read time; only `true` opts in. | Remove field; behavior returns to legacy mode by default. |
+| Add `status.layeredSkillAvailability.safeShellSearch` and `status.layeredSkillAvailability.jeevesTaskSpecCheck` | Fields absent in existing `issue.json` records | No script. Treat absent as `false` until next `spec_check_mode_select` recomputes values. | Remove fields; mode-select falls back to legacy when availability cannot be proven. |
 | Update `skills/registry.yaml` mapping for `task_spec_check` | Existing mapping is `["code-quality"]` | Update ordered list to `["safe-shell-search", "jeeves-task-spec-check", "code-quality"]`. | Revert list to previous value. |
 | Standardize optional `.jeeves/phase-report.json` arrays (`reasons`, `evidenceRefs`) | Reports may omit arrays | No script. On read, default missing/invalid arrays to `[]`. | Stop emitting fields; parser behavior remains backward-compatible. |
 | Add `evidence-schema.json` reference contract | No prior structured criterion evidence schema file | Add new reference file under `skills/implement/jeeves-task-spec-check/references/`. | Delete reference file and revert consumers to legacy prose-only guidance. |
@@ -391,8 +421,8 @@ T5 -> depends on T3, T4
 | ID | Title | Summary | Files | Acceptance Criteria |
 |----|-------|---------|-------|---------------------|
 | T1 | Add `safe-shell-search` Core Skill | Create reusable guardrail skill that replaces duplicated tooling-guidance behavior for search/read evidence hygiene. | `skills/common/safe-shell-search/SKILL.md` (new), `AGENTS.md` | Skill exists with explicit trigger/usage metadata; instructions require pruner-first discovery/read loop, evidence-grounded claims, and shell-fallback justification; skill is discoverable in workspace instructions. |
-| T2 | Add `jeeves-task-spec-check` Adapter Skill + Evidence Schema | Create Jeeves-specific checker skill and structured criterion evidence schema. | `skills/implement/jeeves-task-spec-check/SKILL.md` (new), `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` (new) | Adapter skill encodes state/artifact contracts (`state_*`, `.jeeves/phase-report.json`, `.jeeves/task-feedback.md`, `filesAllowed`); evidence schema enforces `PASS|FAIL|INCONCLUSIVE` verdicts and confidence range `[0,1]`; schema is valid JSON and referenced by skill. |
-| T3 | Implement Layered Spec-Check Workflow and Prompt Split | Introduce mode-select + legacy/layered/persist states and wire transitions/guards for opt-in rollout and fallback behavior. | `workflows/default.yaml`, `prompts/task.spec_check.md`, `prompts/task.spec_check.layered.md` (new), `prompts/task.spec_check.mode_select.md` (new), `prompts/task.spec_check.persist.md` (new), `packages/core/src/workflowLoader.test.ts` | Workflow contains `spec_check_mode_select`, `spec_check_legacy`, `spec_check_layered`, and `spec_check_persist` with priority-ordered transitions matching Section 2; `status.settings.useLayeredSkills == true` routes to layered mode, otherwise legacy; fallback path to legacy is explicit when layered prerequisites are not met; workflow loader tests cover new phase presence/transition expectations. |
+| T2 | Add `jeeves-task-spec-check` Adapter Skill + Evidence Schema | Create Jeeves-specific checker skill and structured criterion evidence schema. | `skills/implement/jeeves-task-spec-check/SKILL.md` (new), `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` (new), `AGENTS.md` | Adapter skill encodes state/artifact contracts (`state_*`, `.jeeves/phase-report.json`, `.jeeves/task-feedback.md`, `filesAllowed`); evidence schema enforces `PASS|FAIL|INCONCLUSIVE` verdicts and confidence range `[0,1]`; schema is valid JSON and referenced by skill; skill is discoverable via root `AGENTS.md` available-skills metadata. |
+| T3 | Implement Layered Spec-Check Workflow and Prompt Split | Introduce mode-select + legacy/layered/persist states and wire transitions/guards for opt-in rollout and fallback behavior. | `workflows/default.yaml`, `prompts/task.spec_check.md`, `prompts/task.spec_check.layered.md` (new), `prompts/task.spec_check.mode_select.md` (new), `prompts/task.spec_check.persist.md` (new), `packages/core/src/workflowLoader.test.ts` | Workflow contains `spec_check_mode_select`, `spec_check_legacy`, `spec_check_layered`, and `spec_check_persist` with priority-ordered transitions matching Section 2; `status.settings.useLayeredSkills == true` plus both `status.layeredSkillAvailability.*` flags `== true` routes to layered mode, otherwise legacy; fallback path to legacy is explicit when either required skill is missing/unreadable; workflow loader tests cover new phase presence/transition expectations. |
 | T4 | Update Runner/Parallel Handling for New Spec-Check Phases | Extend runtime parallel/task-loop handling, timeout/merge/setup recovery, and phase-report status filtering for new state names. | `apps/viewer-server/src/runManager.ts`, `apps/viewer-server/src/parallelRunner.ts`, `apps/viewer-server/src/runManager.test.ts`, `apps/viewer-server/src/parallelRunner.test.ts` | Parallel execution recognizes layered/legacy spec-check phases without regressions to implement-wave behavior; timeout/merge-conflict recovery remains resumable and routes back to `implement_task` as designed; setup failures still stop run with setup-failure completion reason; tests cover phase transitions and recovery paths for new states. |
 | T5 | Register, Document, and Replay-Validate Layered Mode | Publish phase-skill mapping/docs and codify baseline-vs-layered validation procedure. | `skills/registry.yaml`, `docs/integrated-skills.md`, `docs/issue-108-design.md` (Section 6 replay criteria), `apps/viewer-server/src/runManager.test.ts` | `task_spec_check` registry mapping is ordered as `safe-shell-search`, `jeeves-task-spec-check`, `code-quality`; integrated-skills docs reflect new mapping; replay criteria define measurable comparisons for command hygiene errors and evidence quality; tests assert phase-report `reasons`/`evidenceRefs` normalization and persistence behavior used by replay analysis. |
 
@@ -415,12 +445,14 @@ T5 -> depends on T3, T4
 - Files:
   - `skills/implement/jeeves-task-spec-check/SKILL.md` - New adapter skill with explicit task-state and artifact write contract.
   - `skills/implement/jeeves-task-spec-check/references/evidence-schema.json` - New schema for criterion verdict/evidence records.
+  - `AGENTS.md` - Add discoverable skill entry for `jeeves-task-spec-check` with repo-local `SKILL.md` path.
 - Acceptance Criteria:
   1. Adapter skill prescribes PASS/FAIL handling using MCP state tools and canonical `.jeeves` artifacts.
   2. Evidence schema defines `criteria[].verdict` enum `PASS|FAIL|INCONCLUSIVE`.
   3. Evidence schema defines `criteria[].evidence[].confidence` numeric range `[0,1]`.
+  4. `jeeves-task-spec-check` appears in root `AGENTS.md` `Available skills` with a valid `file:` path.
 - Dependencies: None
-- Verification: `pnpm exec node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('skills/implement/jeeves-task-spec-check/references/evidence-schema.json','utf8')); console.log('ok')"`
+- Verification: `pnpm exec node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('skills/implement/jeeves-task-spec-check/references/evidence-schema.json','utf8')); console.log('ok')" && rg -n "jeeves-task-spec-check" AGENTS.md`
 
 **T3: Implement Layered Spec-Check Workflow and Prompt Split**
 - Summary: Replace the single `task_spec_check` step with explicit mode-selection and layered/legacy flow phases.
@@ -434,7 +466,7 @@ T5 -> depends on T3, T4
 - Acceptance Criteria:
   1. Workflow transitions from `implement_task` to `spec_check_mode_select`, then deterministically to layered or legacy path.
   2. `status.settings.useLayeredSkills == true` is the only flag value that opts into layered mode.
-  3. Legacy fallback remains default for missing/false/invalid flag values or unresolved layered prerequisites.
+  3. Legacy fallback remains default for missing/false/invalid flag values or when either required skill availability flag is not `true`.
   4. Workflow YAML parses/loads successfully in automated tests.
 - Dependencies: `T1`, `T2`
 - Verification: `pnpm exec vitest run packages/core/src/workflowLoader.test.ts`
@@ -490,14 +522,19 @@ T5 -> depends on T3, T4
 ### Replay Validation (Baseline vs Layered)
 - [ ] Run baseline with `status.settings.useLayeredSkills=false` and capture `viewer-run.log`, `.jeeves/phase-report.json`, and progress entries.
 - [ ] Run layered mode with `status.settings.useLayeredSkills=true` on the same task set and capture the same artifacts.
-- [ ] Compare command hygiene failures:
-  - Baseline vs layered count of shell-first search violations.
-  - Baseline vs layered count of unverifiable criterion claims.
+- [ ] Compare command hygiene failures on the same corpus (minimum 10 tasks or 30 evaluated criteria, whichever is larger):
+  - Measure baseline/layered counts for shell-first search violations.
+  - Measure baseline/layered counts for unverifiable criterion claims.
+- [ ] Apply AC#4 success threshold (all required):
+  - Baseline combined command-hygiene error count (`shell-first + unverifiable`) is at least 2; otherwise expand corpus and rerun before scoring.
+  - Layered shell-first violation count is less than or equal to baseline.
+  - Layered unverifiable-claim count is less than or equal to baseline.
+  - Layered combined command-hygiene error count is at least 30% lower than baseline and at least 1 absolute count lower.
 - [ ] Compare evidence quality:
-  - Layered runs include criterion-level verdict entries and non-empty evidence references for each evaluated criterion.
+  - Layered runs include criterion-level verdict entries and non-empty evidence references for 100% of evaluated criteria.
   - `phase-report.json` includes normalized `reasons[]`/`evidenceRefs[]` arrays when provided.
 - [ ] Verify fallback:
-  - With layered flag true and layered prerequisites unavailable, mode-select routes to legacy without run failure.
+  - With layered flag true and either required skill unavailable/unreadable, mode-select routes to legacy without run failure.
 
 ### Manual Verification
 - [ ] Trigger one `task_spec_check` run in legacy mode and one in layered mode for the same task; confirm both complete the loop and land in the expected next phase.

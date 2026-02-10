@@ -12,6 +12,7 @@
 <context>
 - Phase type: evaluate (**READ-ONLY** — you may NOT modify source files)
 - Workflow position: After `implement_task`, decides next step in task loop
+- Operating mode: **Legacy** (monolithic spec-check prompt with inline guardrails)
 - Allowed workflow updates:
   - Issue/task/progress state via MCP tools (`state_set_task_status`, `state_update_issue_status`, `state_append_progress`)
   - Direct file writes only for `.jeeves/task-feedback.md` and `.jeeves/phase-report.json`
@@ -19,6 +20,22 @@
 - The `.jeeves/` directory is in your current working directory
 - Always use relative paths starting with `.jeeves/`
 </context>
+
+<legacy_fallback>
+This prompt is the **legacy spec-check path** (`spec_check_legacy`). It is entered as the default fallback from `spec_check_mode_select` when layered spec-check mode is not eligible or not available.
+
+**Legacy mode is used when ANY of the following conditions is true:**
+- `status.settings.useLayeredSkills` is not literal boolean `true` (missing, `false`, `null`, wrong type, or invalid value)
+- `status.layeredSkillAvailability.safeShellSearch` is not `true` (skill not found in AGENTS.md, or `SKILL.md` path unreadable)
+- `status.layeredSkillAvailability.jeevesTaskSpecCheck` is not `true` (skill not found in AGENTS.md, or `SKILL.md` path unreadable)
+
+**Behavior in legacy mode:**
+- All verification logic, tooling guidance, evidence rules, and artifact contracts are defined inline in this prompt.
+- No external skill delegation occurs — this prompt is self-contained.
+- Output artifacts (`.jeeves/phase-report.json`, `.jeeves/task-feedback.md`) and MCP state updates follow the same contract regardless of whether legacy or layered mode was selected.
+
+When layered mode becomes available and enabled, the workflow routes to `spec_check_layered` instead, which delegates guardrail enforcement to composable skills (`safe-shell-search`, `jeeves-task-spec-check`). This legacy prompt remains the safe fallback for any environment where layered prerequisites are not met.
+</legacy_fallback>
 <inputs>
 - Issue config and status: `state_get_issue` (contains `status.currentTaskId`)
 - Task list and criteria: `state_get_tasks`

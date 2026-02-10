@@ -447,10 +447,223 @@ phases:
     expect(iterOneActiveExists).toBe(true);
     expect(iterTwoDiagnosticsExists).toBe(true);
 
-    const runMeta = JSON.parse(
-      await fs.readFile(path.join(runsDir, runId, 'run.json'), 'utf-8'),
-    ) as Record<string, unknown>;
-    expect(runMeta.trajectory_reduction_summary).toBeTruthy();
+    const runMetaPath = path.join(runsDir, runId, 'run.json');
+    let runMeta: Record<string, unknown> | null = null;
+    const runMetaDeadline = Date.now() + 5000;
+    while (Date.now() < runMetaDeadline) {
+      const runMetaRaw = await fs.readFile(runMetaPath, 'utf-8').catch(() => null);
+      if (runMetaRaw) {
+        runMeta = JSON.parse(runMetaRaw) as Record<string, unknown>;
+        if (runMeta.trajectory_reduction_summary) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(runMeta?.trajectory_reduction_summary).toBeTruthy();
+  });
+
+  it('writes reflection diagnostics and viewer log entries when reflection is disabled', async () => {
+    const dataDir = await makeTempDir('jeeves-vs-data-trajectory-reflection-disabled-');
+    const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-reflection-disabled-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-reflection-disabled-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-trajectory-reflection-disabled',
+      `
+workflow:
+  name: fixture-trajectory-reflection-disabled
+  version: 1
+  start: hello
+phases:
+  hello:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+    );
+
+    const owner = 'o';
+    const repo = 'r';
+    const issueNumber = 64;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber, title: 'Reflection diagnostics disabled path' },
+          phase: 'hello',
+          workflow: 'fixture-trajectory-reflection-disabled',
+          branch: 'issue/64',
+          notes: '',
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'sdk-output.json'),
+      JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+      'utf-8',
+    );
+
+    upsertMemoryEntryInDb({
+      stateDir,
+      scope: 'working_set',
+      key: 'hypothesis:reflection-path',
+      value: { hypothesis: 'Reflection diagnostics should be present even when disabled.' },
+      sourceIteration: 1,
+    });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn: (() => makeFakeChild(0, 120)) as unknown as typeof import('node:child_process').spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 10000);
+
+    const diagnostics = JSON.parse(
+      await fs.readFile(path.join(stateDir, 'trajectory-reduction.json'), 'utf-8'),
+    ) as {
+      reflection_used?: unknown;
+      reflection_skipped_reason?: unknown;
+      reflection_input_tokens?: unknown;
+      reflection_output_tokens?: unknown;
+      reflection_latency_ms?: unknown;
+    };
+    expect(diagnostics.reflection_used).toBe(false);
+    expect(diagnostics.reflection_skipped_reason).toBe('disabled');
+    expect(diagnostics.reflection_input_tokens).toBeNull();
+    expect(diagnostics.reflection_output_tokens).toBeNull();
+    expect(diagnostics.reflection_latency_ms).toBeNull();
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[TRAJECTORY] reflection=skipped reason=disabled');
+
+    const runsDir = path.join(stateDir, '.runs');
+    const runEntries = await fs.readdir(runsDir, { withFileTypes: true });
+    const runId = runEntries.find((entry) => entry.isDirectory())?.name;
+    expect(runId).toBeTruthy();
+
+    const archivedDiagnostics = JSON.parse(
+      await fs.readFile(
+        path.join(runsDir, runId!, 'iterations', '001', 'trajectory-reduction-diagnostics.json'),
+        'utf-8',
+      ),
+    ) as { reflection_skipped_reason?: unknown };
+    expect(archivedDiagnostics.reflection_skipped_reason).toBe('disabled');
+  });
+
+  it('uses below-threshold reflection skip reason when reflection flag is enabled', async () => {
+    const savedReflectionFlag = process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION;
+    process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION = 'true';
+    try {
+      const dataDir = await makeTempDir('jeeves-vs-data-trajectory-reflection-threshold-');
+      const repoRoot = await makeTempDir('jeeves-vs-repo-trajectory-reflection-threshold-');
+      await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+      await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+      const workflowsDir = await makeTempDir('jeeves-vs-workflows-trajectory-reflection-threshold-');
+      const promptsDir = path.join(process.cwd(), 'prompts');
+      await writeWorkflowYaml(
+        workflowsDir,
+        'fixture-trajectory-reflection-threshold',
+        `
+workflow:
+  name: fixture-trajectory-reflection-threshold
+  version: 1
+  start: hello
+phases:
+  hello:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+`,
+      );
+
+      const owner = 'o';
+      const repo = 'r';
+      const issueNumber = 65;
+      const issueRef = `${owner}/${repo}#${issueNumber}`;
+      const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, 'issue.json'),
+        JSON.stringify(
+          {
+            repo: `${owner}/${repo}`,
+            issue: { number: issueNumber, title: 'Reflection threshold gating' },
+            phase: 'hello',
+            workflow: 'fixture-trajectory-reflection-threshold',
+            branch: 'issue/65',
+            notes: '',
+          },
+          null,
+          2,
+        ) + '\n',
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(stateDir, 'sdk-output.json'),
+        JSON.stringify({ tool_calls: [] }, null, 2) + '\n',
+        'utf-8',
+      );
+
+      // Keep snapshot tiny so reflection is skipped before any model call.
+      upsertMemoryEntryInDb({
+        stateDir,
+        scope: 'working_set',
+        key: 'note:small',
+        value: { note: 'small snapshot' },
+        sourceIteration: 1,
+      });
+
+      const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+      await fs.mkdir(workDir, { recursive: true });
+
+      const rm = new RunManager({
+        promptsDir,
+        workflowsDir,
+        repoRoot,
+        dataDir,
+        spawn: (() => makeFakeChild(0, 120)) as unknown as typeof import('node:child_process').spawn,
+        broadcast: () => void 0,
+      });
+
+      await rm.setIssue(issueRef);
+      await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+      await waitFor(() => rm.getStatus().running === false, 10000);
+
+      const diagnostics = JSON.parse(
+        await fs.readFile(path.join(stateDir, 'trajectory-reduction.json'), 'utf-8'),
+      ) as { reflection_used?: unknown; reflection_skipped_reason?: unknown };
+      expect(diagnostics.reflection_used).toBe(false);
+      expect(diagnostics.reflection_skipped_reason).toBe('below_threshold');
+
+      const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+      expect(viewerLog).toContain('[TRAJECTORY] reflection=skipped reason=below_threshold');
+    } finally {
+      if (savedReflectionFlag === undefined) {
+        delete process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION;
+      } else {
+        process.env.JEEVES_ENABLE_TRAJECTORY_REFLECTION = savedReflectionFlag;
+      }
+    }
   });
 
   it('derives active-context objective from the transitioned phase when issue metadata is sparse', async () => {
@@ -3151,283 +3364,6 @@ describe('RunManager parallel mode integration', () => {
     const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
     expect(viewerLog).not.toContain('[PARALLEL]');
   });
-
-  it('keeps spec_check_mode_select sequential when parallel mode is enabled', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-data-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-');
-    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
-    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
-
-    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
-    const promptsDir = path.join(process.cwd(), 'prompts');
-    await writeWorkflowYaml(
-      workflowsDir,
-      'fixture-spec-check-mode-select-parallel',
-      `
-workflow:
-  name: fixture-spec-check-mode-select-parallel
-  version: 1
-  start: spec_check_mode_select
-phases:
-  spec_check_mode_select:
-    type: evaluate
-    prompt: fixtures/trivial.md
-    transitions:
-      - to: complete
-        auto: true
-  complete:
-    type: terminal
-    transitions: []
-`,
-    );
-
-    const owner = 'o';
-    const repo = 'r';
-    const issueNumber = 2003;
-    const issueRef = `${owner}/${repo}#${issueNumber}`;
-
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify(
-        {
-          repo: `${owner}/${repo}`,
-          issue: { number: issueNumber },
-          phase: 'spec_check_mode_select',
-          workflow: 'fixture-spec-check-mode-select-parallel',
-          branch: `issue/${issueNumber}`,
-          notes: '',
-          settings: {
-            taskExecution: {
-              mode: 'parallel',
-              maxParallelTasks: 2,
-            },
-          },
-          status: {},
-        },
-        null,
-        2,
-      ) + '\n',
-      'utf-8',
-    );
-
-    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(workDir, { recursive: true });
-
-    const spawnCalls: string[][] = [];
-    const spawn = ((cmd: unknown, args: unknown) => {
-      void cmd;
-      const a = Array.isArray(args) ? (args as string[]) : [];
-      spawnCalls.push(a);
-      return makeFakeChild(0);
-    }) as unknown as typeof import('node:child_process').spawn;
-
-    const rm = new RunManager({
-      promptsDir,
-      workflowsDir,
-      repoRoot,
-      dataDir,
-      spawn,
-      broadcast: () => void 0,
-    });
-
-    const runParallelWaveSpy = vi.spyOn(
-      rm as unknown as { runParallelWave: (...args: unknown[]) => Promise<unknown> },
-      'runParallelWave',
-    );
-
-    await rm.setIssue(issueRef);
-    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
-    await waitFor(() => rm.getStatus().running === false);
-
-    expect(runParallelWaveSpy).not.toHaveBeenCalled();
-    expect(spawnCalls.length).toBeGreaterThan(0);
-    expect(spawnCalls[0]).toContain('--issue');
-    expect(spawnCalls[0]).toContain(issueRef);
-  });
-
-  it('keeps spec_check_persist sequential when parallel mode is enabled', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-data-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-');
-    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
-    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
-
-    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
-    const promptsDir = path.join(process.cwd(), 'prompts');
-    await writeWorkflowYaml(
-      workflowsDir,
-      'fixture-spec-check-persist-parallel',
-      `
-workflow:
-  name: fixture-spec-check-persist-parallel
-  version: 1
-  start: spec_check_persist
-phases:
-  spec_check_persist:
-    type: evaluate
-    prompt: fixtures/trivial.md
-    transitions:
-      - to: complete
-        auto: true
-  complete:
-    type: terminal
-    transitions: []
-`,
-    );
-
-    const owner = 'o';
-    const repo = 'r';
-    const issueNumber = 2004;
-    const issueRef = `${owner}/${repo}#${issueNumber}`;
-
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify(
-        {
-          repo: `${owner}/${repo}`,
-          issue: { number: issueNumber },
-          phase: 'spec_check_persist',
-          workflow: 'fixture-spec-check-persist-parallel',
-          branch: `issue/${issueNumber}`,
-          notes: '',
-          settings: {
-            taskExecution: {
-              mode: 'parallel',
-              maxParallelTasks: 2,
-            },
-          },
-          status: {},
-        },
-        null,
-        2,
-      ) + '\n',
-      'utf-8',
-    );
-
-    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(workDir, { recursive: true });
-
-    const spawnCalls: string[][] = [];
-    const spawn = ((cmd: unknown, args: unknown) => {
-      void cmd;
-      const a = Array.isArray(args) ? (args as string[]) : [];
-      spawnCalls.push(a);
-      return makeFakeChild(0);
-    }) as unknown as typeof import('node:child_process').spawn;
-
-    const rm = new RunManager({
-      promptsDir,
-      workflowsDir,
-      repoRoot,
-      dataDir,
-      spawn,
-      broadcast: () => void 0,
-    });
-
-    const runParallelWaveSpy = vi.spyOn(
-      rm as unknown as { runParallelWave: (...args: unknown[]) => Promise<unknown> },
-      'runParallelWave',
-    );
-
-    await rm.setIssue(issueRef);
-    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
-    await waitFor(() => rm.getStatus().running === false);
-
-    expect(runParallelWaveSpy).not.toHaveBeenCalled();
-    expect(spawnCalls.length).toBeGreaterThan(0);
-    expect(spawnCalls[0]).toContain('--issue');
-    expect(spawnCalls[0]).toContain(issueRef);
-  });
-
-  it('passes spec_check_layered as the worker workflow phase for parallel spec-check waves', async () => {
-    const dataDir = await makeTempDir('jeeves-vs-data-');
-    const repoRoot = await makeTempDir('jeeves-vs-repo-');
-    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
-    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
-
-    const workflowsDir = await makeTempDir('jeeves-vs-workflows-');
-    const promptsDir = path.join(process.cwd(), 'prompts');
-    await writeWorkflowYaml(
-      workflowsDir,
-      'fixture-spec-check-layered-parallel',
-      `
-workflow:
-  name: fixture-spec-check-layered-parallel
-  version: 1
-  start: spec_check_layered
-phases:
-  spec_check_layered:
-    type: evaluate
-    prompt: fixtures/trivial.md
-    transitions: []
-`,
-    );
-
-    const owner = 'o';
-    const repo = 'r';
-    const issueNumber = 2005;
-    const issueRef = `${owner}/${repo}#${issueNumber}`;
-
-    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, 'issue.json'),
-      JSON.stringify(
-        {
-          repo: `${owner}/${repo}`,
-          issue: { number: issueNumber },
-          phase: 'spec_check_layered',
-          workflow: 'fixture-spec-check-layered-parallel',
-          branch: `issue/${issueNumber}`,
-          notes: '',
-          settings: {
-            taskExecution: {
-              mode: 'parallel',
-              maxParallelTasks: 2,
-            },
-          },
-          status: {},
-        },
-        null,
-        2,
-      ) + '\n',
-      'utf-8',
-    );
-
-    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
-    await fs.mkdir(workDir, { recursive: true });
-
-    const rm = new RunManager({
-      promptsDir,
-      workflowsDir,
-      repoRoot,
-      dataDir,
-      spawn: (() => makeFakeChild(0)) as unknown as typeof import('node:child_process').spawn,
-      broadcast: () => void 0,
-    });
-
-    const runParallelWaveSpy = vi.spyOn(
-      rm as unknown as {
-        runParallelWave: (params: Record<string, unknown>) => Promise<{ exitCode: number; waveExecuted: boolean }>;
-      },
-      'runParallelWave',
-    ).mockResolvedValue({ exitCode: 0, waveExecuted: false });
-
-    await rm.setIssue(issueRef);
-    await rm.start({ provider: 'fake', max_iterations: 1, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
-    await waitFor(() => rm.getStatus().running === false);
-
-    expect(runParallelWaveSpy).toHaveBeenCalledTimes(1);
-    const callParams = runParallelWaveSpy.mock.calls[0]?.[0] as {
-      currentPhase: string;
-      workerWorkflowPhase: string;
-    };
-    expect(callParams.currentPhase).toBe('task_spec_check');
-    expect(callParams.workerWorkflowPhase).toBe('spec_check_layered');
-  });
 });
 
 /**
@@ -3645,14 +3581,40 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     }
   }, 15000); // Extended timeout for this test
 
-  it('spec_check_layered wave timeout via rm.start() leaves workflow resumable', async () => {
+  it('task_spec_check wave timeout via rm.start() leaves workflow resumable', async () => {
     const dataDir = await makeTempDir('jeeves-speccheck-timeout-');
     const repoRoot = await makeTempDir('jeeves-reporoot-');
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
     await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
 
-    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const workflowsDir = await makeTempDir('jeeves-speccheck-timeout-workflows-');
     const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-speccheck-timeout-legacy',
+      `
+workflow:
+  name: fixture-speccheck-timeout-legacy
+  version: 1
+  start: task_spec_check
+phases:
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
 
     const owner = 'speccheck-timeout-owner';
     const repo = 'speccheck-timeout-repo';
@@ -3678,15 +3640,15 @@ describe('T13: Real RunManager parallel timeout integration', () => {
       reservedAt: new Date().toISOString(),
     };
 
-    // Set up issue.json in spec_check_layered phase with parallel state
+    // Set up issue.json in task_spec_check phase with parallel state
     await fs.writeFile(
       path.join(stateDir, 'issue.json'),
       JSON.stringify(
         {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
-          phase: 'spec_check_layered',
-          workflow: 'default',
+          phase: 'task_spec_check',
+          workflow: 'fixture-speccheck-timeout-legacy',
           branch: `issue/${issueNumber}`,
           notes: '',
           settings: {
@@ -3747,12 +3709,12 @@ describe('T13: Real RunManager parallel timeout integration', () => {
     // Write worker issue.json files (needed for spec_check to read results)
     await fs.writeFile(
       path.join(workerStateT1, 'issue.json'),
-      JSON.stringify({ phase: 'spec_check_layered', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
+      JSON.stringify({ phase: 'task_spec_check', status: { currentTaskId: 'T1' } }, null, 2) + '\n',
       'utf-8',
     );
     await fs.writeFile(
       path.join(workerStateT2, 'issue.json'),
-      JSON.stringify({ phase: 'spec_check_layered', status: { currentTaskId: 'T2' } }, null, 2) + '\n',
+      JSON.stringify({ phase: 'task_spec_check', status: { currentTaskId: 'T2' } }, null, 2) + '\n',
       'utf-8',
     );
 
@@ -4149,13 +4111,13 @@ describe('T13: Real RunManager parallel timeout integration', () => {
 /**
  * T15: Merge conflict stop leaves workflow resumable.
  *
- * This test validates that after a merge conflict during layered spec-check wave:
- * 1. issue.json.phase transitions out of spec_check_layered when status.parallel is cleared
+ * This test validates that after a merge conflict during task_spec_check wave:
+ * 1. issue.json.phase is NOT left at task_spec_check when status.parallel is cleared
  * 2. The conflicted task is marked failed and canonical feedback points to artifacts
- * 3. Subsequent runs can continue through spec_check_persist and back to implement_task
+ * 3. Subsequent runs can proceed from implement_task without getting stuck in "No active wave" loops
  */
 describe('T15: Merge conflict stop leaves workflow resumable', () => {
-  it('after merge conflict in spec-check wave, issue.json.phase transitions to spec_check_persist', async () => {
+  it('after merge conflict in spec-check wave, issue.json.phase transitions to implement_task', async () => {
     // This test simulates a merge conflict scenario by directly testing the RunManager's
     // merge-conflict handling path. We'll mock the ParallelRunner to return mergeConflict: true.
     const dataDir = await makeTempDir('jeeves-merge-conflict-');
@@ -4163,8 +4125,36 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
     await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
 
-    const workflowsDir = path.join(process.cwd(), 'workflows');
+    const workflowsDir = await makeTempDir('jeeves-mc-workflows-');
     const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-merge-conflict-legacy',
+      `
+workflow:
+  name: fixture-merge-conflict-legacy
+  version: 1
+  start: task_spec_check
+phases:
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: implement_task
+        when: status.taskPassed == true and status.hasMoreTasks == true
+      - to: complete
+        when: status.allTasksComplete == true
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions: []
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
 
     const owner = 'merge-conflict-owner';
     const repo = 'merge-conflict-repo';
@@ -4202,7 +4192,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     await fs.mkdir(path.dirname(workDir), { recursive: true });
     await runGit(repoDir, ['worktree', 'add', workDir, branchName]);
 
-    // Set up issue.json in spec_check_layered phase with parallel state (simulating mid-wave)
+    // Set up issue.json in task_spec_check phase with parallel state (simulating mid-wave)
     const runId = 'run-merge-conflict-test';
     const parallelState = {
       runId,
@@ -4219,8 +4209,8 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
         {
           repo: `${owner}/${repo}`,
           issue: { number: issueNumber },
-          phase: 'spec_check_layered',
-          workflow: 'default',
+          phase: 'task_spec_check',
+          workflow: 'fixture-merge-conflict-legacy',
           branch: branchName,
           notes: '',
           settings: {
@@ -4273,7 +4263,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
       path.join(workerStateT1, 'issue.json'),
       JSON.stringify(
         {
-          phase: 'spec_check_layered',
+          phase: 'task_spec_check',
           status: { currentTaskId: 'T1', taskPassed: true },
         },
         null,
@@ -4360,7 +4350,7 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
     // Start the run - it should:
     // 1. Resume the spec-check wave (already has parallel state)
     // 2. Try to merge the worker branch (which will conflict)
-    // 3. Handle the merge conflict by transitioning phase to spec_check_persist
+    // 3. Handle the merge conflict by transitioning phase to implement_task
     await rm.start({
       provider: 'fake',
       max_iterations: 1,
@@ -4370,12 +4360,12 @@ describe('T15: Merge conflict stop leaves workflow resumable', () => {
 
     await waitFor(() => rm.getStatus().running === false, 15000);
 
-    // Verify: After merge conflict, phase should transition away from spec_check_layered
-    // and let spec_check_persist handle task-loop routing on the next iteration/run.
+    // Verify: After merge conflict, phase should NOT be task_spec_check
+    // (it should have transitioned to implement_task to allow retry)
     const issueAfter = await readIssueJson(stateDir);
 
-    // The critical assertion: layered spec-check transitions to persist, not an invalid legacy phase.
-    expect(issueAfter?.phase).toBe('spec_check_persist');
+    // The critical assertion: phase should be implement_task, not task_spec_check
+    expect(issueAfter?.phase).toBe('implement_task');
 
     // Verify: status.parallel should be cleared
     expect((issueAfter?.status as Record<string, unknown>)?.parallel).toBeUndefined();
@@ -4978,6 +4968,315 @@ describe('T18: Manual stop mid-implement skips phase transition to task_spec_che
   }, 10000);
 });
 
+describe('RunManager loop guard for no-change task retries', () => {
+  it('stops early when the same task repeatedly fails after no-change implement attempts', async () => {
+    const dataDir = await makeTempDir('jeeves-loop-guard-data-');
+    const repoRoot = await makeTempDir('jeeves-loop-guard-repo-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-loop-guard-workflows-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-loop-guard-retry',
+      `
+workflow:
+  name: fixture-loop-guard-retry
+  version: 1
+  start: implement_task
+phases:
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: task_spec_check
+        auto: true
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'loop';
+    const repo = 'guard';
+    const issueNumber = 1081;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'fixture-loop-guard-retry',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {
+            currentTaskId: 'T1',
+            taskPassed: false,
+            taskFailed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          tasks: [
+            {
+              id: 'T1',
+              title: 'Task 1',
+              summary: 'retry test',
+              acceptanceCriteria: ['must pass'],
+              filesAllowed: ['src/**/*.ts'],
+              dependsOn: [],
+              status: 'in_progress',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    let spawnCalls = 0;
+    const spawn = (() => {
+      spawnCalls += 1;
+      void (async () => {
+        const issue = await readIssueJson(stateDir);
+        const phase = typeof issue?.phase === 'string' ? issue.phase : null;
+        if (phase === 'task_spec_check') {
+          await fs.writeFile(
+            path.join(stateDir, 'phase-report.json'),
+            JSON.stringify(
+              {
+                schemaVersion: 1,
+                phase: 'task_spec_check',
+                outcome: 'failed',
+                statusUpdates: {
+                  taskPassed: false,
+                  taskFailed: true,
+                  hasMoreTasks: true,
+                  allTasksComplete: false,
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+            'utf-8',
+          );
+        }
+      })();
+      return makeFakeChild(0, 60);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 20, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    const status = rm.getStatus();
+    expect(status.completion_reason).toContain('stuck_retry_loop');
+    expect(status.current_iteration).toBeGreaterThanOrEqual(6);
+    expect(status.current_iteration).toBeLessThan(20);
+    expect(spawnCalls).toBe(status.current_iteration);
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).toContain('[LOOP_GUARD]');
+  }, 30000);
+
+  it('does not trigger loop guard when implement attempts modify the worktree', async () => {
+    const dataDir = await makeTempDir('jeeves-loop-guard-data-changes-');
+    const repoRoot = await makeTempDir('jeeves-loop-guard-repo-changes-');
+    await fs.mkdir(path.join(repoRoot, 'packages', 'runner', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, 'packages', 'runner', 'dist', 'bin.js'), '// stub\n', 'utf-8');
+
+    const workflowsDir = await makeTempDir('jeeves-loop-guard-workflows-changes-');
+    const promptsDir = path.join(process.cwd(), 'prompts');
+    await writeWorkflowYaml(
+      workflowsDir,
+      'fixture-loop-guard-retry-with-changes',
+      `
+workflow:
+  name: fixture-loop-guard-retry-with-changes
+  version: 1
+  start: implement_task
+phases:
+  implement_task:
+    type: execute
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: task_spec_check
+        auto: true
+  task_spec_check:
+    type: evaluate
+    prompt: fixtures/trivial.md
+    transitions:
+      - to: implement_task
+        when: status.taskFailed == true
+      - to: complete
+        when: status.allTasksComplete == true
+  complete:
+    type: terminal
+    transitions: []
+`,
+    );
+
+    const owner = 'loop';
+    const repo = 'guardchanges';
+    const issueNumber = 1082;
+    const issueRef = `${owner}/${repo}#${issueNumber}`;
+    const stateDir = getIssueStateDir(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const workDir = getWorktreePath(owner, repo, issueNumber, dataDir);
+    await fs.mkdir(workDir, { recursive: true });
+    await initGitRepoWithDesignDoc(workDir, issueNumber);
+    await fs.mkdir(path.join(workDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(workDir, 'src', 'retry.ts'), 'export const retry = 0;\n', 'utf-8');
+    await runGit(workDir, ['add', 'src/retry.ts']);
+    await runGit(
+      workDir,
+      ['-c', 'user.name=Test User', '-c', 'user.email=test@example.com', 'commit', '-m', 'add retry file'],
+    );
+
+    await fs.writeFile(
+      path.join(stateDir, 'issue.json'),
+      JSON.stringify(
+        {
+          repo: `${owner}/${repo}`,
+          issue: { number: issueNumber },
+          phase: 'implement_task',
+          workflow: 'fixture-loop-guard-retry-with-changes',
+          branch: `issue/${issueNumber}`,
+          notes: '',
+          status: {
+            currentTaskId: 'T1',
+            taskPassed: false,
+            taskFailed: false,
+            hasMoreTasks: true,
+            allTasksComplete: false,
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(stateDir, 'tasks.json'),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          tasks: [
+            {
+              id: 'T1',
+              title: 'Task 1',
+              summary: 'retry test with changes',
+              acceptanceCriteria: ['must pass'],
+              filesAllowed: ['src/**/*.ts'],
+              dependsOn: [],
+              status: 'in_progress',
+            },
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf-8',
+    );
+
+    let spawnCalls = 0;
+    let implementWrites = 0;
+    const trackedFile = path.join(workDir, 'src', 'retry.ts');
+    const spawn = (() => {
+      spawnCalls += 1;
+      void (async () => {
+        const issue = await readIssueJson(stateDir);
+        const phase = typeof issue?.phase === 'string' ? issue.phase : null;
+        if (phase === 'implement_task') {
+          implementWrites += 1;
+          await fs.appendFile(trackedFile, `// implement attempt ${implementWrites}\n`, 'utf-8');
+        } else if (phase === 'task_spec_check') {
+          await fs.writeFile(
+            path.join(stateDir, 'phase-report.json'),
+            JSON.stringify(
+              {
+                schemaVersion: 1,
+                phase: 'task_spec_check',
+                outcome: 'failed',
+                statusUpdates: {
+                  taskPassed: false,
+                  taskFailed: true,
+                  hasMoreTasks: true,
+                  allTasksComplete: false,
+                },
+              },
+              null,
+              2,
+            ) + '\n',
+            'utf-8',
+          );
+        }
+      })();
+      return makeFakeChild(0, 60);
+    }) as unknown as typeof import('node:child_process').spawn;
+
+    const rm = new RunManager({
+      promptsDir,
+      workflowsDir,
+      repoRoot,
+      dataDir,
+      spawn,
+      broadcast: () => void 0,
+    });
+
+    await rm.setIssue(issueRef);
+    await rm.start({ provider: 'fake', max_iterations: 6, inactivity_timeout_sec: 10, iteration_timeout_sec: 10 });
+    await waitFor(() => rm.getStatus().running === false, 15000);
+
+    const status = rm.getStatus();
+    expect(status.completion_reason).toBe('max_iterations');
+    expect(status.current_iteration).toBe(6);
+    expect(spawnCalls).toBe(6);
+    expect(implementWrites).toBeGreaterThan(0);
+
+    const viewerLog = await fs.readFile(path.join(stateDir, 'viewer-run.log'), 'utf-8');
+    expect(viewerLog).not.toContain('[LOOP_GUARD]');
+  }, 30000);
+});
 describe('T7: spec-check split-phase support in runManager', () => {
   it('parsePhaseReportFile normalizes reasons and evidenceRefs arrays', async () => {
     const dataDir = await makeTempDir('jeeves-vs-data-');

@@ -5,6 +5,13 @@ import { listMemoryEntriesFromDb, type MemoryEntry } from '@jeeves/state-db';
 
 import { writeJsonAtomic } from './jsonAtomic.js';
 import { renderProgressText } from './sqliteStorage.js';
+import {
+  TrajectoryReflectionError,
+  reflectTrajectory,
+  type ReflectionDroppedItem,
+  type ReflectionQueryFn,
+  type ReflectionSnapshot,
+} from './trajectoryReflection.js';
 
 export const ACTIVE_CONTEXT_FILE = 'active-context.json';
 export const RETIRED_TRAJECTORY_FILE = 'retired-trajectory.jsonl';
@@ -16,6 +23,9 @@ const MAX_CATEGORY_ITEMS = 25;
 const MAX_TEXT_LENGTH = 260;
 const MAX_VALUE_STRINGS = 80;
 const MAX_VALUE_DEPTH = 4;
+const DEFAULT_MIN_SNAPSHOT_TOKENS = 400;
+const DEFAULT_MIN_SAVINGS_TOKENS = 100;
+const REFLECTION_ENABLE_ENV = 'JEEVES_ENABLE_TRAJECTORY_REFLECTION';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -58,6 +68,12 @@ export type TrajectoryReductionDiagnostics = Readonly<{
   repeated_context_rate: number;
   active_item_count: number;
   repeated_item_count: number;
+  reflection_used: boolean;
+  reflection_input_tokens: number | null;
+  reflection_output_tokens: number | null;
+  reflection_latency_ms: number | null;
+  reflection_skipped_reason: string | null;
+  reflection_dropped: ReflectionDroppedItem[];
   warnings: string[];
 }>;
 
@@ -74,6 +90,22 @@ export type TrajectoryReductionResult = Readonly<{
   snapshot: ActiveContextSnapshot;
   retired: RetiredTrajectoryRecord[];
   diagnostics: TrajectoryReductionDiagnostics;
+}>;
+
+type ReflectionControls = Readonly<{
+  enabled?: boolean;
+  minSnapshotTokens?: number;
+  minSavingsTokens?: number;
+  queryFn?: ReflectionQueryFn;
+}>;
+
+type ReflectionOutcome = Readonly<{
+  used: boolean;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number | null;
+  skippedReason: string | null;
+  dropped: ReflectionDroppedItem[];
 }>;
 
 function isPlainRecord(value: unknown): value is JsonRecord {
@@ -187,6 +219,31 @@ async function readPreviousSnapshot(stateDir: string): Promise<ActiveContextSnap
   const parsed = readJsonRecord(raw);
   if (!parsed) return null;
   return parseActiveContextSnapshot(parsed);
+}
+
+function envFlagEnabled(name: string): boolean {
+  const raw = process.env[name];
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const normalized = Math.trunc(value);
+  return normalized > 0 ? normalized : fallback;
+}
+
+function toReflectionSnapshot(snapshot: ActiveContextSnapshot | null): ReflectionSnapshot | null {
+  if (!snapshot) return null;
+  return {
+    current_objective: snapshot.current_objective,
+    open_hypotheses: [...snapshot.open_hypotheses],
+    blockers: [...snapshot.blockers],
+    next_actions: [...snapshot.next_actions],
+    unresolved_questions: [...snapshot.unresolved_questions],
+    required_evidence_links: [...snapshot.required_evidence_links],
+  };
 }
 
 function objectiveFromIssue(issue: JsonRecord | null): string {
@@ -454,6 +511,7 @@ function createDiagnostics(params: {
   previous: ActiveContextSnapshot | null;
   retired: readonly RetiredTrajectoryRecord[];
   nowIso: string;
+  reflection: ReflectionOutcome;
 }): TrajectoryReductionDiagnostics {
   const currentItems = dedupeList(buildSnapshotItems(params.snapshot), { maxItems: null });
   const previousItems = params.previous
@@ -491,6 +549,12 @@ function createDiagnostics(params: {
     repeated_context_rate: repeatedContextRate,
     active_item_count: currentItems.length,
     repeated_item_count: repeatedItemCount,
+    reflection_used: params.reflection.used,
+    reflection_input_tokens: params.reflection.inputTokens,
+    reflection_output_tokens: params.reflection.outputTokens,
+    reflection_latency_ms: params.reflection.latencyMs,
+    reflection_skipped_reason: params.reflection.skippedReason,
+    reflection_dropped: [...params.reflection.dropped],
     warnings,
   };
 }
@@ -509,6 +573,7 @@ export async function computeTrajectoryReduction(params: {
   stateDir: string;
   iteration: number;
   nowIso?: () => string;
+  reflection?: ReflectionControls;
 }): Promise<TrajectoryReductionResult> {
   const now = params.nowIso ? params.nowIso() : new Date().toISOString();
   const issue = await readJsonRecordFromFile(path.join(params.stateDir, 'issue.json'));
@@ -532,18 +597,121 @@ export async function computeTrajectoryReduction(params: {
   const taskContext = collectTaskDerivedContext(tasks);
   const progressQuestions = collectQuestionsFromProgress(progressText);
   const sdkEvidence = collectEvidenceFromSdkOutput(sdkRaw);
+  const objective = objectiveFromIssue(issue);
 
-  const snapshot: ActiveContextSnapshot = {
+  const deterministicSnapshot: ActiveContextSnapshot = {
     schema_version: 1,
     generated_at: now,
     iteration: params.iteration,
-    current_objective: objectiveFromIssue(issue),
+    current_objective: objective,
     open_hypotheses: dedupeList(memoryContext.openHypotheses),
     blockers: dedupeList([...memoryContext.blockers, ...taskContext.blockers]),
     next_actions: dedupeList([...memoryContext.nextActions, ...taskContext.nextActions]),
     unresolved_questions: dedupeList([...memoryContext.unresolvedQuestions, ...progressQuestions]),
     required_evidence_links: dedupeList([...memoryContext.evidenceLinks, ...sdkEvidence]),
   };
+  let snapshot = deterministicSnapshot;
+
+  const reflectionEnabled = params.reflection?.enabled ?? envFlagEnabled(REFLECTION_ENABLE_ENV);
+  const minSnapshotTokens = normalizePositiveInteger(
+    params.reflection?.minSnapshotTokens,
+    DEFAULT_MIN_SNAPSHOT_TOKENS,
+  );
+  const minSavingsTokens = normalizePositiveInteger(
+    params.reflection?.minSavingsTokens,
+    DEFAULT_MIN_SAVINGS_TOKENS,
+  );
+
+  let reflectionOutcome: ReflectionOutcome = {
+    used: false,
+    inputTokens: null,
+    outputTokens: null,
+    latencyMs: null,
+    skippedReason: null,
+    dropped: [],
+  };
+
+  const deterministicTokens = estimateTokenSize(deterministicSnapshot);
+  if (!reflectionEnabled) {
+    reflectionOutcome = {
+      ...reflectionOutcome,
+      skippedReason: 'disabled',
+    };
+  } else if (deterministicTokens < minSnapshotTokens) {
+    reflectionOutcome = {
+      ...reflectionOutcome,
+      skippedReason: 'below_threshold',
+    };
+  } else {
+    try {
+      const reflection = await reflectTrajectory({
+        objective,
+        memoryEntries,
+        previousSnapshot: toReflectionSnapshot(previous),
+        tasks: normalizeTasks(tasks),
+        cwd: params.stateDir,
+        queryFn: params.reflection?.queryFn,
+      });
+      const reflectedSnapshot: ActiveContextSnapshot = {
+        schema_version: 1,
+        generated_at: now,
+        iteration: params.iteration,
+        current_objective: normalizeText(reflection.snapshot.current_objective) ?? objective,
+        open_hypotheses: dedupeList(reflection.snapshot.open_hypotheses),
+        blockers: dedupeList([...reflection.snapshot.blockers, ...taskContext.blockers]),
+        next_actions: dedupeList([...reflection.snapshot.next_actions, ...taskContext.nextActions]),
+        unresolved_questions: dedupeList([
+          ...reflection.snapshot.unresolved_questions,
+          ...progressQuestions,
+        ]),
+        required_evidence_links: dedupeList([
+          ...reflection.snapshot.required_evidence_links,
+          ...sdkEvidence,
+        ]),
+      };
+      const reflectedTokens = estimateTokenSize(reflectedSnapshot);
+      const savings = deterministicTokens - reflectedTokens;
+
+      reflectionOutcome = {
+        used: false,
+        inputTokens: reflection.diagnostics.input_tokens,
+        outputTokens: reflection.diagnostics.output_tokens,
+        latencyMs: reflection.diagnostics.latency_ms,
+        skippedReason: null,
+        dropped: [...reflection.diagnostics.dropped],
+      };
+
+      if (savings >= minSavingsTokens) {
+        snapshot = reflectedSnapshot;
+        reflectionOutcome = {
+          ...reflectionOutcome,
+          used: true,
+          skippedReason: null,
+        };
+      } else {
+        reflectionOutcome = {
+          ...reflectionOutcome,
+          skippedReason: 'insufficient_savings',
+        };
+      }
+    } catch (err) {
+      if (err instanceof TrajectoryReflectionError) {
+        reflectionOutcome = {
+          used: false,
+          inputTokens: err.diagnostics.input_tokens,
+          outputTokens: err.diagnostics.output_tokens,
+          latencyMs: err.diagnostics.latency_ms,
+          skippedReason: err.code,
+          dropped: [...err.diagnostics.dropped],
+        };
+      } else {
+        reflectionOutcome = {
+          ...reflectionOutcome,
+          skippedReason: 'api_error',
+        };
+      }
+    }
+  }
 
   const retired = createRetiredRecords({
     previous,
@@ -555,6 +723,7 @@ export async function computeTrajectoryReduction(params: {
     previous,
     retired,
     nowIso: now,
+    reflection: reflectionOutcome,
   });
 
   await writeJsonAtomic(path.join(params.stateDir, ACTIVE_CONTEXT_FILE), snapshot);
